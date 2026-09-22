@@ -48,8 +48,9 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
+- Injected languages (a Lua fence in markdown, a script tag in HTML, Vue SFCs) need the token list spliced together from one tree per language by byte offset. Whether that is worth doing in the first structural-diff step or deferred to its own step.
 - How the user writes a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer.
-- Whether structural diff must work for every language or degrade gracefully per-language; and what a "moved code" change should look like.
+- What a "moved code" change should look like. Neither the token-stream design nor difftastic detects a moved block; it reads as a delete plus an add. (The per-language degradation half of this question is answered: it degrades, on three measured triggers.)
 - `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async, cancellable run.
 - Whether an LSP indexing both the main tree and the PR worktree causes problems in practice.
 - Whether staging hunks belongs here at all, given diffview is being replaced but gitsigns already does it.
@@ -60,7 +61,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
 - [x] research: GitHub API surface for PR review — [result](#result-research-github-api-surface-for-pr-review)
-- [ ] research: structural diff with treesitter
+- [x] research: structural diff with treesitter — [result](#result-research-structural-diff-with-treesitter)
 - [ ] research: Neovim rendering primitives for diff display
 - [ ] research: prior art — diffview.nvim and octo.nvim architecture
 - [ ] prototype: the visual language (highlight groups, separator row, structural output)
@@ -89,13 +90,20 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 <!-- decisions I made, not the user -->
 
 - Map lives in this file, not a GitHub issue: the repo has no remote yet. Moving it to an issue is easy later.
-- Structural diff is computed in-plugin with treesitter, not via `git config diff.external difftastic`. An external difftool returns formatted text that would have to be re-parsed to recover real line numbers, and PR inline comments need exact line mapping.
+- Structural diff is computed in-plugin with treesitter, not by shelling out to difftastic. (The original reason given here — that an external difftool returns unparseable formatted text — was wrong; `difft --display json` does give line and column ranges. The real reasons are in the research result: unstable env-gated format, a second binary to install, difftastic's own grammars disagreeing with the editor's, and no reuse of an already-parsed buffer tree.)
 - GitHub access goes through the `gh` CLI rather than a token the plugin manages. `gh` is already installed and authenticated here, it handles Enterprise hosts and SSO, and it removes token storage from the plugin's problem list. `gh api graphql` covers the parts that are GraphQL-only (viewed state, thread resolve).
 - Comment threads render with extmark virtual lines, not floating windows — this is what makes expand-in-place possible, and it was the user's explicit correction.
 
 - Reads go over GraphQL, writes over REST. Viewed state and thread structure exist only in GraphQL; immediate standalone posting exists only in REST (`addPullRequestReviewThread` is pending-review only). The two id spaces bridge by `node_id` / `fullDatabaseId`.
 - The diff is computed locally with git from the PR worktree, never fetched from `/pulls/{n}/files` — that endpoint paginates, truncates big patches and caps at 3000 files. GitHub is asked only for SHAs, viewed state and threads.
 - `resolveReviewThread` is called without `resolutionReason`; the field is recent and GHES may not have it.
+
+- Structural diff is a token-stream diff, not tree-edit-distance: flatten each tree to leaf tokens, diff the token text, roll each changed token up to its smallest enclosing named node. Difftastic's Dijkstra search and GumTree-style matching buy nothing the requirements ask for and cost far more.
+- The token diff is handed to `vim.text.diff` (Neovim's built-in xdiff, in C) as a synthetic token-per-line document, with `algorithm = "histogram"`. A pure-Lua LCS takes 2.8 s on a worst-case 12K-token file; this takes 0.58 ms.
+- Structural diff falls back to line diff on three triggers: no parser for the language, `root:has_error()`, or more than ~5,000 lines per side.
+- Parser availability is probed with `pcall(vim.treesitter.get_string_parser, "", lang)`. `vim.treesitter.language.add` is not usable as a probe — it returns true for languages that do not exist.
+- A changed token highlights its whole enclosing named node, not the character delta inside it — this is what difftastic does and it is what makes a diff scannable.
+- Comment text is compared with whitespace normalised, so rewrapping a comment is a formatting change, while editing its words is a real one.
 
 ## Results
 
@@ -212,3 +220,95 @@ onto buffer lines with no position arithmetic at all. The legacy `position` /
 `original_position` fields can be ignored entirely.
 
 **Next step:** `research: structural diff with treesitter`.
+
+### result: research: structural diff with treesitter
+
+Every number below was measured in this environment (Neovim 0.12.4, LuaJIT, difftastic
+0.69.0), not recalled. The throwaway prototype lived in the scratchpad and is gone.
+
+**The algorithm: flatten, diff tokens, roll up.** Tree-edit-distance (difftastic's
+Dijkstra over a graph of node pairs, or GumTree's match-then-align) is not needed and
+not affordable in Lua. Three cheap steps get the same output:
+
+1. Walk each tree and collect **leaf nodes** as tokens (`text`, `srow/scol/erow/ecol`,
+   `type`). Whitespace is not a node in tree-sitter, so it disappears for free.
+2. Diff the two token **text** streams.
+3. For every changed token, walk up to the **smallest enclosing named node** and light
+   that up. `descendant_for_range` → `while not n:named() do n = n:parent() end` gives
+   it; `n:parent()` widens one step if a coarser highlight reads better.
+
+Verified against difftastic on a file reformatted *and* edited — `opts or {}` split
+across lines, a call exploded into four lines, plus `"DiffAdd"` → `"DiffAdded"`.
+`git diff` calls it **8 insertions, 3 deletions**. Both difftastic and the prototype
+report **exactly one change**: the string literal. The whole reformat is silent. That
+is the requirement, reproduced.
+
+**The token diff must be `vim.text.diff`, not Lua.** This is the load-bearing finding.
+A hand-written LCS is fine when the edit is small — prefix/suffix trimming collapses
+the DP to nothing — but it dies the moment a file changes at both ends:
+
+| token diff of 12,226 vs 12,234 tokens (81 KB Lua) | time |
+| --- | --- |
+| pure-Lua LCS, edits at both ends | **2,854 ms** (150M DP cells) |
+| `vim.text.diff`, `algorithm = "myers"` | 1.43 ms |
+| `vim.text.diff`, `algorithm = "histogram"` | **0.58 ms** |
+
+`vim.text.diff` is Neovim's built-in xdiff in C. It takes two strings and with
+`result_type = "indices"` returns `{start_a, count_a, start_b, count_b}` hunks. Feed it
+a synthetic **token-per-line document** — one token per line, newlines inside tokens
+escaped — and hunk indices come back as token indices directly. Building that document
+costs 6.3 ms for 12K tokens. A 5000× speedup for about fifteen lines of code.
+
+**Cost, measured** (parse + flatten, per side, Lua):
+
+| size | lines | tokens | time |
+| --- | --- | --- | --- |
+| 79 KB | 2,367 | 12,226 | 34 ms |
+| 317 KB | 9,471 | 48,904 | 133 ms |
+| 950 KB | 28,415 | 146,712 | 493 ms |
+| 3.1 MB | 94,719 | 489,040 | 1,864 ms |
+
+Linear, ~14 µs per 100 lines. Both sides plus the diff on the 79 KB file is **~77 ms**
+total. Two things pull it down further: the **new** side is usually an open buffer whose
+tree Neovim already parsed for highlighting (`vim.treesitter.get_parser(bufnr)` — free),
+and `parser:parse(true, callback)` is **genuinely async** (verified: returned after
+143 ms of a 224 ms parse, callback fired at 224 ms), so the big-file path never freezes
+the UI and is cancellable by dropping the callback.
+
+**Detecting "formatting only — no semantic change"** falls out with no extra work: the
+token streams are identical while the bytes differ. Verified on a whitespace-only edit
+of the 81 KB file — zero changed tokens, 34 ms.
+
+**Falling back to line diff.** Three separate triggers, all cheap to test:
+
+- *No parser.* `vim.filetype.match({ filename = path })` → `vim.treesitter.language.get_lang(ft)`
+  → probe. **`vim.treesitter.language.add(lang)` is not a valid probe** — in 0.12.4 it
+  returned `true` for `zig`, `haskell` and `totally_fake_lang`. Use
+  `pcall(vim.treesitter.get_string_parser, "", lang)`, which fails correctly with
+  `No parser for language "…"`. For a blob with no usable extension,
+  `vim.filetype.match({ contents = …, filename = "blob" })` resolves a shebang.
+- *Syntax errors.* `root:has_error()`. A file holding conflict markers parses to 5
+  ERROR/missing nodes — its token stream is garbage, so line diff is the honest answer.
+- *Size.* Above roughly **5,000 lines per side**, where both parses cross ~100 ms.
+
+**Injections are the one real complication.** `parser:parse(true)` plus
+`for_each_tree` returns a tree per embedded language with its row range — a markdown
+file with one Lua fence gives `markdown 0..7`, `lua 3..4`, `markdown_inline 0..0`,
+`markdown_inline 6..6`. This matters because in the **parent** tree the fence body is a
+single `code_fence_content` leaf: one changed character there would light up the entire
+block. So flattening has to run per-tree and splice the token lists together by byte
+offset, not walk the root tree alone. Same for Vue, HTML with script tags, and SQL in
+strings.
+
+**Correcting an earlier implementation note.** The note under **Implementation notes**
+said an external difftool "returns formatted text that would have to be re-parsed to
+recover real line numbers". That is wrong: `DFT_UNSTABLE=yes difft --display json`
+returns `aligned_lines` (lhs↔rhs line pairing) and per-line `changes` with character
+`start`/`end` offsets and a highlight kind — exactly what a renderer needs. The
+decision to compute in-plugin still stands, for different and better reasons: the JSON
+format is explicitly unstable and gated behind an env var, it is a second binary the
+user must install, it parses with difftastic's own bundled grammars rather than the
+user's Neovim parsers (so "no parser → line diff" would disagree with what the editor
+highlights), and it cannot reuse the tree Neovim already has for an open buffer.
+
+**Next step:** `research: Neovim rendering primitives for diff display`.
