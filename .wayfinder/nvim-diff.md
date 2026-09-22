@@ -12,6 +12,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 ## Requirements
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
+- Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
 
 ## Out of scope
 
@@ -21,6 +22,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
+- Side-by-side vs unified panes: the accepted context-separator mock was drawn unified; still needs its own question.
 - How PR review state (viewed marks, draft comments) survives Neovim restarts.
 - Whether structural diff must work for every language or degrade gracefully.
 - What happens when the plugin is used in a repo whose remote is not GitHub.
