@@ -65,12 +65,23 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - The real cost of `git worktree add` on a large repo, and whether `--no-checkout` plus a sparse checkout is worth it for big PRs.
 - Whether Neovim 0.12's `vim.async` covers cancellation, join, chain and protected await, or whether a thin shim is needed.
 
+- Is the "new" pane the **real, editable file buffer** (LSP attached, edits hit disk), or a read-only rendered copy? This decides whether separators and filler could be real buffer text, whether `gd`/rename/code-actions work inside the diff, and whether editing-in-the-diff is a feature at all. Everything decided so far assumes a read-only rendered copy, which is the safe superset.
+- Should the normal fold keys (`zo`/`zc`/`zR`/`zM`) open and close context folds, or only the plugin's expand-10 / expand-all keys? They work but desync the panes unless intercepted, and intercepting them surprises people who use folds reflexively.
+- When a thread is expanded on one side, should the other side show blank padding or a **dimmed mirror** of the thread? Blank is honest; a mirror keeps the thread readable while the eye is on the old side.
+- Should both panes show line numbers, or only the new side? Two number columns cost ~10 columns of code in a narrow split.
+- Is a review tab with its own `:tcd` welcome, or intrusive?
+- Exact corrector behaviour under `smoothscroll`, `splitkeep` and horizontal sync (`scrollopt+=hor`, `sidescrolloff`); whether `WinScrolled` alone catches every scroll or `WinResized`/`TabEnter` are also needed.
+- Whether a merged filler extmark's `virt_lines` array can be updated **in place** cheaply enough for expand-10, or must be deleted and recreated.
+- Fold creation cost at 50,000 lines with hundreds of context folds, and whether `foldmethod=expr` with a lookup table beats `manual` + `zE` for rebuilds.
+- Whether treesitter's highlighter attaches cleanly to a `buftype=nofile` scratch buffer with no file on disk, and whether injections still resolve there.
+- TUI paint cost with a real terminal attached — every redraw number measured so far is a headless grid-update cost.
+
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
 - [x] research: GitHub API surface for PR review — [result](#result-research-github-api-surface-for-pr-review)
 - [x] research: structural diff with treesitter — [result](#result-research-structural-diff-with-treesitter)
-- [ ] research: Neovim rendering primitives for diff display
+- [x] research: Neovim rendering primitives for diff display — [result](#result-research-neovim-rendering-primitives-for-diff-display)
 - [x] research: prior art — diffview.nvim and octo.nvim architecture — [result](#result-research-prior-art--diffviewnvim-and-octonvim-architecture)
 - [ ] prototype: the visual language (highlight groups, separator row, structural output)
 - [ ] implement: plugin skeleton, config, health check, test harness
@@ -114,15 +125,15 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Comment text is compared with whitespace normalised, so rewrapping a comment is a formatting change, while editing its words is a real one.
 
 - nvim-diff is **MIT-licensed, and no code is copied from diffview.nvim** — diffview is GPL-3.0-or-later and copying would force nvim-diff to GPL. It is read for ideas only. Code may be lifted verbatim from octo.nvim / gh.nvim / gitlab.nvim (all MIT) provided the notice ships in `LICENSES/`.
-- The diff is rendered with Neovim's **native diff mode** — `vim.wo[win].diff`, `scrollbind`, `cursorbind`, `foldmethod=diff` set per window — not a hand-rolled renderer. `:diffthis` is never called. (Subject to the structural-diff collision in contradiction 1 of the prior-art result.)
+- **The plugin does not use Neovim's native diff mode.** `vim.wo.diff` stays `false` in every plugin window; the plugin computes hunks and renders both panes itself with extmarks. (This reverses the note recorded from the prior-art step, on four measured grounds: diff highlights beat extmarks at every priority, native diff computes its own fillers and cannot be handed ours, `diffexpr` is line-level-only and global, and a native filler region cannot hold `virt_lines`.) Both diffview.nvim and octo.nvim delegate everything to native diff mode, so the renderer has **no reference implementation** and is the riskiest step on the map.
 - No VCS adapter abstraction. There is a `git/` module; Mercurial support is out of scope permanently. That abstraction is ~3900 lines of diffview.
 - No bespoke async framework and no FFI. `vim.system` plus Neovim 0.12 coroutines. diffview's `async.lua` reads C globals through FFI to skip a `vim.schedule` round-trip — a maintenance liability we do not inherit.
-- Left and right panes get differentiated diff colours by default, via per-window highlight namespaces remapping `DiffChange`/`DiffText`/`DiffAdd`/`DiffDelete` per side. diffview has this as `enhanced_diff_hl`, off by default; ours is on.
+- The built-in `DiffAdd`/`DiffChange`/`DiffText`/`DiffDelete` groups are **never used**. The plugin owns its own groups, so no colorscheme can make its diff colours collide with its fold colours. diffview's `enhanced_diff_hl` solves the same problem by remapping the built-ins and is off by default; we sidestep it entirely.
 - Every file's rev tuple is `{a,b,c,d}` = old/ours, new/local, theirs, base, and every layout maps the same four symbols, so one entry model serves 2-, 3- and 4-pane layouts.
 - Diff buffers are named `nvim-diff://<gitdir>/<rev>/<path>` and the name is set **before** content is fetched, so concurrent requests for one blob dedupe on the name.
 - Diff buffers for non-local revisions are capped by an LRU and evicted. Only working-tree buffers are exempt. diffview's unbounded accumulation is its #613 memory leak (48 GB reported).
 - Historical-blob buffers are `buftype = "nofile"` to keep LSP servers off them; only the PR worktree's real files get LSP.
-- Diff windows set `cursorlineopt = "number"` — `cursorline` overrides diff highlighting (neovim/neovim#9800).
+- `cursorlineopt` is not forced. neovim/neovim#9800 does not reproduce on 0.12.4 — `CursorLine` resolves below both diff and extmark highlights.
 - Every git invocation carries `--no-optional-locks` and `-c core.quotePath=false`, plus `-c gc.auto=0` for log. diffview omits the first and it causes measurable lock contention (its #535, ~1 s to stage a file).
 - The file panel is subject to the same size threshold as file content: above it, a summary rather than the full tree.
 - The conflict parser returns regions, the region under the cursor, and the cursor's region index in a single tolerant pass; a repeated marker flushes a partial region rather than erroring.
@@ -134,6 +145,23 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Marking a file viewed is one action that posts to GitHub and jumps to the next unviewed file. octo has these as two separate actions.
 - `diff/hunk.lua` owns `commentable_ranges(side)`, derived from our local line hunks, and the comment keymap is gated on it. Structural diff never changes commentable ranges.
 - `git/worktree.lua` prunes orphaned `.git/nvim-diff/pr-*` worktrees at startup, and the health check reports them.
+- Filler lines are `virt_lines` extmarks — one merged extmark per contiguous filler run, never one per row. A comment thread and its padding are one extmark per side per anchor row, whose `virt_lines` array is own-content followed by `max(n_left, n_right) - n_own` blanks.
+- Scroll sync is a plugin-owned corrector on `WinScrolled` using `winrestview{topline, topfill}` driven by a display-row map. `scrollbind` is **off** — measured, it fights the corrector (3/200 misaligned with both, 0/200 with the corrector alone). `cursorbind` is off too; cursor correspondence comes from the hunk map, not line numbers.
+- `wrap` is forced off in diff panes. A long line on one side only takes more screen rows there, which is permanent drift.
+- Every diff pane gets a **header line at buffer line 1**, because `virt_lines_above` on row 0 never renders. A top-of-file hunk's filler then attaches below the header as ordinary `virt_lines`.
+- The changed-line background is a **range extmark** (`end_row = row + 1, end_col = 0, hl_eol = true`), never `line_hl_group` — whose background cannot be beaten by a token highlight at any priority.
+- Priority band: line background **150**, structural token **250**, both above treesitter's 100. The default extmark priority (4096) is never relied on.
+- Diff highlight groups set **background only, never foreground**, so treesitter's syntax colours survive inside a changed token.
+- Highlight groups live in a private namespace bound with `nvim_win_set_hl_ns`, with global `default = true` groups as the user's override surface, redefined on `ColorScheme` and on `background` change. A namespace survives `:colorscheme` and `:hi clear`; `winhighlight` survives but its targets do not.
+- Context folding uses **real manual folds** with a custom `foldtext`, window-local `fillchars` `fold:═`, and a `Folded` remap for the loud colour — the colour comes from the remap, not the `foldtext` chunk. Expanding rebuilds the fold (`zE` + re-fold) and restores the view on both windows explicitly. Fold open/close is mirrored across panes and `zo`/`zc`/`za`/`zR`/`zM` are intercepted.
+- `conceal_lines` is ruled out: measured, it breaks scroll sync outright, and a `virt_lines` separator on a concealed line is not drawn.
+- All extmarks are **persistent**; no `nvim_set_decoration_provider`. Ephemeral marks cannot render `virt_lines`, and a decoration provider measured slower at redraw than persistent marks.
+- Marks are applied eagerly and in full. Rendering is viewport-bounded and flat: 50,000 lines with 10,000 changed cost 68 ms to render and 0.049 ms/frame to scroll.
+- Diff panes are `buftype=nofile`, `bufhidden=wipe`, `noswapfile`, `nobuflisted`, `undolevels=-1`, `nomodifiable`, `winfixbuf`. The file panel is created with `nvim_open_win{split="left"}` + `winfixwidth` + `winfixbuf`, not `:vsplit`.
+- `statuscolumn` renders file line numbers and blanks them when `v:virtnum < 0`, offset for the header line.
+- A PR review opens in its own tabpage with a tab-local cwd (`:tcd`) set to the PR worktree, so `:find`, `:grep` and terminals resolve against the PR's tree. `:tabclose` is trapped to clean up.
+- The plugin never persistently sets the global options `diffexpr`, `diffopt`, `scrollopt` or `splitkeep`.
+- The size threshold is a **parse and diff** threshold, not a rendering one. Rendering would not justify deferring anything under ~50,000 lines; the treesitter parse (1,864 ms at 94,719 lines) and the blob fetch are the real costs.
 
 ## Results
 
@@ -634,3 +662,459 @@ rather than claiming invention.
 **Next step:** `research: Neovim rendering primitives for diff display` — which now
 carries contradictions 1 and 3 as its two load-bearing questions. The verification
 scripts are at `…/scratchpad/vt.lua` and `vt2.lua`.
+
+### result: research: Neovim rendering primitives for diff display
+
+Tested against **Neovim v0.12.4** (Release, LuaJIT 2.1.1774638290) on Linux 6.18.52.
+
+Nearly everything here was run, not recalled. The harness drove a real child Neovim over
+an RPC socket (`nvim --headless --listen`), fed it **real keystrokes through
+`nvim_input`** so the actual input loop and `do_check_scrollbind` ran, then read back the
+real screen grid with `screenstring()` and the resolved per-cell colours with
+`nvim__inspect_cell()`. Driving `:normal!` from a script gives false answers for scroll
+questions. Claims marked *(doc)* come from `:help` in the 0.12.4 runtime; everything else
+is measured.
+
+#### 1. Substrate: **drop native diff mode and render both panes ourselves**
+
+This reverses the note recorded from the prior-art step. Four measured facts force it.
+
+**In native diff mode, diff highlights beat extmarks at every priority.** Two `diff=true`
+windows, treesitter on, an extmark painting a token background `#d75f00`:
+
+```
+priority    50 -> rendered bg #007373   stack [NDTok,String,DiffText]
+priority   200 -> rendered bg #007373   stack [String,NDTok,DiffText]
+priority 20000 -> rendered bg #007373   stack [String,NDTok,DiffText]   <- DiffText still wins
+diff mode OFF  -> rendered bg #d75f00   stack [String,NDLine,NDTok]     <- extmark wins
+```
+
+`DiffChange`/`DiffText` are applied as the line's base attribute *after* extmark
+decorations, exactly like `line_hl_group`. Priority never reaches them. **There is no
+priority at which a structural token highlight is visible inside native diff mode.**
+
+There is an escape hatch — remapping the diff groups to an *empty* group per window
+restores extmark control (`winhighlight = "DiffChange:NDDiffOff,DiffText:NDDiffOff,…"`
+where `NDDiffOff` is `{}`; mapping to `Normal` instead does **not** work, Normal's bg
+then paints over the extmarks). But it does not save the hybrid, because:
+
+**Native diff computes its own line hunks and fillers and cannot be handed ours.** The
+point of the structural view is that a pure reformat reads as no semantic change. A
+reformat that explodes one call across four lines produces three filler rows under native
+diff. You can neutralise the *colours*; you cannot neutralise the *layout*. `iwhiteall`
+rescues pure-whitespace edits, not re-wrapping.
+
+`diffexpr` is the only way to feed native diff an alignment, and it is a dead end:
+*(doc)* its output must be ed-style or `diff -U0` unified — **line-level only, no column
+or token information**, so it structurally cannot express a token diff; it is a **global
+option** (measured: `nvim_get_option_info2` says `scope = "global"`), so setting it
+hijacks every `:diffsplit` the user has open; and it receives temp *file paths*, not
+buffers.
+
+**A native filler region cannot hold `virt_lines`.** OLD has 3 native filler rows
+opposite NEW's `ADD1/ADD2/ADD3`. Attach a 2-line comment thread to `ADD2` and try to pad
+OLD — measured, at every anchor:
+
+```
+pad BELOW old L05 (before the block)     pad BELOW old L06 (after the block)
+ 6 |PAD    |ADD1 |                        6 |-------|ADD1 |
+ 7 |PAD    |ADD2 |                        7 |-------|ADD2 |
+ 8 |-------|>>thr|                        8 |-------|>>thr|
+ 9 |-------|>>thr|                        9 |L06    |>>thr|   <- L06 faces a comment
+10 |-------|ADD3 |                       10 |PAD    |ADD3 |
+```
+
+Alignment below the hunk is restored either way, but **inside the hunk the correspondence
+is scrambled** — you cannot insert padding at an offset *within* a native filler block,
+and `virt_lines_above` on the following line lands after the block too. The custom
+renderer does it in one extmark because it owns the filler:
+
+```lua
+vim.api.nvim_buf_set_extmark(bo, ns, 4, 0, { virt_lines_leftcol = true, virt_lines = {
+  {{"",""}}, {{"",""}},      -- opposite ADD1, ADD2
+  {{"",""}}, {{"",""}},      -- opposite the 2 thread lines
+  {{"",""}},                 -- opposite ADD3
+}})
+```
+
+Measured: `ADD1↔fill, ADD2↔fill, thr↔pad, thr↔pad, ADD3↔fill` — exact, row for row.
+
+**Rejected:** (a) native-for-alignment with overlaid structural highlights — dies on the
+reformat requirement and the inline-thread requirement. (c) hybrid, native for the
+raw-line toggle and custom for structural — doubles the renderer and the scroll-sync
+model, makes the layout toggle a full teardown, and gains nothing, since a raw line diff
+is just the structural renderer with the token pass switched off.
+
+**What we give up:** `]c`/`[c`, `do`/`dp`, `foldmethod=diff`, `:diffupdate`-on-edit, and
+`diffopt`'s `linematch`/`inline:char`. All are implementable; `linematch` is the only
+genuinely useful one, and its job — pairing the most similar lines inside a hunk — is
+subsumed by the token diff already chosen.
+
+#### 2. Scroll sync and alignment
+
+The prior-art finding reproduces, but its **mechanism is different from what was
+recorded**. Two `diff=true` windows, 2 `virt_lines` under NEW line 5:
+
+```
+ 5 |L05    |L05      |
+ 6 |L06    |>> thread|
+ 7 |L07    |>> thread|
+...
+12 |X_old  |L10      |      <- X_old@12, X_new@14. Drift 2.
+```
+
+Both windows were at `topline=1, topfill=0` — **nothing scrolled**. It is not scrollbind
+equalizing toplines; it is a **filler** failure. Native diff does not know about extmark
+virtual lines, so it inserts no compensating filler.
+
+The padding fix works and composes:
+
+| case | result |
+| --- | --- |
+| matching empty `virt_lines` at the same row on the other side | aligned |
+| threads on both sides at *different* rows, each padded opposite | aligned |
+| threads on both sides at the *same* row, unequal counts, unpadded | drift |
+| same row both sides, each padded by the other's full count | aligned, but over-padded |
+
+Correct composition rule: **per anchor row, each side emits one extmark whose
+`virt_lines` array is `own_content` followed by `max(n_left, n_right) - n_own` blank
+lines.** One mark per side per row keeps ordering deterministic.
+
+**Without diff mode, `virt_lines` really are filler — `topfill` proves it.** This is the
+load-bearing finding. `winsaveview().topfill` is populated by extmark virtual lines, not
+only by native diff filler:
+
+```
+OLD 20C-E  OLD=f03 (21) NEW=A1 (21)  o[tl=21 tf=3] n[tl=19 tf=0]
+OLD 21C-E  OLD=f04 (22) NEW=A2 (22)  o[tl=21 tf=2] n[tl=20 tf=0]
+OLD 22C-E  OLD=f05 (23) NEW=A3 (23)  o[tl=21 tf=1] n[tl=21 tf=0]
+```
+
+Because `topfill` is live, `scrollbind` mostly works — a 75-operation directed sweep and
+a 300-operation randomized fuzz over a 20-hunk diff gave **0 drifts**. But it is not
+exact: a second fuzz with a different seed found 4 failures in 400 ops, all the same
+shape — the top lands *inside* a filler block (`topfill=3`, `topfill=4`) while the other
+side is at `topfill=0`:
+
+```
+scrollbind only, scrolloff=0     1/200   wn <C-d>
+scrollbind only, scrolloff=8     3/200   wo zb, wo 19zt, wo 18zt
+```
+
+`zt`/`zb`/`<C-d>` position by buffer line, and scrollbind cannot express the fill offset.
+Those are exactly the keys a reviewer presses to frame a hunk.
+
+**`winrestview` accepts `topfill` and round-trips exactly** against extmark virtual lines
+— measured against a 5-line filler block below line 12:
+
+```
+req topfill=0 -> topline=13 topfill=0  row1='c031'   (the real line)
+req topfill=1 -> topline=13 topfill=1  row1='F007'
+req topfill=3 -> topline=13 topfill=3  row1='F005'
+req topfill=5 -> topline=13 topfill=5  row1='F003'   (top of the block)
+```
+
+So the renderer keeps a row map `display_index -> {topline, topfill}` per side and syncs
+on `WinScrolled`:
+
+```lua
+local function sync(src, dst, smap, dmap)
+  local v = vim.api.nvim_win_call(src, vim.fn.winsaveview)
+  local i = index_of(smap, v.topline, v.topfill)      -- display row of src's top
+  local d = dmap[i]; if not d then return end
+  vim.api.nvim_win_call(dst, function()
+    local dv = vim.fn.winsaveview(); dv.topline = d.topline; dv.topfill = d.topfill
+    vim.fn.winrestview(dv)
+  end)
+end
+```
+
+Measured over 200 randomized real keystrokes at `scrolloff=8`:
+
+| configuration | misaligned |
+| --- | --- |
+| `scrollbind` only | 3/200 |
+| `scrollbind` + corrector | 3/200 — **they fight**, scrollbind runs after and re-scrolls |
+| **corrector only, `scrollbind` off** | **0/200** |
+
+**`cursorbind` must be off.** It syncs raw line numbers, so with a 2-line hunk above,
+`30G` in OLD lands on `C28` while NEW lands on `C27`; enabling it raised the fuzz failure
+rate to 25/120.
+
+**`wrap` must be off.** A changed line that is long on one side only takes 3 screen rows
+there and 1 on the other — instant, permanent drift. *(doc: `:help view-diffs` lists
+`'wrap'` first among the things that break alignment.)*
+
+**`virt_lines_above` at buffer line 1 does not render**, in either substrate:
+
+```
+extmark with virt_lines_above on row 0:
+  nvim_win_text_height(all) = 10, fill = 2     <- Neovim counts them
+  winsaveview() at top      = topline 1, topfill 0
+  screen row 1              = "REAL1"          <- never drawn, never scrollable to
+```
+
+Native diff mode *does* render top-of-file filler (measured `topfill=3` at `topline=1`).
+Extmarks cannot. Measured workaround: **give every diff pane a header line at buffer line
+1** (`── a/foo.lua ──`), so a top-of-file hunk's filler attaches as ordinary `virt_lines`
+below the header. `virt_lines_above` works fine mid-buffer; only row 0 is dead.
+
+#### 3. Extmark capabilities, limits and performance
+
+Priority range is `0..65535`, default `4096` (measured; `65536` errors).
+
+**`line_hl_group`'s background beats any char-level `hl_group` background, at any
+priority.** Measured three ways:
+
+```
+line_hl_group pri=1 + token hl_group pri=65535   -> token cell bg #1d2b1d   (the LINE colour)
+hl_mode="combine" on the token                   -> token cell bg #1d2b1d   (no help)
+range hl_eol pri=150 + token pri=250             -> token cell bg #d75f00   (the TOKEN colour) ✓
+range hl_eol pri=250 + token pri=150             -> token cell bg #1d2b1d   (line wins, correctly)
+```
+
+**So the changed-line background must be a range extmark, not `line_hl_group`** — or
+structural token highlighting is invisible. To fill to the window edge the range must
+cover the EOL: `end_row = row + 1, end_col = 0` works (measured: column 60 of a 25-char
+line is painted); `end_col = #line` or `#line + 1` with `strict = false` does not.
+
+```lua
+-- changed line background
+vim.api.nvim_buf_set_extmark(buf, ns, row, 0, {
+  end_row = row + 1, end_col = 0, hl_group = "NvimDiffChangeLine", hl_eol = true, priority = 150 })
+-- structural token inside it
+vim.api.nvim_buf_set_extmark(buf, ns, row, scol, {
+  end_row = row, end_col = ecol, hl_group = "NvimDiffChangeToken", priority = 250 })
+```
+
+**Ephemeral marks cannot render `virt_lines`** (measured: sets without error, draws
+nothing; an ephemeral `hl_group` on the same provider draws fine). **Filler therefore
+cannot be produced lazily by a decoration provider.**
+
+Marks shift correctly on edits (measured). `invalidate = true` flags a mark `invalid`
+rather than dropping it.
+
+**Performance — persistent marks beat a decoration provider, and rendering is not a
+bottleneck.** Two panes, 3 marks per changed line per side, plus 3-line filler blocks:
+
+| lines | changed | marks | set_lines | decorate | first redraw | 100×`C-D` | `win_text_height` | clear |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2,000 | 400 | 2,460 | 0.5 ms | 2.5 ms | 0.08 ms | 3.9 ms (0.039/frame) | 0.25 ms | 0.4 ms |
+| 10,000 | 2,000 | 12,300 | 2.8 ms | 11.4 ms | 0.07 ms | 4.7 ms (0.047/frame) | 1.16 ms | 1.7 ms |
+| 50,000 | 10,000 | 61,500 | 12.3 ms | 56.0 ms | 0.11 ms | 4.9 ms (0.049/frame) | 6.11 ms | 10.0 ms |
+
+Isolated: 150,000 marks in a 50,000-line buffer cost **114 ms** to place and 28 ms to
+clear; 10,000 `virt_lines` marks cost 13 ms. Redraw and scroll are viewport-bounded and
+**flat** regardless of mark count. A decoration provider measured *slower* at redraw
+(0.051 ms/frame vs 0.037 for 40,000 persistent marks) while adding the `virt_lines`
+restriction. Caveat: headless Neovim computes the grid but skips terminal output, so
+these are grid-update costs, not TUI paint costs.
+
+#### 4. The separator row for folded context
+
+**Recommendation: a real fold with a custom `foldtext`, window-local `fillchars` and a
+`Folded` remap.**
+
+```lua
+vim.wo[win].foldmethod = "manual"
+vim.wo[win].foldtext   = "v:lua.require'nvim-diff.render'.foldtext()"
+vim.wo[win].fillchars  = "fold:═"                    -- global-local: settable per window
+vim.wo[win].winhighlight = "Folded:NvimDiffContextSeparator"
+vim.wo[win].foldcolumn = "0"
+```
+
+Measured, the row is genuinely full-width and uniformly coloured:
+
+```
+without winhl:  c1:-  c16:2c2e33      <- foldtext chunk uncoloured, only the fill is Folded
+with winhl:     c1:d79921             <- ONE colour, column 1 to the window edge
+```
+
+The trap: **a `foldtext` chunk's own highlight group does not set the row's background** —
+`Folded` does. The loud colour must come from the remap, not the chunk.
+
+Folds + `foldtext` + filler `virt_lines` stay aligned as long as both sides carry
+identical fold ranges (measured). Expanding is a rebuild — `zE` then re-issue `:a,bfold`
+with the shrunken range — and **rebuilding folds resets the view** (measured: OLD stayed
+at topline 11, NEW jumped to 1), so the expand handler must `winsaveview`/`winrestview`
+around it on both windows.
+
+**`conceal_lines` is ruled out — measured, it breaks scroll sync outright.** It is
+otherwise ideal (60 display rows → 34, instant expansion, `win_text_height` tracks it),
+but scrollbind does not account for it:
+
+```
+3 C-E from the top, identical conceal ranges on both sides:
+  OLD topline 1 -> 30      NEW topline 1 -> 57
+```
+
+Also measured: a `virt_lines` separator attached to a concealed line is **not drawn** —
+the anchor line isn't rendered, so neither are its virtual lines.
+
+A real inserted separator line is rejected only conditionally: it is the simplest option
+and trivially aligned, but it forecloses the pane ever being the real editable file
+buffer and forces every line-number mapping through a text offset instead of a fold
+range. See the fog question about editable panes.
+
+*(doc + measured)* If a fold is open in one window and closed in the other, alignment
+breaks immediately — the plugin must mirror fold state and intercept `zo`/`zc`/`za`/`zR`/`zM`.
+
+#### 5. Highlight group strategy
+
+**Recommendation: a private highlight namespace via `nvim_win_set_hl_ns`, plus global
+`default = true` groups as the user's override surface, re-applied on `ColorScheme`.**
+
+Measured survival:
+
+| | after `:colorscheme default` | after `:hi clear` |
+| --- | --- | --- |
+| `nvim_set_hl(0, "NDB", {bg=…})` | **wiped** | wiped |
+| `nvim_set_hl(ns, "NDA", {bg=…})` | **survives** | **survives** |
+| `winhighlight` string | survives, but points at a wiped group | same |
+| `nvim_win_set_hl_ns(win, ns)` binding | survives | survives |
+
+**A highlight namespace is self-healing; `winhighlight` is not.** diffview's `winhl`
+approach needs a `ColorScheme` autocmd to redefine every group; octo's namespace approach
+needs nothing. Both compose identically with treesitter.
+
+`default = true` semantics, measured: the **first** definition wins and a later
+`default = true` never overwrites — including over a prior non-default definition. Exactly
+the "ship a default the colorscheme may already have overridden" behaviour. It does not
+survive `:colorscheme`, hence the autocmd.
+
+```lua
+local NS = vim.api.nvim_create_namespace("nvim-diff")
+local function define()
+  local dark = vim.o.background == "dark"
+  vim.api.nvim_set_hl(0, "NvimDiffAddLine",  { bg = dark and "#14301a" or "#d7f5dd", default = true })
+  vim.api.nvim_set_hl(0, "NvimDiffAddToken", { bg = dark and "#2f6f2f" or "#a6e8b5", default = true })
+  vim.api.nvim_set_hl(0, "NvimDiffContextSeparator",
+    { fg = "#101010", bg = "#d79921", bold = true, default = true })
+  vim.api.nvim_set_hl(NS, "Folded", { link = "NvimDiffContextSeparator" })
+end
+define()
+vim.api.nvim_create_autocmd({ "ColorScheme", "OptionSet" },
+  { pattern = { "*", "background" }, callback = define })
+```
+
+**Nesting against treesitter** (which uses priority 100 *(doc)*):
+
+```
+token hl has bg only, priority 1    -> bg: token wins; fg: treesitter's String survives  ✓
+token hl has bg only, priority 200  -> bg: token wins; fg: treesitter's String survives  ✓
+token hl has fg+bg,   priority 1    -> treesitter fg wins  (below 100)
+token hl has fg+bg,   priority 200  -> token fg wins       (above 100)
+```
+
+**Diff highlight groups therefore set `bg` only, never `fg`**, so syntax colour survives
+untouched inside a changed token — which is what makes a structural diff readable. Band:
+line background **150**, token **250**, both above treesitter's 100.
+
+On the Destination's "never confused with fold colours" demand: the separator is painted
+by remapping `Folded` to a group the plugin owns, so it is by construction a different
+group from `NvimDiffChangeLine`. And because the plugin renders with diff mode off, the
+built-in `DiffAdd`/`DiffChange`/`DiffText`/`DiffDelete` groups are **never used at all** —
+no colorscheme can make the plugin's diff colours collide with its fold colours, because
+the plugin inherits neither.
+
+**`cursorlineopt = "number"` is not needed on 0.12.4** — neovim#9800 does not reproduce:
+
+```
+diff ON,  cursorlineopt=both: stack [CursorLine,String,CursorLine,DiffText] -> bg #007373
+diff OFF, cursorlineopt=both: stack [CursorLine,String,NDLine,NDTok]        -> bg #d75f00
+```
+
+CursorLine sits *below* both diff highlights and extmark highlights.
+
+#### 6. Windows, panels and layout mechanics
+
+```lua
+local panel = vim.api.nvim_open_win(pbuf, false, { split = "left", win = 0, width = 35 })
+vim.wo[panel].winfixwidth = true
+vim.wo[panel].winfixbuf   = true    -- exists in 0.12; stops :e replacing the buffer
+```
+
+`nvim_open_win` with `split = "left"/"right"` returns a normal window (measured: panel at
+`{0,0}` w=30, panes at `{0,31}` and `{0,66}`). **Prefer it over `:vsplit`** — explicit
+anchor window, no dependence on the user's `splitright`/`splitbelow`.
+
+Diff-pane buffer options, all measured settable: `buftype=nofile`, `bufhidden=wipe`,
+`swapfile=false`, `buflisted=false`, `undolevels=-1`, `modifiable=false` (set last).
+Window options: `wrap=false`, `scrollbind=false`, `cursorbind=false`,
+`foldmethod=manual`, `foldcolumn=0`, `foldtext`, `fillchars`, `winfixbuf`,
+`statuscolumn`, plus the highlight namespace.
+
+**Option scopes** (measured via `nvim_get_option_info2`) — this decides what the plugin
+may touch:
+
+| option | scope |
+| --- | --- |
+| `fillchars`, `scrolloff` | **win (global-local)** — settable per pane without touching globals |
+| `foldtext`, `conceallevel`, `winhighlight`, `statuscolumn` | win |
+| `diffexpr`, `diffopt`, `scrollopt`, `splitkeep` | **global** — never set persistently |
+
+`statuscolumn` gives file line numbers, blank on filler — measured working:
+
+```lua
+vim.wo[win].statuscolumn = '%#LineNr#%{v:virtnum<0?"    ":printf("%4d",v:lnum)}%#Normal# '
+```
+
+*(doc: `v:virtnum` is negative on virtual lines, zero on the real line, positive on
+wrapped continuations.)* Real rows show numbers, filler rows blank, the fold row shows the
+first folded line's number. Note it shows **buffer** line numbers — with the header line
+at row 1 the plugin must offset by 1 or consult its own row map.
+
+`WinClosed` fires with the window id in `event.match` (measured), so the plugin tears the
+whole view down rather than leaving a half-layout.
+
+**`:tabnew` per review — recommended.** Tabpages are cheap and `:tcd` works, so a review
+tab can hold a tab-local cwd pointing at `.git/nvim-diff/pr-<n>`, making `:find`, `:grep`
+and terminal jobs resolve against the PR's tree without disturbing the user's main tab.
+Cost: an extra tabline entry, and `:tabclose` must be trapped to clean up the worktree.
+
+#### 7. Performance ceilings
+
+**Rendering is not the bottleneck and should not set the size threshold.** 50,000 lines
+with 10,000 changed lines and 1,500 filler blocks costs 12 ms to fill the buffers plus
+56 ms to decorate — **68 ms total** — with a flat 0.049 ms/frame scroll cost afterwards.
+Marks are applied eagerly, in full.
+
+The only super-linear-feeling cost is `nvim_win_text_height` over a whole buffer
+(0.25 / 1.16 / 6.11 ms at 2K / 10K / 50K lines). Call it on ranges, or cache the total and
+adjust it when folds and filler change — never per frame.
+
+#### ⚠️ Contradictions with the map
+
+**1. The prior-art step's central recommendation is reversed.** "Render with Neovim's
+native diff mode" was recorded as an implementation note one step ago; it is now
+withdrawn, on the four measured grounds in §1. `implement: side-by-side renderer with
+scroll sync` has **no reference implementation in the ecosystem** and is the riskiest step
+on the map. Budget it accordingly.
+
+**2. The inline-comment-thread requirement is only satisfiable with a custom renderer.** A
+thread on an added line — which has native filler opposite it — cannot be padded correctly
+under diff mode (§1, measured). "Expanded inline, never in a floating window" and "keep
+native diff mode" are mutually exclusive.
+
+**3. "A pure reformat reads as formatting only" is unreachable under native diff**, even
+with colours neutralised, because native diff still inserts filler for the changed line
+counts.
+
+**4. The size-threshold requirement is not about rendering.** 50,000 lines render in
+68 ms. The threshold is a *parse and diff* threshold — the real costs are the treesitter
+parse (1,864 ms at 94,719 lines, measured in the previous step) and the blob fetch plus
+line diff. The existing "structural falls back to line diff above ~5,000 lines per side"
+note already carries that. The separate "defer the whole file until asked" number needs
+its own justification; rendering alone would not justify deferring anything under
+~50,000 lines.
+
+**5. `virt_lines_above` on buffer line 1 never renders.** Any design anchoring the first
+separator or first filler block at row 0 is wrong. The header-line workaround is measured
+working and is now a rendering invariant.
+
+**6. `implement: context folding` depends on `implement: side-by-side renderer` more
+tightly than the map's ordering implies** — fold ranges must be mirrored and the view
+restored on both panes, which needs the row map to exist first.
+
+**Next step:** `prototype: the visual language` — which now has a settled substrate and
+must decide what the thing actually looks like.
