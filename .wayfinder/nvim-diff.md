@@ -53,11 +53,13 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async, cancellable run.
 - Whether an LSP indexing both the main tree and the PR worktree causes problems in practice.
 - Whether staging hunks belongs here at all, given diffview is being replaced but gitsigns already does it.
+- Nothing is refetched while a review is open, so another reviewer's new comment stays invisible until the PR is reopened — probably a manual refresh keymap rather than polling.
+- Whether to feature-detect GHES capabilities by introspecting the schema at startup, or just let the API error surface.
 
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
-- [ ] research: GitHub API surface for PR review
+- [x] research: GitHub API surface for PR review — [result](#result-research-github-api-surface-for-pr-review)
 - [ ] research: structural diff with treesitter
 - [ ] research: Neovim rendering primitives for diff display
 - [ ] research: prior art — diffview.nvim and octo.nvim architecture
@@ -91,6 +93,10 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - GitHub access goes through the `gh` CLI rather than a token the plugin manages. `gh` is already installed and authenticated here, it handles Enterprise hosts and SSO, and it removes token storage from the plugin's problem list. `gh api graphql` covers the parts that are GraphQL-only (viewed state, thread resolve).
 - Comment threads render with extmark virtual lines, not floating windows — this is what makes expand-in-place possible, and it was the user's explicit correction.
 
+- Reads go over GraphQL, writes over REST. Viewed state and thread structure exist only in GraphQL; immediate standalone posting exists only in REST (`addPullRequestReviewThread` is pending-review only). The two id spaces bridge by `node_id` / `fullDatabaseId`.
+- The diff is computed locally with git from the PR worktree, never fetched from `/pulls/{n}/files` — that endpoint paginates, truncates big patches and caps at 3000 files. GitHub is asked only for SHAs, viewed state and threads.
+- `resolveReviewThread` is called without `resolutionReason`; the field is recent and GHES may not have it.
+
 ## Results
 
 ### result: grill: requirements sweep
@@ -114,3 +120,95 @@ Everything still unknown is a thing I can answer by reading docs, reading prior 
 or trying it — which is what the four `research:` steps are for.
 
 **Next step:** `research: GitHub API surface for PR review`.
+
+### result: research: GitHub API surface for PR review
+
+Everything below was checked against the live API with `gh` (2.101.0), not recalled.
+Schema facts come from GraphQL introspection; line-anchoring facts come from real
+threads on `cli/cli#10513`.
+
+**Shape of the answer: reads are GraphQL, writes are REST.** Neither API covers the
+whole job.
+
+- Only GraphQL exposes viewed state and thread grouping (`isResolved`, `isOutdated`,
+  reply structure). REST `/pulls/{n}/comments` returns a flat comment list with no
+  viewed state and no resolved flag; threads would have to be rebuilt from
+  `in_reply_to_id`.
+- Only REST posts a comment *immediately*. The GraphQL `addPullRequestReviewThread`
+  mutation is described by the schema itself as "Adds a new thread to a **pending**
+  Pull Request Review" — the batching model the user ruled out.
+- The two id spaces bridge cleanly: a REST comment's `node_id` is the GraphQL `id`,
+  and a GraphQL comment's `fullDatabaseId` is the REST numeric `id`. So a thread read
+  over GraphQL can be replied to over REST with no extra fetch.
+
+**Viewed state** — `pullRequest.files(first:100){ nodes { path additions deletions
+changeType viewerViewedState } }`, write with `markFileAsViewed(pullRequestId, path)`
+and `unmarkFileAsViewed`. Both mutations take the PR **node id** (`PR_kwDO…`, from
+`pullRequest.id`), not the number. `FileViewedState` is `VIEWED / UNVIEWED /
+DISMISSED`, and **`DISMISSED` is exactly the "I marked it viewed and new commits
+changed it" state** the panel needs — GitHub computes it, the plugin just renders it.
+`changeType` is `ADDED DELETED RENAMED COPIED MODIFIED CHANGED`; note it gives no
+previous path for a rename, so rename trails come from local git, not here.
+
+**Threads** — `reviewThreads(first:100, after:$endCursor)` gives `id path line
+startLine originalLine originalStartLine diffSide startDiffSide isResolved isOutdated
+isCollapsed subjectType viewerCanReply viewerCanResolve viewerCanUnresolve resolvedBy`,
+and nested `comments(first:100)` gives `id fullDatabaseId author.login body outdated
+createdAt diffHunk replyTo url viewerDidAuthor`. Page size caps at 100 and
+`gh api graphql --paginate` with `$endCursor` works (verified: 84 threads returned in
+one page). Cost is 1 rate-limit point per call against a 5000/hr budget, so the
+"refetch everything on open, keep no local state" requirement is essentially free —
+a whole PR is one or two calls.
+
+**Outdated threads really have no line.** Verified: an outdated thread returns
+`line: null` while keeping `originalLine` and its original commit (REST agrees —
+`line: null`, `original_line: 679`). `subjectType: FILE` threads have no line either.
+So the side list is not a UI preference, it is the only place these can go.
+
+**Posting a comment** — `POST /repos/{o}/{r}/pulls/{n}/comments` with `body`,
+`commit_id`, `path`, `line`, `side` (`RIGHT`/`LEFT`), plus `start_line`/`start_side`
+for a multi-line comment and `subject_type: file` for a file-level one. It posts
+immediately and notifies; GitHub wraps it in an auto-created `COMMENTED` review. The
+GHES 3.17 docs list the identical parameter set, so nothing here is dotcom-only.
+`commit_id` must be the head SHA the line belongs to — that is `headRefOid`, which is
+what the worktree is checked out at.
+
+**Replying** — `POST /repos/{o}/{r}/pulls/{n}/comments/{comment_id}/replies` with only
+`body`, where `comment_id` is the `fullDatabaseId` of the thread's first comment.
+
+**Resolving** — `resolveReviewThread(threadId)` / `unresolveReviewThread(threadId)`,
+both GraphQL, both taking the thread node id straight from the read. The optional
+`resolutionReason` (`ADDRESSED / WONT_FIX / INVALID`) is recent; the plugin should not
+send it, since GHES may not know the field. Reply-and-resolve is two calls (REST then
+GraphQL) and is not atomic: if the resolve fails, the reply is already public, so that
+case must be reported rather than retried.
+
+**Verdict** — `POST /repos/{o}/{r}/pulls/{n}/reviews` with `event` of `APPROVE`,
+`REQUEST_CHANGES` or `COMMENT` and an optional `body`, and **no** `comments` array.
+That is precisely the requirement: a review carrying only the verdict. Omitting
+`event` creates a PENDING review instead — it must never be omitted. Approving your
+own PR is a 422, so the verdict command needs that error path.
+
+**Enterprise** — `gh api --hostname <host>` and `gh auth token --hostname <host>` both
+exist, and `GH_HOST` / `GH_ENTERPRISE_TOKEN` are honoured. The host comes from the
+remote URL, so the plugin never asks for it. All of the above exists on GHES 3.17.
+
+**Rate limits** — 5000 REST requests/hr and 5000 GraphQL points/hr (primary), and
+secondary limits of 80 content-creating requests per minute, 500 per hour, 100
+concurrent. Posting one comment at a time is nowhere near these; the client only needs
+to surface the 403 secondary-limit error with its retry-after rather than silently
+retrying.
+
+**The diff does not come from GitHub.** `/pulls/{n}/files` paginates, truncates large
+patches and stops at 3000 files. Since the PR is checked out into a worktree anyway,
+the diff is computed locally with git against the merge-base — which is the same thing
+GitHub's PR view shows. The API is used only for head/base SHAs, the file list with
+`viewerViewedState`, and threads.
+
+**Why the worktree decision pays off twice.** A thread's `line` is a line number in the
+file at the PR head (for `RIGHT`) or in the base file (for `LEFT`) — not a diff
+position. With the worktree checked out at `headRefOid`, `RIGHT` thread lines map 1:1
+onto buffer lines with no position arithmetic at all. The legacy `position` /
+`original_position` fields can be ignored entirely.
+
+**Next step:** `research: structural diff with treesitter`.
