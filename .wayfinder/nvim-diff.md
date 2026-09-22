@@ -13,6 +13,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
 - A commented line shows a collapsed one-line summary as a virtual line under it (author, first line, reply count, resolved state). A keymap expands that in place into multiple virtual lines showing the full thread with all replies — expanded inline, never in a floating window.
+- Large files are deferred by a line-count threshold: a file over the limit shows in the panel with its stats and loads only when asked for, and structural diff falls back to plain line diff above a size limit. No configurable exclude globs — the threshold alone decides.
 - A separate explicit command submits the review verdict — Approve / Request changes / Comment plus an optional summary body — posted as a review with no inline comments attached, since those went up already. It is never triggered automatically.
 - The plugin keeps no local state. Reopening a PR refetches viewed marks and threads from GitHub, which is the only source of truth; nothing about cursor position, layout or expanded threads is remembered across sessions.
 - Merge conflicts are resolved in a three-way layout — ours / base / theirs panes plus an editable result buffer — with keymaps to take ours, base, theirs or both per conflict and jump between conflicts. The base pane is required: it is what shows who actually changed the logic.
@@ -30,6 +31,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 ## Out of scope
 
+- Configurable exclude patterns (`*.lock`, `dist/**`, `*.min.js`) for collapsing generated files — the size threshold covers it, and globs are config to maintain.
 - Any local persistence of review progress — no state directory, no cache, no session restore. GitHub holds the state; the plugin refetches.
 
 ## Open questions
