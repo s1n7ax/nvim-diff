@@ -12,6 +12,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 ## Requirements
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
+- Inline comments post to GitHub immediately, one at a time, as standalone comments — not queued into a pending review batch.
 - Marking a file viewed is an explicit keypress that also jumps to the next unviewed file, and it pushes the viewed state to GitHub. The file panel shows viewed/unviewed/re-changed state and a `3/7 viewed` counter; when GitHub un-views a file because new commits touched it, the panel reflects that rather than fighting it.
 - Opening a PR always checks out the PR branch, so the PR's code is on disk: LSP, go-to-definition, running tests and debugging all work against it.
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified. Comment threads open in a floating window in side-by-side mode.
@@ -26,6 +27,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
+- Since comments post immediately and carry no review verdict, does the plugin still need to Approve / Request changes / submit a review separately?
 - What happens when you open a PR with a dirty working tree — auto-stash, refuse, or use a separate worktree. Follows directly from "always checkout".
 - How you return to what you were doing after a review ends.
 - How PR review state (viewed marks, draft comments) survives Neovim restarts.
