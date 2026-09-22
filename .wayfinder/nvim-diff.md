@@ -12,6 +12,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 ## Requirements
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
+- Marking a file viewed is an explicit keypress that also jumps to the next unviewed file, and it pushes the viewed state to GitHub. The file panel shows viewed/unviewed/re-changed state and a `3/7 viewed` counter; when GitHub un-views a file because new commits touched it, the panel reflects that rather than fighting it.
 - Opening a PR always checks out the PR branch, so the PR's code is on disk: LSP, go-to-definition, running tests and debugging all work against it.
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified. Comment threads open in a floating window in side-by-side mode.
 - Structural (treesitter) diff is the default view: only changed syntax nodes light up, and a pure reformat reads as "formatting only — no semantic change". A keymap toggles back to raw line diff, and languages with no parser fall back to line diff automatically.
