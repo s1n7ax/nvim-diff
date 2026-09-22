@@ -12,6 +12,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 ## Requirements
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
+- Opening a PR always checks out the PR branch, so the PR's code is on disk: LSP, go-to-definition, running tests and debugging all work against it.
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified. Comment threads open in a floating window in side-by-side mode.
 - Structural (treesitter) diff is the default view: only changed syntax nodes light up, and a pure reformat reads as "formatting only — no semantic change". A keymap toggles back to raw line diff, and languages with no parser fall back to line diff automatically.
 - Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
@@ -24,6 +25,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
+- What happens when you open a PR with a dirty working tree — auto-stash, refuse, or use a separate worktree. Follows directly from "always checkout".
+- How you return to what you were doing after a review ends.
 - How PR review state (viewed marks, draft comments) survives Neovim restarts.
 - Whether structural diff must work for every language or degrade gracefully.
 - What happens when the plugin is used in a repo whose remote is not GitHub.
