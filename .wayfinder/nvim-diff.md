@@ -12,6 +12,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 ## Requirements
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
+- Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified. Comment threads open in a floating window in side-by-side mode.
 - Structural (treesitter) diff is the default view: only changed syntax nodes light up, and a pure reformat reads as "formatting only — no semantic change". A keymap toggles back to raw line diff, and languages with no parser fall back to line diff automatically.
 - Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
 
@@ -23,7 +24,6 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
-- Side-by-side vs unified panes: the accepted context-separator mock was drawn unified; still needs its own question.
 - How PR review state (viewed marks, draft comments) survives Neovim restarts.
 - Whether structural diff must work for every language or degrade gracefully.
 - What happens when the plugin is used in a repo whose remote is not GitHub.
