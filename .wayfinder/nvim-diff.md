@@ -13,6 +13,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
 - A commented line shows a collapsed one-line summary as a virtual line under it (author, first line, reply count, resolved state). A keymap expands that in place into multiple virtual lines showing the full thread with all replies — expanded inline, never in a floating window.
+- File history covers three things: a commit panel for a file, folder or the whole repo with per-commit diff against its parent; marking two commits to diff the range between them; and history of just the line under the cursor (`git log -L`). Renames are followed by default for single files, with a marker in the panel where the trail crossed one.
 - Diffing two branches defaults to merge-base (`main...feature`), so a branch diff shows the same thing a GitHub PR would. A keymap flips to the literal tip-to-tip comparison (`main..feature`) for checking what a rebase will bring in.
 - Resolving a thread has two keys: one resolves straight away, one takes a reply first and then resolves. Either way the thread stays on screen dimmed with a ✓, and can be unresolved.
 - Outdated threads and file-level comments have no line to anchor to, so they live in a side list.
@@ -32,6 +33,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
+- `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async/cancellable run.
 - How you write a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer.
 - Since comments post immediately and carry no review verdict, does the plugin still need to Approve / Request changes / submit a review separately?
 - What happens when you open a PR with a dirty working tree — auto-stash, refuse, or use a separate worktree. Follows directly from "always checkout".
