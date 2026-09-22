@@ -24,7 +24,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Resolved threads are dimmed or hidden by default so a busy PR stays readable.
 - Inline comments post to GitHub immediately, one at a time, as standalone comments — not queued into a pending review batch.
 - Marking a file viewed is an explicit keypress that also jumps to the next unviewed file, and it pushes the viewed state to GitHub. The file panel shows viewed/unviewed/re-changed state and a `3/7 viewed` counter; when GitHub un-views a file because new commits touched it, the panel reflects that rather than fighting it.
-- Opening a PR always checks out the PR branch, so the PR's code is on disk: LSP, go-to-definition, running tests and debugging all work against it.
+- Opening a PR always checks it out to disk so LSP, go-to-definition, running tests and debugging all work against the PR's code — but into a separate git worktree (`.git/nvim-diff/pr-<n>`), never the main working tree. Your branch and uncommitted changes are never touched, and ending the review removes the worktree.
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified.
 - Structural (treesitter) diff is the default view: only changed syntax nodes light up, and a pure reformat reads as "formatting only — no semantic change". A keymap toggles back to raw line diff, and languages with no parser fall back to line diff automatically.
 - Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
@@ -40,8 +40,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async/cancellable run.
 - How you write a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer.
-- What happens when you open a PR with a dirty working tree — auto-stash, refuse, or use a separate worktree. Follows directly from "always checkout".
-- How you return to what you were doing after a review ends.
+- Whether the LSP indexing both the main tree and the PR worktree causes problems in practice.
 - Whether structural diff must work for every language or degrade gracefully.
 - What happens when the plugin is used in a repo whose remote is not GitHub.
 
