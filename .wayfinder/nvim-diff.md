@@ -56,6 +56,14 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Whether staging hunks belongs here at all, given diffview is being replaced but gitsigns already does it.
 - Nothing is refetched while a review is open, so another reviewer's new comment stays invisible until the PR is reopened — probably a manual refresh keymap rather than polling.
 - Whether to feature-detect GHES capabilities by introspecting the schema at startup, or just let the API error surface.
+- Should a file with many expanded threads **auto-switch to unified layout** when the mirrored padding gets large, or stay side-by-side however ugly it looks? Alignment holds either way; this is taste.
+- Can new inline comments be posted on the **LEFT** pane at all, or is commenting right-side-only? Supporting LEFT roughly doubles the anchoring and padding cases.
+- When the PR worktree cannot be created — fork not fetched, disk full, stale lock — should the review refuse to open, or open read-only from `git show` blobs with no LSP?
+- Confirm **MIT** as nvim-diff's licence. If any diffview code is to be reused directly, the project must be GPL-3.0-or-later and that has to be decided now, not later.
+- How `virt_lines` interact with `foldmethod=diff` fold boundaries, whether `virt_lines_above` anchors the context separator better, and whether a native diff filler region can hold virtual lines at all. (Research, not a requirement — belongs to the rendering-primitives step.)
+- Whether `nvim_win_set_hl_ns` or `winhl` survives a colorscheme reload better and composes correctly with treesitter highlight priorities.
+- The real cost of `git worktree add` on a large repo, and whether `--no-checkout` plus a sparse checkout is worth it for big PRs.
+- Whether Neovim 0.12's `vim.async` covers cancellation, join, chain and protected await, or whether a thin shim is needed.
 
 ## Map
 
@@ -63,7 +71,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] research: GitHub API surface for PR review — [result](#result-research-github-api-surface-for-pr-review)
 - [x] research: structural diff with treesitter — [result](#result-research-structural-diff-with-treesitter)
 - [ ] research: Neovim rendering primitives for diff display
-- [ ] research: prior art — diffview.nvim and octo.nvim architecture
+- [x] research: prior art — diffview.nvim and octo.nvim architecture — [result](#result-research-prior-art--diffviewnvim-and-octonvim-architecture)
 - [ ] prototype: the visual language (highlight groups, separator row, structural output)
 - [ ] implement: plugin skeleton, config, health check, test harness
 - [ ] implement: git layer — revs, merge-base, file lists, blobs, worktrees
@@ -105,6 +113,28 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - A changed token highlights its whole enclosing named node, not the character delta inside it — this is what difftastic does and it is what makes a diff scannable.
 - Comment text is compared with whitespace normalised, so rewrapping a comment is a formatting change, while editing its words is a real one.
 
+- nvim-diff is **MIT-licensed, and no code is copied from diffview.nvim** — diffview is GPL-3.0-or-later and copying would force nvim-diff to GPL. It is read for ideas only. Code may be lifted verbatim from octo.nvim / gh.nvim / gitlab.nvim (all MIT) provided the notice ships in `LICENSES/`.
+- The diff is rendered with Neovim's **native diff mode** — `vim.wo[win].diff`, `scrollbind`, `cursorbind`, `foldmethod=diff` set per window — not a hand-rolled renderer. `:diffthis` is never called. (Subject to the structural-diff collision in contradiction 1 of the prior-art result.)
+- No VCS adapter abstraction. There is a `git/` module; Mercurial support is out of scope permanently. That abstraction is ~3900 lines of diffview.
+- No bespoke async framework and no FFI. `vim.system` plus Neovim 0.12 coroutines. diffview's `async.lua` reads C globals through FFI to skip a `vim.schedule` round-trip — a maintenance liability we do not inherit.
+- Left and right panes get differentiated diff colours by default, via per-window highlight namespaces remapping `DiffChange`/`DiffText`/`DiffAdd`/`DiffDelete` per side. diffview has this as `enhanced_diff_hl`, off by default; ours is on.
+- Every file's rev tuple is `{a,b,c,d}` = old/ours, new/local, theirs, base, and every layout maps the same four symbols, so one entry model serves 2-, 3- and 4-pane layouts.
+- Diff buffers are named `nvim-diff://<gitdir>/<rev>/<path>` and the name is set **before** content is fetched, so concurrent requests for one blob dedupe on the name.
+- Diff buffers for non-local revisions are capped by an LRU and evicted. Only working-tree buffers are exempt. diffview's unbounded accumulation is its #613 memory leak (48 GB reported).
+- Historical-blob buffers are `buftype = "nofile"` to keep LSP servers off them; only the PR worktree's real files get LSP.
+- Diff windows set `cursorlineopt = "number"` — `cursorline` overrides diff highlighting (neovim/neovim#9800).
+- Every git invocation carries `--no-optional-locks` and `-c core.quotePath=false`, plus `-c gc.auto=0` for log. diffview omits the first and it causes measurable lock contention (its #535, ~1 s to stage a file).
+- The file panel is subject to the same size threshold as file content: above it, a summary rather than the full tree.
+- The conflict parser returns regions, the region under the cursor, and the cursor's region index in a single tolerant pass; a repeated marker flushes a partial region rather than erroring.
+- File history streams: one `git log` with NUL record separators, records through an async stream, panel re-rendered on a 15 fps throttle, cancellable by a signal. Malformed records are retried per-commit twice, then skipped with a warning.
+- Refreshing a file list morphs the existing list via an edit script keyed on `(path, oldpath)` rather than rebuilding, so buffers for unchanged entries survive.
+- GraphQL is sent with `-F`/`-f` variables only; query text is never built with `string.format`. Every GraphQL call carries `X-Github-Next-Global-ID: 1`.
+- The `gh` subprocess gets an explicit environment allow-list, not Neovim's inherited environment.
+- Two internal events exist from the skeleton step — `diff_buf_ready(bufnr, ctx)` and `view_opened`/`view_closed`, each fired with the relevant buffer and window current. A public user-facing hook table is deferred.
+- Marking a file viewed is one action that posts to GitHub and jumps to the next unviewed file. octo has these as two separate actions.
+- `diff/hunk.lua` owns `commentable_ranges(side)`, derived from our local line hunks, and the comment keymap is gated on it. Structural diff never changes commentable ranges.
+- `git/worktree.lua` prunes orphaned `.git/nvim-diff/pr-*` worktrees at startup, and the health check reports them.
+
 ## Results
 
 ### result: grill: requirements sweep
@@ -142,7 +172,7 @@ whole job.
   reply structure). REST `/pulls/{n}/comments` returns a flat comment list with no
   viewed state and no resolved flag; threads would have to be rebuilt from
   `in_reply_to_id`.
-- Only REST posts a comment *immediately*. The GraphQL `addPullRequestReviewThread`
+- Only REST posts a comment _immediately_. The GraphQL `addPullRequestReviewThread`
   mutation is described by the schema itself as "Adds a new thread to a **pending**
   Pull Request Review" — the batching model the user ruled out.
 - The two id spaces bridge cleanly: a REST comment's `node_id` is the GraphQL `id`,
@@ -237,7 +267,7 @@ not affordable in Lua. Three cheap steps get the same output:
    that up. `descendant_for_range` → `while not n:named() do n = n:parent() end` gives
    it; `n:parent()` widens one step if a coarser highlight reads better.
 
-Verified against difftastic on a file reformatted *and* edited — `opts or {}` split
+Verified against difftastic on a file reformatted _and_ edited — `opts or {}` split
 across lines, a call exploded into four lines, plus `"DiffAdd"` → `"DiffAdded"`.
 `git diff` calls it **8 insertions, 3 deletions**. Both difftastic and the prototype
 report **exactly one change**: the string literal. The whole reformat is silent. That
@@ -247,11 +277,11 @@ is the requirement, reproduced.
 A hand-written LCS is fine when the edit is small — prefix/suffix trimming collapses
 the DP to nothing — but it dies the moment a file changes at both ends:
 
-| token diff of 12,226 vs 12,234 tokens (81 KB Lua) | time |
-| --- | --- |
-| pure-Lua LCS, edits at both ends | **2,854 ms** (150M DP cells) |
-| `vim.text.diff`, `algorithm = "myers"` | 1.43 ms |
-| `vim.text.diff`, `algorithm = "histogram"` | **0.58 ms** |
+| token diff of 12,226 vs 12,234 tokens (81 KB Lua) | time                         |
+| ------------------------------------------------- | ---------------------------- |
+| pure-Lua LCS, edits at both ends                  | **2,854 ms** (150M DP cells) |
+| `vim.text.diff`, `algorithm = "myers"`            | 1.43 ms                      |
+| `vim.text.diff`, `algorithm = "histogram"`        | **0.58 ms**                  |
 
 `vim.text.diff` is Neovim's built-in xdiff in C. It takes two strings and with
 `result_type = "indices"` returns `{start_a, count_a, start_b, count_b}` hunks. Feed it
@@ -261,11 +291,11 @@ costs 6.3 ms for 12K tokens. A 5000× speedup for about fifteen lines of code.
 
 **Cost, measured** (parse + flatten, per side, Lua):
 
-| size | lines | tokens | time |
-| --- | --- | --- | --- |
-| 79 KB | 2,367 | 12,226 | 34 ms |
-| 317 KB | 9,471 | 48,904 | 133 ms |
-| 950 KB | 28,415 | 146,712 | 493 ms |
+| size   | lines  | tokens  | time     |
+| ------ | ------ | ------- | -------- |
+| 79 KB  | 2,367  | 12,226  | 34 ms    |
+| 317 KB | 9,471  | 48,904  | 133 ms   |
+| 950 KB | 28,415 | 146,712 | 493 ms   |
 | 3.1 MB | 94,719 | 489,040 | 1,864 ms |
 
 Linear, ~14 µs per 100 lines. Both sides plus the diff on the 79 KB file is **~77 ms**
@@ -281,15 +311,15 @@ of the 81 KB file — zero changed tokens, 34 ms.
 
 **Falling back to line diff.** Three separate triggers, all cheap to test:
 
-- *No parser.* `vim.filetype.match({ filename = path })` → `vim.treesitter.language.get_lang(ft)`
+- _No parser._ `vim.filetype.match({ filename = path })` → `vim.treesitter.language.get_lang(ft)`
   → probe. **`vim.treesitter.language.add(lang)` is not a valid probe** — in 0.12.4 it
   returned `true` for `zig`, `haskell` and `totally_fake_lang`. Use
   `pcall(vim.treesitter.get_string_parser, "", lang)`, which fails correctly with
   `No parser for language "…"`. For a blob with no usable extension,
   `vim.filetype.match({ contents = …, filename = "blob" })` resolves a shebang.
-- *Syntax errors.* `root:has_error()`. A file holding conflict markers parses to 5
+- _Syntax errors._ `root:has_error()`. A file holding conflict markers parses to 5
   ERROR/missing nodes — its token stream is garbage, so line diff is the honest answer.
-- *Size.* Above roughly **5,000 lines per side**, where both parses cross ~100 ms.
+- _Size._ Above roughly **5,000 lines per side**, where both parses cross ~100 ms.
 
 **Injections are the one real complication.** `parser:parse(true)` plus
 `for_each_tree` returns a tree per embedded language with its row range — a markdown
@@ -312,3 +342,295 @@ user's Neovim parsers (so "no parser → line diff" would disagree with what the
 highlights), and it cannot reuse the tree Neovim already has for an open buffer.
 
 **Next step:** `research: Neovim rendering primitives for diff display`.
+
+### result: research: prior art — diffview.nvim and octo.nvim architecture
+
+Read the actual source of both, plus three secondary plugins. Commits read:
+
+| repo | commit | date | license |
+| --- | --- | --- | --- |
+| `sindrets/diffview.nvim` | `4516612fe98ff56ae0415a259ff6361a89419b0a` | 2024-06-13 | **GPL-3.0-or-later** |
+| `pwntester/octo.nvim` | `af2411604b51cb4a0f3e2de50b1b7cacc2581c48` | 2026-08-28 | MIT |
+| `NeogitOrg/neogit` | `5adc81b26232954cd7a90f158aa7844c18fc3165` | — | MIT |
+| `ldelossa/gh.nvim` | `6f367b2ab8f9d4a0a23df2b703a3f91137618387` | — | MIT |
+| `harrisoncramer/gitlab.nvim` | `3ece95dbcf9b2e21fabd5b88b64e3639e02d5402` | — | MIT |
+
+File references below are `path:line` within the commit named above.
+
+#### The finding that reframes the project
+
+**diffview does not compute or render the diff. Neovim's native diff mode does all of
+it.** `:diffthis` is never called anywhere in the codebase; diff mode is a *window
+option* set through a winopts table — `diff = true, scrollbind = true, cursorbind =
+true, foldmethod = "diff", foldlevel = 0` (`vcs/file.lua:83-98`, applied at
+`scene/window.lua:274`). Filler lines, intra-line `DiffText`, and context folding are
+all xdiff inside Neovim. diffview supplies two buffers and gets the rest free. Its own
+Myers implementation (`diff.lua`) is used for exactly one thing: morphing the old file
+list into the new one on refresh (`diff_view.lua:386`). Never for content.
+
+octo does the same, and inherits diffview's scroll-sync trick verbatim — find the
+window with the most lines, `nvim_win_call` it, press `<c-e><c-y>` (a scroll down then
+up), because `:syncbind` is unreliable (`diffview scene/layout.lua:281`, `octo
+reviews/file-entry.lua:366`).
+
+That is the single biggest saving available to this project, and it is also the source
+of the biggest risk — see the contradiction section below.
+
+#### diffview: the data model worth copying
+
+Five nested classes:
+
+```
+View (scene/view.lua:31)                     owns a tabpage
+ └ StandardView                              view + one Panel + a current Layout
+    ├ DiffView (scene/views/diff/diff_view.lua:49)
+    └ FileHistoryView
+FileEntry (scene/file_entry.lua:45)          ONE FILE across revs: path, oldpath,
+                                             RevMap{a,b,c,d}, status, stats, a Layout
+ └ Layout (scene/layout.lua:19)              N Windows; Diff1/Diff2Hor/Diff3Mixed/Diff4Mixed
+    └ Window (scene/window.lua:27)           winid + a vcs.File; owns winopt save/restore
+       └ vcs.File (vcs/file.lua:47)          a bufnr for (path, rev)
+```
+
+The abstraction doing the most work is **`FileEntry` = file × revision-tuple ×
+layout**, with the symbol scheme `a` = old/ours, `b` = new/local (always the "main"
+window), `c` = theirs, `d` = base. Every layout maps the same four symbols, so one
+entry model serves 2-, 3- and 4-pane layouts; switching files keeps the windows and
+swaps only the bound file (`layouts/diff_2.lua:46`); switching layout reuses existing
+buffers where symbols match (`file_entry.lua:108`); and one predicate `should_null(rev,
+status, sym)` (`diff_2.lua:66`) decides which panes get the shared null buffer.
+
+Buffer identity is the buffer *name*: `diffview://<gitdir>/<context>/<path>`, and it is
+set **before** the async `git show` returns (`vcs/file.lua:239-251`) so two requests for
+the same blob cannot both create a buffer. Local files reuse the user's real buffer
+(`file.lua:157`), which is what makes the working-tree side editable.
+
+The file panel is a **declarative component tree**, not string building
+(`renderer.lua:43-528`): components carry a `context` (the `FileEntry` or `DirData`),
+`process_component` assigns each one its line range, `get_comp_on_line` does hit-testing
+so every panel action is "find the component under the cursor", and
+`create_cursor_constraint` clamps `j`/`k` to skip headers and blank lines. The tree also
+does directory flattening — a chain of single-child dirs collapses to one `a/b/c` row
+(`file_tree.lua:117-130`).
+
+The git layer: `RevType = LOCAL | COMMIT | STAGE | CUSTOM`, empty-tree SHA
+`4b825dc642cb6eb9a060e54bf8d69288fbee4904` as the left side of an added file
+(`git/rev.lua:11`). `main...feature` is resolved **eagerly to two SHAs** by
+`symmetric_diff_revs` (`git/init.lua:1334`) — `git merge-base` for the left, `rev-parse`
+for the right. `imply_local` (`git/init.lua:1464`) swaps a side to `LOCAL` when its SHA
+equals HEAD, so you diff the live working tree and the buffer stays editable. Binary
+detection is a trick worth stealing: `git grep -I --name-only -e . <rev> -- <path>`,
+where `-I` skips binaries so a non-zero exit means binary-or-missing
+(`git/init.lua:1908`).
+
+File history is a streaming pipeline and the most sophisticated thing in the plugin: one
+`git log` with a **NUL byte as record separator on its own line** (`git/init.lua:573`),
+records pushed through an async stream, the worker yielding to the scheduler every 1/15 s
+(`git/init.lua:903-916`), the panel re-rendered on a 15 fps throttle
+(`file_history_panel.lua:214`), cancellable by a `Signal`. It validates each record
+(`#namestat == #numstat`) and, because git omits stat data for some large commits and
+merges, re-runs `git show` for that one SHA up to twice before warning and skipping
+(`git/init.lua:938-982`). `--follow` is added only for single files
+(`git/init.lua:389`), and **there is no marker in the panel where the trail crossed a
+rename** — one of our requirements that diffview does not meet.
+
+Merge conflicts: layout `Diff4Mixed` is OURS | BASE | THEIRS on top, editable result
+below, labelled via `winbar` (`scene/file_entry.lua:180`). "Theirs" is found by probing
+`.git/` for `MERGE_HEAD`, `REBASE_HEAD`, `REVERT_HEAD`, `CHERRY_PICK_HEAD` in that order
+(`git/init.lua:297`). `parse_conflicts` (`vcs/utils.lua:484-604`) is a single tolerant
+forward pass that returns three things at once — all regions, the region under the
+cursor, and the cursor's region index (0 before the first, `#+1` after the last, which
+is what makes next/prev wrap correctly). It handles a missing base, a missing `=======`,
+and **flushes a partial region when a marker repeats** instead of throwing. Applying a
+choice is a plain buffer splice; "resolve all" loops regions maintaining a running line
+offset (`actions.lua:348-390`).
+
+#### octo: the comment-thread design we are not using, and why
+
+**octo does not use virtual lines. It steals one of your two diff panes.**
+`show_review_threads` (`reviews/thread-panel.lua:9`) is driven by a broad `CursorHold`
+autocmd; it collects threads matching the cursor line and side, grabs **the opposite
+window** (`file-entry.lua:177`), swaps a rendered markdown buffer into it, and calls
+`vim.cmd [[diffoff!]]` (`thread-panel.lua:84`). Moving off the line puts the buffer back
+and re-enables diff mode, saving and restoring the cursor around it because the
+scroll-sync nudge moves it.
+
+The costs are visible in their tracker: you lose half the diff while reading a comment
+(**#715** asks for our design), diff mode is torn down and rebuilt on every cursor move
+(**#1518**), and nothing is expandable in place. In the diff buffer itself octo places
+only signs plus one right-aligned `virt_text` summary per thread
+(`reviews/file-entry.lua:483-491`).
+
+**No plugin in this set uses `virt_lines` for review threads.** `grep -rn virt_lines`
+returns zero hits in octo, gh.nvim, gitlab.nvim and diffview. Our expand-in-place design
+is unexplored territory in this ecosystem.
+
+Threads anchor by `(diffSide, path, startLine..line)` as plain integers, re-derived on
+every render, never extmark-tracked — which works only because diff buffers are
+`modifiable = false`. `strict = false` is passed on every thread extmark
+(`file-entry.lua:489`) because the anchor line may not exist in the current commit.
+**Outdated threads are dropped entirely** (`reviews/init.lua:318-320`), and open issue
+**#877** asks for them back — direct validation of our side-list requirement.
+
+octo's GitHub layer is `gh` CLI via `plenary.job`, same choice as ours. Three details
+worth lifting: an explicit **environment allow-list** for the subprocess
+(`gh/init.lua:23-39`) rather than inheriting Neovim's env; hostname resolution as
+explicit option → config → git remote, with `--hostname` appended only when it is not
+`github.com` (`gh/init.lua:214-232`); and **`X-Github-Next-Global-ID: 1`** on every
+GraphQL call (`gh/init.lua:220`), which opts into the new node-ID format — without it
+you get legacy ids that are being phased out, and our design bridges ids constantly.
+
+What to avoid there: octo builds some mutations by `string.format` **into the query
+text** — `resolveReviewThread(input: {threadId: "%s"})` (`mutations.lua:31`),
+`submitPullRequestReview(… body: """%s""")` (`mutations.lua:168`) — defended only by an
+`escape_char` that escapes backslashes (`utils.lua:1091`). A review body containing `"""`
+breaks the query. Newer code passes `-F key=value`; only that path is safe.
+
+octo's review model is the server-side **pending review**: `Review:start` creates a
+PENDING review via `addPullRequestReview` and everything hangs off its id
+(`reviews/init.lua:86`). Commenting is refused outright without one
+(`reviews/init.lua:546-550`). That single decision produces **#570** (double-posting),
+**#823** (cannot reply while a review is in progress) and **#1409** (cannot add inline
+comments during a review). Our immediate-posting requirement removes all of it.
+
+#### Secondary prior art
+
+- **neogit has no merge-conflict UI of its own** — it prompts with `vim.fn.confirm` and
+  delegates resolution to diffview or codediff.nvim. diffview's 3/4-way merge tool is
+  the ecosystem's only real answer.
+- **gitlab.nvim uses diffview as its diff engine** (`DiffviewOpen --imply-local`) and
+  anchors discussions as **`vim.diagnostic` entries** in the diff buffer, with bodies in
+  a separate panel. That buys `]d` navigation and a loclist for free. It fights our
+  "expand in place, no floats" requirement, but diagnostic-namespace-as-anchor is worth
+  remembering if extmark bookkeeping gets hairy.
+
+#### Licensing — this constrains every implement step
+
+**diffview.nvim is GPL-3.0-or-later.** Copying any non-trivial amount of its Lua would
+make nvim-diff GPL-3.0-or-later, which is an adoption barrier for a Neovim plugin and
+cannot be undone later without the author's consent. The rule is therefore: **read
+diffview for ideas, write everything from scratch.** Architectures, algorithms, the
+`a/b/c/d` symbol scheme, "use native diff mode", the shape of the conflict parser's
+state machine — all fine, ideas are not copyrightable. Verbatim or lightly-edited
+functions, its type annotations, its config-table shape — not fine. Short factual
+constants (the empty-tree SHA, the four conflict-marker patterns, git flag sets) are
+fine.
+
+Note the precedent in the other direction: octo.nvim (MIT) heads two files with "Heavily
+derived from `diffview.nvim`" (`reviews/file-entry.lua:1-2`, `reviews/layout.lua:1-2`),
+and those files are structurally very close to diffview's. **That is a licence conflict
+in octo, not permission for us.**
+
+octo, neogit, gh.nvim and gitlab.nvim are MIT, so verbatim reuse is allowed provided the
+notice ships with it in `LICENSES/`. Shortlist actually worth lifting rather than
+rewriting: the `gh` env allow-list, the `--paginate` slurp shim (`gh/init.lua:170`), and
+the patch-hunk parser (`utils.lua:1572`).
+
+#### Gaps — what the Destination needs that neither plugin does
+
+| Gap | Would their architecture accommodate it? |
+| --- | --- |
+| Structural / treesitter diff | **Fights it hard.** Both delegate 100% to native diff mode, which bundles hunks + fillers + folds and cannot be handed a precomputed alignment. See contradiction 1. |
+| Context folding with an expandable separator row | Half. `update_patch_folds` (`scene/file_entry.lua:214-269`) merges unchanged regions into manual folds, but only in `-L` mode, with a plain `foldtext` and no expand action. "Expand 10 more" means mutating fold ranges **symmetrically in both panes** or alignment breaks. |
+| No-local-state review | Ours is strictly simpler. Nothing to port. |
+| Worktree checkout | **Nobody does this.** octo runs `gh pr checkout` in the user's working tree after a confirm prompt (`utils.lua:683`). Entirely new ground — and the cleanest part of our design, since at `headRefOid` a RIGHT-side thread line maps 1:1 to a buffer line. |
+| Immediate standalone comment posting | Nobody. Simplifies everything except commentable ranges — see contradiction 2. |
+| Expand-in-place virtual-line threads | Nobody, in any of the five. New ground with a measured obstacle — see contradiction 3. |
+| Rename marker in the history panel | Trivial on top of data diffview already tracks (`oldpath`). |
+| One key that marks viewed *and* jumps | octo has the two halves as separate actions; collapsing them is trivial. |
+
+#### Proposed module decomposition
+
+Feeds `implement: plugin skeleton`. Dependencies point downward only; nothing in `git/`,
+`diff/` or `github/` knows about windows.
+
+```
+lua/nvim-diff/
+  init.lua      setup(), public API, lazy module accessors
+  config.lua    defaults, validation, keymap tables, size thresholds
+  health.lua    git version, gh presence + auth, treesitter parsers
+  command.lua   :NvimDiff* commands, arg parsing, completion
+
+  core/     job (vim.system wrapper), event (tiny emitter), log (+ PerfTimer), path
+  git/      repo, rev, revparse (merge-base / tip-to-tip / imply_local), files,
+            blob, log (streaming NUL-delimited + -L), conflict, worktree
+  diff/     hunk (+ commentable_ranges), line (vim.text.diff), structural
+            (treesitter token stream), entry (FileDiff)
+  ui/       hl (per-window namespaces), render (component tree + hit-test),
+            panel, tree (path tree + flattening + status rollup)
+  scene/    window, buffer (naming + LRU eviction), layout (validate/recover/
+            sync_scroll), layouts, entry (FileEntry), view
+  render/   sidebyside (native diff mode, mirrored padding, scroll sync),
+            unified, fold (separator row, expand 10, expand all, symmetric)
+  views/    diff, history, conflict, review
+  github/   gh (exec, hostname, env allow-list, headers), query (variables only),
+            read (GraphQL), write (REST post/reply + GraphQL resolve/viewed)
+  review/   session (in-memory, no persistence), thread, threadview
+            (collapsed summary + expanded virt_lines + mirrored padding),
+            sidelist, viewed
+```
+
+Build order matching the map: `core` + `config` + `health` → `git/repo,rev,revparse,blob`
+→ `diff/line,hunk,entry` → `scene` + `render/sidebyside` → `render/fold` →
+`render/unified` → `ui/tree` + panel → `views/diff` → `diff/structural` → `git/log` +
+`views/history` → `git/conflict` + `views/conflict` → `github/*` → `git/worktree` +
+`review/*` → `views/review`.
+
+#### ⚠️ Contradictions with the map
+
+**1. "Structural diff is the default view" collides with using native diff mode, and
+neither plugin can advise.** Native diff mode computes its own line hunks, fillers and
+folds internally; you cannot hand it a precomputed alignment. Three resolutions: (a)
+keep native diff for alignment/fillers/folding and overlay structural highlights as
+extmarks — cheapest, but line hunks stay native, so a pure reformat still shows as
+changed *lines* even when nothing is highlighted, which weakens the "formatting only"
+requirement; (b) compute everything ourselves and turn native diff off — full control,
+but we reimplement filler lines and alignment, the exact work using native diff was
+meant to avoid; (c) hybrid — native for the raw-line toggle, custom for structural. The
+map currently assumes (a) and (b) are both true. **This is the highest-risk unknown in
+the project** and must be resolved in `prototype: the visual language`, informed by
+`research: Neovim rendering primitives`.
+
+**2. Commentable line ranges must now come from our own hunks.** octo enforces
+GitHub's "inline comments only on diff lines" rule client-side, deriving ranges from the
+`patch` field of `/pulls/{n}/files` (`utils.lua:1572`) and refusing otherwise
+(`reviews/init.lua:446-449`). We ruled that endpoint out and compute the diff locally —
+correctly — but that has an unrecorded consequence: `diff/hunk.lua` must expose
+`commentable_ranges(side)` and gate the comment keymap on it, and the POST error path
+must distinguish "line not in diff" (stale base, force-push between fetch and post →
+tell the user to refetch) from other 422s. Note also that **structural diff changes
+which lines light up but must not change commentable ranges** — those always follow the
+line hunks.
+
+**3. `virt_lines` break side-by-side alignment.** Measured on Neovim 0.12.4: with two
+`diffthis` windows under `scrollbind`, two virtual lines added under line 5 of the right
+buffer only put buffer line 10 at screen row 6 on the left and 8 on the right.
+`scrollbind` equalizes toplines, not content below a virtual line. Verified fix: place
+an equal count of empty padding `virt_lines` at the same buffer line in the other pane —
+alignment is then exact. So every thread render is a **paired** operation, collapse and
+expand must update both sides atomically, threads on LEFT and RIGHT at overlapping
+positions need their padding composed rather than summed, and **the context-folding
+separator row has the same constraint** if built from virtual lines. Unified layout has
+none of this problem, which is a point in its favour for heavily-commented files.
+
+**4. "The plugin keeps no local state" vs. the PR worktree.** The worktree is state on
+disk. It is not *review* state, so the requirement stands, but the plugin now needs
+orphan cleanup: after a crash or `:qa!` the worktree survives. `git worktree list` +
+prune of stale `nvim-diff/` entries belongs in `git/worktree.lua` and in the health
+check.
+
+**5. diffview.nvim is effectively unmaintained** — last commit 2024-06-13, over two
+years ago, 106 open issues including a memory leak reaching 48 GB (#613) and a hard
+freeze on file history (#552). There is an actively-patched fork
+(`dlyongemallo/diffview.nvim`). This strengthens the Destination: the incumbent is
+abandoned, not merely imperfect.
+
+**6. `enhanced_diff_hl` already exists in diffview and is `false` by default**
+(`config.lua:41`). The mechanism our "diff colours never confused" requirement needs is
+in the incumbent — just opt-in and undiscoverable, which is why issue #595 exists. Our
+differentiator is **the default**, not the capability. Say that plainly in the README
+rather than claiming invention.
+
+**Next step:** `research: Neovim rendering primitives for diff display` — which now
+carries contradictions 1 and 3 as its two load-bearing questions. The verification
+scripts are at `…/scratchpad/vt.lua` and `vt2.lua`.
