@@ -13,6 +13,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
 - A commented line shows a collapsed one-line summary as a virtual line under it (author, first line, reply count, resolved state). A keymap expands that in place into multiple virtual lines showing the full thread with all replies — expanded inline, never in a floating window.
+- The plugin keeps no local state. Reopening a PR refetches viewed marks and threads from GitHub, which is the only source of truth; nothing about cursor position, layout or expanded threads is remembered across sessions.
 - Merge conflicts are resolved in a three-way layout — ours / base / theirs panes plus an editable result buffer — with keymaps to take ours, base, theirs or both per conflict and jump between conflicts. The base pane is required: it is what shows who actually changed the logic.
 - File history covers three things: a commit panel for a file, folder or the whole repo with per-commit diff against its parent; marking two commits to diff the range between them; and history of just the line under the cursor (`git log -L`). Renames are followed by default for single files, with a marker in the panel where the trail crossed one.
 - Diffing two branches defaults to merge-base (`main...feature`), so a branch diff shows the same thing a GitHub PR would. A keymap flips to the literal tip-to-tip comparison (`main..feature`) for checking what a rebase will bring in.
@@ -28,7 +29,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 ## Out of scope
 
-<!-- nothing ruled out yet -->
+- Any local persistence of review progress — no state directory, no cache, no session restore. GitHub holds the state; the plugin refetches.
 
 ## Open questions
 
@@ -39,7 +40,6 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Since comments post immediately and carry no review verdict, does the plugin still need to Approve / Request changes / submit a review separately?
 - What happens when you open a PR with a dirty working tree — auto-stash, refuse, or use a separate worktree. Follows directly from "always checkout".
 - How you return to what you were doing after a review ends.
-- How PR review state (viewed marks, draft comments) survives Neovim restarts.
 - Whether structural diff must work for every language or degrade gracefully.
 - What happens when the plugin is used in a repo whose remote is not GitHub.
 
