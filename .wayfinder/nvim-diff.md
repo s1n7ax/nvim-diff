@@ -12,6 +12,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 ## Requirements
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
+- Structural (treesitter) diff is the default view: only changed syntax nodes light up, and a pure reformat reads as "formatting only — no semantic change". A keymap toggles back to raw line diff, and languages with no parser fall back to line diff automatically.
 - Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
 
 ## Out of scope
@@ -36,3 +37,4 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 <!-- decisions I made, not the user -->
 
 - Map lives in this file, not a GitHub issue: the repo has no remote yet.
+- Structural diff is computed in-plugin with treesitter, not via `git config diff.external difftastic`. An external difftool returns formatted text that would have to be re-parsed to recover real line numbers, and PR inline comments need exact line mapping.
