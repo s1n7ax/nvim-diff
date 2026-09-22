@@ -13,6 +13,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - Full diffview replacement — including file history and merge conflict resolution — so diffview can be uninstalled.
 - A commented line shows a collapsed one-line summary as a virtual line under it (author, first line, reply count, resolved state). A keymap expands that in place into multiple virtual lines showing the full thread with all replies — expanded inline, never in a floating window.
+- Diffing two branches defaults to merge-base (`main...feature`), so a branch diff shows the same thing a GitHub PR would. A keymap flips to the literal tip-to-tip comparison (`main..feature`) for checking what a rebase will bring in.
 - Resolving a thread has two keys: one resolves straight away, one takes a reply first and then resolves. Either way the thread stays on screen dimmed with a ✓, and can be unresolved.
 - Outdated threads and file-level comments have no line to anchor to, so they live in a side list.
 - Resolved threads are dimmed or hidden by default so a busy PR stays readable.
