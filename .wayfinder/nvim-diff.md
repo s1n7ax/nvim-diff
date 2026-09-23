@@ -33,6 +33,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Opening a PR always checks it out to disk so LSP, go-to-definition, running tests and debugging all work against the PR's code — but into a separate git worktree (`.git/nvim-diff/pr-<n>`), never the main working tree. The user's branch and uncommitted changes are never touched, and ending the review removes the worktree.
 - Marking a file viewed is an explicit keypress that also jumps to the next unviewed file, and it pushes the viewed state to GitHub. The file panel shows viewed/unviewed/re-changed state and a `3/7 viewed` counter; when GitHub un-views a file because new commits touched it, the panel reflects that rather than fighting it.
 - A commented line shows a collapsed one-line summary as a virtual line under it (author, first line, reply count, resolved state). A keymap expands that in place into multiple virtual lines showing the full thread with all replies — expanded inline, never in a floating window.
+- The old pane stays blank opposite an expanded thread — no mirror, no dashes. Dashed filler keeps one meaning only: a line exists on the other side that is missing here.
 - Outdated threads and file-level comments have no line to anchor to, so they live in a side list.
 - Resolved threads are dimmed or hidden by default so a busy PR stays readable.
 - Inline comments post to GitHub immediately, one at a time, as standalone comments — not queued into a pending review batch.
