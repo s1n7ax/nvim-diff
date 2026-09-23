@@ -64,7 +64,6 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Should a file with many expanded threads **auto-switch to unified layout** when the mirrored padding gets large, or stay side-by-side however ugly it looks? Alignment holds either way; this is taste.
 - Can new inline comments be posted on the **LEFT** pane at all, or is commenting right-side-only? Supporting LEFT roughly doubles the anchoring and padding cases.
 - When the PR worktree cannot be created — fork not fetched, disk full, stale lock — should the review refuse to open, or open read-only from `git show` blobs with no LSP?
-- Confirm **MIT** as nvim-diff's licence. If any diffview code is to be reused directly, the project must be GPL-3.0-or-later and that has to be decided now, not later.
 - How `virt_lines` interact with `foldmethod=diff` fold boundaries, whether `virt_lines_above` anchors the context separator better, and whether a native diff filler region can hold virtual lines at all. (Research, not a requirement — belongs to the rendering-primitives step.)
 - Whether `nvim_win_set_hl_ns` or `winhl` survives a colorscheme reload better and composes correctly with treesitter highlight priorities.
 - The real cost of `git worktree add` on a large repo, and whether `--no-checkout` plus a sparse checkout is worth it for big PRs.
@@ -80,6 +79,10 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Whether treesitter's highlighter attaches cleanly to a `buftype=nofile` scratch buffer with no file on disk, and whether injections still resolve there.
 - TUI paint cost with a real terminal attached — every redraw number measured so far is a headless grid-update cost.
 
+- The `LICENSE` file says `Copyright (c) 2026 s1n7ax`. Whether that should be a legal name instead.
+- The test harness has no screen-capture facility. Whether the renderer step adds the prototype's child-nvim-in-a-terminal capture to it, or verifies layout another way.
+- Which parsers the structural-diff tests run against: the four a `--clean` Neovim has here (c, lua, markdown, vim), or the user's own runtimepath.
+
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
@@ -88,7 +91,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] research: Neovim rendering primitives for diff display — [result](#result-research-neovim-rendering-primitives-for-diff-display)
 - [x] research: prior art — diffview.nvim and octo.nvim architecture — [result](#result-research-prior-art--diffviewnvim-and-octonvim-architecture)
 - [x] prototype: the visual language (highlight groups, separator row, structural output) — [result](#result-prototype-the-visual-language)
-- [ ] implement: plugin skeleton, config, health check, test harness
+- [x] implement: plugin skeleton, config, health check, test harness — [result](#result-implement-plugin-skeleton-config-health-check-test-harness)
 - [ ] implement: git layer — revs, merge-base, file lists, blobs, worktrees
 - [ ] implement: line diff engine and the hunk data model
 - [ ] implement: side-by-side renderer with scroll sync
@@ -169,6 +172,15 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - Rendering colour cannot be verified through a terminal-buffer capture — `nvim_buf_get_extmarks` on a `:terminal` buffer returns nothing. Layout and text can. Colour work needs a UI attached.
 - `foldminlines = 0` is a rendering invariant, not a preference: at the default of 1 a one-line fold never closes, which breaks the reformat-collapse on the old side.
+
+- The test harness is **hand-written** (`tests/runner.lua` + `tests/harness.lua`, ~180 lines, `describe`/`it`/`expect`), not vendored mini.test — mini.test would be a second plugin checked into a repo with zero runtime dependencies. Specs are `tests/spec/*_spec.lua`, loaded with `loadfile` so test code stays out of `lua/`. The Makefile variable is `NVIM_BIN`, not `NVIM`: inside `:terminal`, `$NVIM` already holds a server socket path.
+- Only the modules this step needs exist. `core/job.lua` and `core/path.lua` are **not** stubbed — they belong to the git layer. `ui/hl.lua` is built now, because a `highlights` config key with nothing to override is not a real override surface. `plugin/` holds the load guard and nothing else; a `:NvimDiff` that errors is worse than no command.
+- **No `keymaps` config table yet.** Each step that adds actions adds its own keymap block, rather than twenty lhs names being invented now with nothing behind them.
+- `setup()` **raises** on bad options — every problem in one message with its full dotted path — and leaves the previously active config intact. It is **not cumulative**: each call restarts from the defaults. Validation runs against a hand-written schema, not the defaults table, so an option can be valid with no default (`github.host`). `config.get()` returns the defaults when `setup()` has never run, so no module has to order itself after setup.
+- The event bus is a **closed enum of exactly three names**; `on`/`emit` with an unknown name errors. `on()` returns an idempotent unsubscribe closure (no `off(handle)`). A throwing handler is caught with `xpcall`, logged at error level, and emission continues. `emit` iterates a snapshot, so a handler may unsubscribe itself mid-emit. `emit_in({win, buf}, name, ...)` delivers the "fired with the relevant buffer and window current" contract — callers must pass a matching pair, or `nvim_buf_call` may use the hidden autocmd window. **No `User` autocmd mirroring**, which would be the public hook surface the map defers.
+- Highlight groups as shipped: `NvimDiff{Del,Add}{Line,Token}`, `NvimDiffContextSeparator`, `NvimDiffReformatSeparator` (links to ContextSeparator, so the two differ in text today but can diverge), `NvimDiffFiller`, `NvimDiffHeader`, `NvimDiffThread{Bar,Author,Body,Meta,Resolved}`, `NvimDiffPanel{Title,Dir,Path,Insertions,Deletions,Viewed,Rechanged,Deferred}`. The separator is dark blue `#1c3a5e` on pale `#c9d8e8`. Light-background variants are invented — nothing in the map measured a light colorscheme. The namespace remap table currently holds only `Folded → NvimDiffContextSeparator`.
+- Health severities: missing `git` is an **error**; missing or unauthenticated `gh` is a **warn**, because diff, history and conflicts do not need it; zero parsers is a warn. Declared minimums are Neovim 0.12 (feature-probed via `vim.text.diff` and `&winfixbuf`) and git 2.25. `health.orphan_worktrees()` is public so `git/worktree.lua`'s startup prune uses the same matcher rather than two copies drifting.
+- `LICENSES/README.md` records the working rule: diffview is never copied; MIT projects are copied only with a file-header provenance line (project, file, commit) **and** the licence text added as `LICENSES/<project>.txt`.
 
 ## Results
 
@@ -1209,3 +1221,76 @@ it is no longer unproven.
   add-on-the-right, so the plugin ships two colour families, not three.
 
 **Next step:** `implement: plugin skeleton, config, health check, test harness`.
+
+### result: implement: plugin skeleton, config, health check, test harness
+
+Branch `feat/plugin-skeleton` (commit `8f9d812`, on top of `3ca6088`). The repo has no remote, so
+there is no PR. **Merge this branch into `main` before the next wave** — otherwise the git-layer and
+diff-engine steps branch off a tree with no skeleton in it.
+
+Verified here, not just claimed by the agent: `make test` → **57 passed, 0 failed in 1462 ms**,
+luacheck 0 warnings, stylua clean, worktree clean.
+
+**What landed**
+
+| file | what it does |
+| --- | --- |
+| `lua/nvim-diff/init.lua` | `setup()`, `is_supported()`, and an `__index` metatable so `require("nvim-diff").config` lazily resolves submodules |
+| `lua/nvim-diff/config.lua` | defaults, deep merge, spec-driven validation |
+| `lua/nvim-diff/core/event.lua` | the internal bus — `on` / `once` / `emit` / `emit_in` / `clear` / `count` |
+| `lua/nvim-diff/core/log.lua` | level-filtered `vim.notify` wrapper |
+| `lua/nvim-diff/ui/hl.lua` | the plugin's own groups, private namespace, `ColorScheme` / `background` autocmds |
+| `lua/nvim-diff/health.lua` | `:checkhealth nvim-diff`; `orphan_worktrees()` exported for the git step |
+| `plugin/nvim-diff.lua` | load guard only |
+| `tests/{runner,harness,minimal_init}.lua`, `tests/spec/*_spec.lua` | harness + 57 tests |
+| `Makefile`, `stylua.toml`, `.luacheckrc`, `.luarc.json`, `.gitignore` | tooling |
+| `LICENSE`, `LICENSES/README.md`, `README.md`, `doc/nvim-diff.txt` | MIT plus the notices convention, docs |
+| `lua/nvim-diff/{git,diff,render,scene,views,github,review}/.gitkeep` | reserved dirs; the layout is documented in README |
+
+`:checkhealth nvim-diff` was run against a real Neovim, not only unit-tested: six sections,
+correctly reporting `git 2.54.0`, `gh 2.101.0`, authenticated to github.com, `4 of 19 probed
+parsers installed`, no leftover PR worktrees. Laziness checked too — after startup
+`vim.g.loaded_nvim_diff == 1` while `package.loaded["nvim-diff"]` is still `nil`.
+
+**Running it**
+
+```
+make test            # nvim --clean --headless -l tests/runner.lua
+make test T=pattern  # filter on the full test name
+make check           # fmt-check + lint + test
+```
+
+**Config surface as shipped**
+
+```lua
+layout = "side_by_side"                  -- enum: side_by_side | unified
+diff.structural = true
+diff.algorithm = "histogram"
+diff.normalize_comment_whitespace = true
+revs.merge_base = true
+thresholds.defer_lines = 50000           -- the "parse and fetch, not rendering" threshold
+thresholds.structural_lines = 5000       -- the third structural-diff fallback trigger
+thresholds.panel_entries = 2000          -- panel shows a summary above this
+buffers.lru_size = 64
+git = { bin = "git", timeout_ms = 15000 }
+github = { bin = "gh", timeout_ms = 20000, host = <no default> }
+highlights = {}                          -- table = attrs, string = link
+log.level = "warn"
+```
+
+**Corrections and sharpenings to the map**
+
+- The rendering-primitives result's `nvim_set_hl` sample shows
+  `NvimDiffContextSeparator = { fg = "#101010", bg = "#d79921" }` — amber. It predates the prototype
+  and contradicts the steel-band requirement. The code ships dark blue `#1c3a5e` on pale `#c9d8e8`;
+  **that sample in the earlier result is stale.**
+- The treesitter probe holds on 0.13: `pcall(vim.treesitter.get_string_parser, "", lang)` returns
+  false for rust/python when absent, true for lua/c/vimdoc.
+- The toolchain is **0.13.0-nightly+873fcad**, not 0.12 as some notes say. `vim.text.diff`,
+  `vim.system`, `vim.uv`, `winfixbuf` and the new `vim.validate` signature are all present. The
+  *declared* floor stays 0.12, which is what the code actually needs.
+- `nvim -l` does not source `plugin/` for a runtimepath prepended inside the script, so nothing
+  covers `plugin/nvim-diff.lua` today (it is a guard only). Once it registers commands, its test has
+  to source it explicitly or start a child nvim.
+- A `--clean` Neovim has only **four** parsers here — c, lua, markdown, vim. No rust, python or
+  typescript. The structural-diff step has to choose between those four and the user's runtimepath.
