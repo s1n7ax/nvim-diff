@@ -15,6 +15,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - Structural (treesitter) diff is the default view: only changed syntax nodes light up, and a pure reformat reads as "formatting only — no semantic change". A keymap toggles back to raw line diff, and languages with no parser fall back to line diff automatically.
 - Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
+- A pure reformat collapses to a single separator row on both sides — `═══ reformatted into 5 lines — no semantic change ═══` — expandable like folded context. It never costs five rows and filler to say nothing changed.
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified.
 - Large files are deferred by a line-count threshold: a file over the limit shows in the panel with its stats and loads only when asked for, and structural diff falls back to plain line diff above a size limit. No configurable exclude globs — the threshold alone decides.
 
