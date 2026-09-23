@@ -17,6 +17,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Unchanged parts of a file are hidden behind a loud separator row that can never be mistaken for code (`═════ 128 unchanged lines ═════ impl Server ═════`), and can be expanded inline — 10 lines at a time, or all of it.
 - The separator is a **steel band**: pale text on dark blue, filled with `·` from column 1 to the window edge. Loud enough to be a landmark, calmer than amber.
 - A pure reformat collapses to a single separator row on both sides — `═══ reformatted into 5 lines — no semantic change ═══` — expandable like folded context. It never costs five rows and filler to say nothing changed.
+- A changed line is coloured by side, not by a third colour: red in the old pane, green in the new pane, with the changed tokens brighter inside. A wholly added line is uniform green with no bright token, which is how "new" reads differently from "edited".
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified.
 - Large files are deferred by a line-count threshold: a file over the limit shows in the panel with its stats and loads only when asked for, and structural diff falls back to plain line diff above a size limit. No configurable exclude globs — the threshold alone decides.
 
