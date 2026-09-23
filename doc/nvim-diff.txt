@@ -1,0 +1,68 @@
+*nvim-diff.txt*   Diff, file history, merge conflicts and GitHub PR review
+
+==============================================================================
+CONTENTS                                                    *nvim-diff-contents*
+
+  1. Introduction ......................... |nvim-diff-introduction|
+  2. Requirements ......................... |nvim-diff-requirements|
+  3. Setup ................................ |nvim-diff-setup|
+  4. Configuration ........................ |nvim-diff-config|
+  5. Highlight groups ..................... |nvim-diff-highlights|
+  6. Health ............................... |nvim-diff-health|
+
+==============================================================================
+1. INTRODUCTION                                         *nvim-diff-introduction*
+
+nvim-diff renders diffs itself rather than delegating to Neovim's diff mode: it
+computes hunks and paints both panes with extmarks, so 'diff' stays off in every
+window it owns.
+
+This plugin is a skeleton at the moment. Only |nvim-diff-setup|,
+|nvim-diff-config| and |nvim-diff-health| exist; the diff engine, the renderer
+and the review layer are being built on top of them.
+
+==============================================================================
+2. REQUIREMENTS                                         *nvim-diff-requirements*
+
+  - Neovim 0.12+
+  - git 2.25+
+  - gh, authenticated, for PR review only
+  - treesitter parsers for structural diff
+
+==============================================================================
+3. SETUP                                                       *nvim-diff-setup*
+
+                                                            *nvim-diff.setup()*
+>lua
+    require("nvim-diff").setup({})
+<
+Optional: every module reads the defaults when `setup()` has not been called.
+An unknown or wrongly-typed option is reported by `setup()` itself, naming the
+full path of the offending key.
+
+==============================================================================
+4. CONFIGURATION                                              *nvim-diff-config*
+
+See the README, or `:lua vim.print(require("nvim-diff.config").get_defaults())`
+for the defaults as they actually ship.
+
+==============================================================================
+5. HIGHLIGHT GROUPS                                       *nvim-diff-highlights*
+
+The plugin never uses `DiffAdd`, `DiffChange`, `DiffText` or `DiffDelete`. It
+defines its own groups with `default`, so a colorscheme that already defines one
+keeps it, and `highlights` in the config overrides any of them.
+
+  `:lua vim.print(vim.tbl_keys(require("nvim-diff.ui.hl").groups))`
+
+==============================================================================
+6. HEALTH                                                     *nvim-diff-health*
+
+                                                      *:checkhealth-nvim-diff*
+>vim
+    :checkhealth nvim-diff
+<
+Reports the Neovim version, git, gh and its authentication, treesitter parser
+availability, and PR worktrees left behind by a crash.
+
+vim:tw=78:ts=8:ft=help:norl:
