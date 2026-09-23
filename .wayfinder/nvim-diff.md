@@ -18,6 +18,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - The separator is a **steel band**: pale text on dark blue, filled with `·` from column 1 to the window edge. Loud enough to be a landmark, calmer than amber.
 - A pure reformat collapses to a single separator row on both sides — `═══ reformatted into 5 lines — no semantic change ═══` — expandable like folded context. It never costs five rows and filler to say nothing changed.
 - A changed line is coloured by side, not by a third colour: red in the old pane, green in the new pane, with the changed tokens brighter inside. A wholly added line is uniform green with no bright token, which is how "new" reads differently from "edited".
+- Both panes carry line numbers, each showing its own revision's numbers. They drift apart after the first hunk, which is the point.
 - Side-by-side two panes is the default layout (as diffview does today), with a keymap to flip the current file to unified.
 - Large files are deferred by a line-count threshold: a file over the limit shows in the panel with its stats and loads only when asked for, and structural diff falls back to plain line diff above a size limit. No configurable exclude globs — the threshold alone decides.
 
@@ -70,9 +71,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Whether Neovim 0.12's `vim.async` covers cancellation, join, chain and protected await, or whether a thin shim is needed.
 
 - Is the "new" pane the **real, editable file buffer** (LSP attached, edits hit disk), or a read-only rendered copy? This decides whether separators and filler could be real buffer text, whether `gd`/rename/code-actions work inside the diff, and whether editing-in-the-diff is a feature at all. Everything decided so far assumes a read-only rendered copy, which is the safe superset.
+- All fold rows in one window share a single background, because the colour comes from the `Folded` remap. The context separator and the reformat separator therefore differ in text only — unknown whether a `foldtext` chunk's own highlight group can carry a background over that remap.
 - Should the normal fold keys (`zo`/`zc`/`zR`/`zM`) open and close context folds, or only the plugin's expand-10 / expand-all keys? They work but desync the panes unless intercepted, and intercepting them surprises people who use folds reflexively.
-- When a thread is expanded on one side, should the other side show blank padding or a **dimmed mirror** of the thread? Blank is honest; a mirror keeps the thread readable while the eye is on the old side.
-- Should both panes show line numbers, or only the new side? Two number columns cost ~10 columns of code in a narrow split.
 - Is a review tab with its own `:tcd` welcome, or intrusive?
 - Exact corrector behaviour under `smoothscroll`, `splitkeep` and horizontal sync (`scrollopt+=hor`, `sidescrolloff`); whether `WinScrolled` alone catches every scroll or `WinResized`/`TabEnter` are also needed.
 - Whether a merged filler extmark's `virt_lines` array can be updated **in place** cheaply enough for expand-10, or must be deleted and recreated.
@@ -87,7 +87,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] research: structural diff with treesitter — [result](#result-research-structural-diff-with-treesitter)
 - [x] research: Neovim rendering primitives for diff display — [result](#result-research-neovim-rendering-primitives-for-diff-display)
 - [x] research: prior art — diffview.nvim and octo.nvim architecture — [result](#result-research-prior-art--diffviewnvim-and-octonvim-architecture)
-- [ ] prototype: the visual language (highlight groups, separator row, structural output)
+- [x] prototype: the visual language (highlight groups, separator row, structural output) — [result](#result-prototype-the-visual-language)
 - [ ] implement: plugin skeleton, config, health check, test harness
 - [ ] implement: git layer — revs, merge-base, file lists, blobs, worktrees
 - [ ] implement: line diff engine and the hunk data model
@@ -166,6 +166,9 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - A PR review opens in its own tabpage with a tab-local cwd (`:tcd`) set to the PR worktree, so `:find`, `:grep` and terminals resolve against the PR's tree. `:tabclose` is trapped to clean up.
 - The plugin never persistently sets the global options `diffexpr`, `diffopt`, `scrollopt` or `splitkeep`.
 - The size threshold is a **parse and diff** threshold, not a rendering one. Rendering would not justify deferring anything under ~50,000 lines; the treesitter parse (1,864 ms at 94,719 lines) and the blob fetch are the real costs.
+
+- Rendering colour cannot be verified through a terminal-buffer capture — `nvim_buf_get_extmarks` on a `:terminal` buffer returns nothing. Layout and text can. Colour work needs a UI attached.
+- `foldminlines = 0` is a rendering invariant, not a preference: at the default of 1 a one-line fold never closes, which breaks the reformat-collapse on the old side.
 
 ## Results
 
@@ -1122,3 +1125,87 @@ restored on both panes, which needs the row map to exist first.
 
 **Next step:** `prototype: the visual language` — which now has a settled substrate and
 must decide what the thing actually looks like.
+
+### result: prototype: the visual language
+
+A throwaway prototype (~600 lines of Lua, hardcoded fixture, no git and no treesitter)
+rendered a real two-pane diff with extmarks, folds and highlight groups, and ran in a
+**real TUI** — a child `nvim --clean` inside a terminal buffer, with every screen read
+back from that buffer. Eleven variants were captured and compared side by side. The
+prototype lived in the scratchpad and is gone; what it decided is below.
+
+#### What the user chose
+
+Four requirement answers, all now under **Requirements**: reformats collapse to one
+separator row; the context separator is a steel band; a changed line is red on the left
+and green on the right; the old pane stays blank opposite a thread; line numbers in both
+panes.
+
+#### The visual language, as the renderer must implement it
+
+```
+ 1 ── a/lua/server/init.lua ──          │  1 ── b/lua/server/init.lua ── PR #214
+ 2 ··· 7 unchanged lines ··· local defaults ·········   <- steel band, col 1 to edge
+ 8   port    = 8080,                    │  8   port    = 9090,      <- red / green line
+                                        │  ▌ alice  why 9090? …  · 2 replies · unresolved
+ 9   backlog = 128,                     │  9   backlog = 128,
+13 ··· reformatted into 5 lines — no semantic change ···
+14 end                                  │ 18 end
+┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ │ 65   M.metrics = { conns = 0, bytes = 0 }
+```
+
+| element | how |
+| --- | --- |
+| header, buffer line 1 | `── a/<path> ──`, range extmark `hl_eol`, priority 150. Mandatory: `virt_lines_above` never renders at row 0. |
+| changed line | range extmark `end_row+1, end_col=0, hl_eol=true`, priority **150**. `NvimDiffDelLine` on the left, `NvimDiffAddLine` on the right. |
+| changed token | range extmark, priority **250**, **bg only**. `NvimDiffDelToken` / `NvimDiffAddToken`. |
+| wholly added line | `NvimDiffAddLine` with no token mark — "new" reads as uniform colour, "edited" as a brighter token inside. |
+| missing line (filler) | `virt_lines` + `virt_lines_leftcol = true`, one chunk of `┈` × 400, `NvimDiffFiller`. Full width, unmistakably empty. |
+| context separator | real fold, `foldtext` chunk, window-local `fillchars=fold:·`, `winhighlight=Folded:NvimDiffContextSeparator`. Text: `··· N unchanged lines ··· <enclosing symbol> ···`. |
+| reformat separator | the same mechanism over the reflowed range — 1 line on the left, 5 on the right, both collapse to one row, so **no filler is emitted at all**. Text: `··· reformatted into N lines — no semantic change ···`. |
+| comment thread | `virt_lines` on the new side, `▌` bar in `NvimDiffThreadBar`, author bold, meta dim, key hints dim. The old side gets the same **count** of empty `virt_lines`. |
+| line numbers | `statuscolumn` = `%#NonText#%{v:virtnum<0\|\|v:lnum==1?"    ":printf("%4d",v:lnum-1)}%#Normal# `, per pane, each showing its own file's numbers. |
+
+#### Measured this step
+
+- **`foldminlines` must be 0.** It defaults to 1, and a one-line fold then never closes —
+  the left side of a reformat (one long line) stayed open and raw while the right side
+  collapsed. Caught on screen, fixed with `vim.wo[win].foldminlines = 0`.
+- **Alignment held exactly in every one of the eleven variants** — filler, thread padding
+  at 1 and 10 rows, folds of 7 / 30 / 1 lines, and the expand-10 rebuild — read off the
+  real screen, not computed. The rule from the rendering step (one extmark per side per
+  anchor row, own content then blanks to `max(n_left, n_right)`) is enough.
+- **Collapsing a reformat removes filler entirely.** Five new lines against one old line
+  normally costs four filler rows; folded, both sides are one row and the panes are
+  naturally aligned. The cheapest option is also the prettiest one.
+- The per-pane `statuscolumn` shows each side's own numbers and goes blank on virtual
+  rows, so after the first hunk the two columns drift apart — which is the information
+  the reviewer wants.
+- Terminal-buffer capture gives text and layout but **no colour**: `nvim_buf_get_extmarks`
+  on a `:terminal` buffer returns nothing. Colour checks need a real UI or
+  `nvim__inspect_cell` with one attached.
+
+#### The highest-risk unknown is closed
+
+The prior-art step called native-diff-versus-custom-renderer *"the highest-risk unknown
+in the project"* and left it to this step. The rendering step chose the custom renderer
+on measured grounds; this step **built one and it held** — two panes, filler, folds,
+per-side line numbers, 10-row inline threads and a collapsed reformat, all aligned row
+for row on a real screen, with no native diff mode anywhere. `implement: side-by-side
+renderer with scroll sync` still has no reference implementation in the ecosystem, but
+it is no longer unproven.
+
+#### Decisions I made, not the user
+
+- Filler is `┈` at full width rather than blank, so "a line is missing here" and "nothing
+  is here" are different marks. The thread padding is blank precisely to keep that
+  distinction.
+- The thread bar is `▌`, the panel's viewed marks are `✓` / `▸` / `↺`, and the deferred
+  big file shows `⤷ 12,412 lines · <cr> to load`.
+- Highlight group names: `NvimDiffAddLine/AddToken`, `NvimDiffDelLine/DelToken`,
+  `NvimDiffContextSeparator`, `NvimDiffFiller`, `NvimDiffHeader`, `NvimDiffThread*`,
+  `NvimDiffPanel*`.
+- There is no `NvimDiffChangeLine` any more. A changed line is del-on-the-left,
+  add-on-the-right, so the plugin ships two colour families, not three.
+
+**Next step:** `implement: plugin skeleton, config, health check, test harness`.
