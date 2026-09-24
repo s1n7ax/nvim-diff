@@ -67,7 +67,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - How `virt_lines` interact with `foldmethod=diff` fold boundaries, whether `virt_lines_above` anchors the context separator better, and whether a native diff filler region can hold virtual lines at all. (Research, not a requirement — belongs to the rendering-primitives step.)
 - Whether `nvim_win_set_hl_ns` or `winhl` survives a colorscheme reload better and composes correctly with treesitter highlight priorities.
 - The real cost of `git worktree add` on a large repo, and whether `--no-checkout` plus a sparse checkout is worth it for big PRs.
-- Whether Neovim 0.12's `vim.async` covers cancellation, join, chain and protected await, or whether a thin shim is needed.
+- ~~Whether Neovim 0.12's `vim.async` covers cancellation…~~ Settled for now: `vim.async` exists only on the 0.13 nightly, so `core/job.lua` is a hand-written shim. Revisit when the minimum moves to 0.13.
 
 - Is the "new" pane the **real, editable file buffer** (LSP attached, edits hit disk), or a read-only rendered copy? This decides whether separators and filler could be real buffer text, whether `gd`/rename/code-actions work inside the diff, and whether editing-in-the-diff is a feature at all. Everything decided so far assumes a read-only rendered copy, which is the safe superset.
 - All fold rows in one window share a single background, because the colour comes from the `Folded` remap. The context separator and the reformat separator therefore differ in text only — unknown whether a `foldtext` chunk's own highlight group can carry a background over that remap.
@@ -92,8 +92,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] research: prior art — diffview.nvim and octo.nvim architecture — [result](#result-research-prior-art--diffviewnvim-and-octonvim-architecture)
 - [x] prototype: the visual language (highlight groups, separator row, structural output) — [result](#result-prototype-the-visual-language)
 - [x] implement: plugin skeleton, config, health check, test harness — [result](#result-implement-plugin-skeleton-config-health-check-test-harness)
-- [ ] implement: git layer — revs, merge-base, file lists, blobs, worktrees
-- [ ] implement: line diff engine and the hunk data model
+- [x] implement: git layer — revs, merge-base, file lists, blobs, worktrees — [result](#result-implement-git-layer)
+- [x] implement: line diff engine and the hunk data model — [result](#result-implement-line-diff-engine-and-the-hunk-data-model)
 - [ ] implement: side-by-side renderer with scroll sync
 - [ ] implement: context folding — separator row, expand 10, expand all
 - [ ] implement: unified renderer and the layout toggle
@@ -181,6 +181,26 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Highlight groups as shipped: `NvimDiff{Del,Add}{Line,Token}`, `NvimDiffContextSeparator`, `NvimDiffReformatSeparator` (links to ContextSeparator, so the two differ in text today but can diverge), `NvimDiffFiller`, `NvimDiffHeader`, `NvimDiffThread{Bar,Author,Body,Meta,Resolved}`, `NvimDiffPanel{Title,Dir,Path,Insertions,Deletions,Viewed,Rechanged,Deferred}`. The separator is dark blue `#1c3a5e` on pale `#c9d8e8`. Light-background variants are invented — nothing in the map measured a light colorscheme. The namespace remap table currently holds only `Folded → NvimDiffContextSeparator`.
 - Health severities: missing `git` is an **error**; missing or unauthenticated `gh` is a **warn**, because diff, history and conflicts do not need it; zero parsers is a warn. Declared minimums are Neovim 0.12 (feature-probed via `vim.text.diff` and `&winfixbuf`) and git 2.25. `health.orphan_worktrees()` is public so `git/worktree.lua`'s startup prune uses the same matcher rather than two copies drifting.
 - `LICENSES/README.md` records the working rule: diffview is never copied; MIT projects are copied only with a file-header provenance line (project, file, commit) **and** the licence text added as `LICENSES/<project>.txt`.
+
+- Git functions return `value, err` and never raise for git-level failures; `err.kind` ∈ `not_a_repository | bad_revision | no_merge_base | not_found | not_a_blob | invalid | spawn_failed | timeout | failed`. Only `job.Cancelled` propagates as an error.
+- `core/job.lua`: `job.task(fn)` runs a coroutine; `job.await(cmd)` yields inside a task and blocks outside one, so every git function serves async views and sync tests alike. `task:cancel()` kills the child. Output is raw bytes, never `text = true` (it corrupts CRLF blobs). A timeout is detected by exit 124 plus a signal, not by elapsed time.
+- Git children inherit Neovim's environment (dotfiles setups rely on `GIT_DIR`/`GIT_WORK_TREE`) plus `GIT_TERMINAL_PROMPT=0`; the `gh` env allow-list does not apply to git. `git/cmd.lua` is the only place a git command is built.
+- Revisions resolve to full ids up front (`label` kept for display); kinds are `commit | index(stage) | worktree`. The empty-tree id is hashed per repo (SHA-256 repos differ). A revision starting with `-` is rejected — `--end-of-options` is newer than git 2.25.
+- `a...b` = merge-base, `a..b` = tip to tip, bare `a` = against the working tree, empty side = `HEAD`. `imply_local` (swap a `HEAD` right side for the worktree) is an off-by-default option on `revparse.resolve`, not in config.
+- File lists are one `git diff --raw --numstat -z --no-abbrev -M --no-ext-diff --no-textconv` call. Renames are forced on. Supported pairs: commit→commit, commit→index, commit→worktree, index→worktree. A conflicted path's duplicate records merge into one `U` entry. Untracked files have status `?` and no counts. The entry type is `FileChange`, leaving `FileEntry` to the scene layer.
+- **Every git call that parses diff output passes `--no-ext-diff`** — the user's own git config routes `git diff` through an external tool, and plain `git diff` printed no hunk headers.
+- Blobs come from `git cat-file --batch` (exact bytes; missing/not-a-blob reported in-band). Binary = NUL in the first 8000 bytes. One process per read for now; a long-lived batch process is a later optimisation.
+- PR worktree ownership lives in git: `git worktree lock --reason "nvim-diff pid <pid>"` (separate from `add`, since `add --reason` is newer than 2.25). The prune removes a `pr-*` worktree only when unlocked or locked by our reason with a dead pid. `worktree.add` replaces any existing worktree for that PR; `remove` is `--force --force`. `setup()` schedules one background prune for the cwd's repo. Worktrees live under the **shared** git dir.
+- Tests build throwaway repos via `tests/gitrepo.lua` with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`.
+
+- The hunk model names sides `"old"`/`"new"` everywhere; GitHub's `LEFT`/`RIGHT` and the rev tuple's `a`/`b` map onto them. Hunk `start`/`count` follow unified-diff convention (count 0 → start is the line it sits after; 0 = top). Filler `after = 0` means above line 1; the renderer adds its header-line offset.
+- `Diff` = `{old_count, new_count, rows, hunks, unchanged, fillers{old,new}, tokens{old,new}, token_source, algorithm}`. Display rows are counted **before** folding — folding and `topfill` mapping are the renderer's. Structural diff plugs in by replacing `tokens`, setting `token_source = "structural"` and `formatting_only` on hunks; the shape never changes.
+- **Histogram degrades with hunk count**: 50K lines with a change every 10th line took 2,470 ms (myers: 12 ms). The engine falls back to myers when a cheap myers pre-pass gives lines × hunks > 2e7; `diff.algorithm` records which ran. The earlier "0.58 ms" figure holds only for few hunks.
+- `linematch` (limit 40) runs per hunk, never in the whole-file call (937 ms whole-file on the same input), so hunks always equal what `git diff` reports. When it can't cover a hunk exactly, lines pair by position: changed pairs first, then deletions, then additions.
+- `indent_heuristic` is on, matching git and GitHub. `commentable_ranges(side, context=3)` merges exactly like `git diff -U3` and is tested against git on 25 random files.
+- Intra-line tokens: word runs (multi-byte safe), whitespace runs, single punctuation, diffed with the token-per-line `vim.text.diff` trick. Lines over 4,096 bytes get one span over the differing middle. `tokens[side][lnum]` exists exactly on changed lines and may be empty.
+- `vim.text.diff` quirks handled: an empty array joined with a trailing newline is one empty line; a missing trailing newline on one side fakes a last-line change; a NUL arrives as `\n` and splits the line.
+- The diff engine never reads `config`; callers pass options, defaults live in `line.defaults`.
 
 ## Results
 
@@ -1294,3 +1314,20 @@ log.level = "warn"
   to source it explicitly or start a child nvim.
 - A `--clean` Neovim has only **four** parsers here — c, lua, markdown, vim. No rust, python or
   typescript. The structural-diff step has to choose between those four and the user's runtimepath.
+
+### result: implement: git layer
+
+Merged to `main` in `2e63503` (branch `worktree-agent-a09880161013de23c`, commit `d322d28`). `make check`: stylua clean, luacheck 0 warnings, 120/120 on the branch.
+
+Built `core/job.lua`, `core/path.lua` (rewritten from a dead session's draft whose `normalize` was not absolute), and `git/{cmd,error,repo,rev,revparse,files,blob,worktree}.lua`; `health.lua` gained `parse_orphans(porcelain)` and lock awareness; `setup()` schedules the startup prune. Specs: `path`, `job`, `git_rev`, `git_files`, `git_worktree`, over `tests/gitrepo.lua`.
+
+Found: `--git-common-dir` is relative before git 2.31 and is resolved manually; `--end-of-options`, `--no-relative`, `worktree add --reason` are all above the 2.25 minimum and worked around; `--raw --numstat -z` combine in one call; `git diff --cached` works before the first commit only without `HEAD`. Not done: long-lived `cat-file --batch`, parallel blob fetch, submodule handling; bare repos fail as `not_a_repository`. Decisions are under Implementation notes.
+
+### result: implement: line diff engine and the hunk data model
+
+Merged to `main` in `f91cfcf` (branch `worktree-agent-a480c5922299dd51e`, commit `fb4501d`). `make check`: 111/111 on the branch; 174/174 after both merges (one README conflict in the module layout, resolved by hand).
+
+Built `diff/line.lua` (`diff(old, new, opts)` → model), `diff/hunk.lua` (model, `new`, lookups `kind`, `hunk_at`, `row_of`, `line_at`, `counterpart`, `commentable_ranges`, `is_commentable`), `diff/inline.lua` (intra-line byte ranges; from a dead session's draft, NUL handling fixed). Specs `diff_{line,hunk,inline}_spec.lua`.
+
+With the myers fallback and per-hunk linematch, 50K lines with 5,000 hunks diff in 48 ms end to end (was 4.4 s). Decisions are under Implementation notes.
+
