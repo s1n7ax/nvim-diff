@@ -16,7 +16,8 @@
 --- windows beside the panel; the fileview owns and closes its own windows.
 ---
 --- A file opens in `config.layout` until it is flipped; after that, reselecting it in the
---- same view opens it in the layout it was left in.
+--- same view opens it in the layout it was left in. The diff mode (structural or line) is
+--- remembered the same way.
 ---
 --- Size threshold: a file whose larger side has more lines than `thresholds.defer_lines`
 --- is listed with its stats and a deferred marker, and selecting it shows a note instead of
@@ -85,6 +86,7 @@ local by_tab = {}
 ---@field current? NvimDiff.FileEntry
 ---@field file? NvimDiff.FileView The diff showing, if one is.
 ---@field layouts table<NvimDiff.FileEntry, NvimDiff.Layout> Layout each opened file was left in.
+---@field modes table<NvimDiff.FileEntry, NvimDiff.DiffMode> Diff mode each opened file was left in.
 ---@field note_buf integer
 ---@field note_win? integer
 ---@field closed boolean
@@ -175,6 +177,7 @@ function M.open(opts)
     listing = opts.listing or cfg.panel.listing,
     collapsed = {},
     layouts = setmetatable({}, { __mode = "k" }),
+    modes = setmetatable({}, { __mode = "k" }),
     closed = false,
   }, View)
   self.list = entry_mod.list(changes, stamper(self.repo, self.right))
@@ -518,6 +521,7 @@ function View:show_diff(entry)
   self.file = fileview.open({
     diff = d,
     layout = layout,
+    mode = self.modes[entry],
     old = {
       lines = old,
       label = "a/" .. old_path,
@@ -539,7 +543,7 @@ end
 
 --- A diff's scene is up — first open or after a flip: map the view keys in its new buffers,
 --- keep the panel at its width (a flip closes or splits a window beside it) and remember
---- the layout for the file.
+--- the layout and diff mode for the file.
 ---@param entry NvimDiff.FileEntry
 ---@param file NvimDiff.FileView
 function View:on_scene(entry, file)
@@ -548,6 +552,7 @@ function View:on_scene(entry, file)
     self:map_view(buf)
   end
   self.layouts[entry] = file.layout
+  self.modes[entry] = file.mode
 end
 
 --- Unfold every directory holding `entry`, and mark it current in the panel.

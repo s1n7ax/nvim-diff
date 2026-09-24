@@ -50,6 +50,7 @@ local M = {}
 --- Closed folds, as display-row ranges: the same list a pair of this diff would carry.
 ---@field folds NvimDiff.Fold[]
 ---@field fold_base NvimDiff.Fold[] The folds the pane opened with; collapsing restores them.
+---@field fold_opts false|NvimDiff.FoldOpts The spec's `fold`: false when folding is off.
 ---@field fold_step integer
 ---@field ranges NvimDiff.UnifiedFoldRange[] `folds` as buffer lines of the pane.
 ---@field scopes { new?: integer[] } Scope-line index of the new file, built lazily.
@@ -89,6 +90,7 @@ function M.open(spec)
     folds = fold_opts and spec.folds and vim.deepcopy(spec.folds) or base,
     fold_base = base,
     fold_step = fold_opts and fold_opts.step or fold.STEP,
+    fold_opts = fold_opts,
     ranges = {},
     scopes = {},
   }, Unified)
@@ -198,6 +200,23 @@ function Unified:winline()
   local view = api.nvim_win_call(self.win, vim.fn.winsaveview)
   local top = unified.line_view(self.virt, view.topline, self.ranges) - view.topfill
   return unified.line_view(self.virt, view.lnum, self.ranges) - top + 1
+end
+
+--- Show another diff of the same two files, as `Pair:set_diff`: same rows, so the buffer
+--- and view stay; highlights are repainted and folds rebuilt with `fold.carry`.
+---@param diff NvimDiff.Diff
+function Unified:set_diff(diff)
+  assert(
+    diff.rows == self.diff.rows and diff.old_count == self.diff.old_count and diff.new_count == self.diff.new_count,
+    "nvim-diff: set_diff needs a diff of the same files"
+  )
+  self.diff = diff
+  self.layout = unified.layout(diff)
+  local base = self.fold_opts and fold.compute(diff, self.fold_opts) or {}
+  local list = self.fold_opts and fold.carry(self.folds, base) or {}
+  self.fold_base = base
+  self.virt = unified.render(self.buf, self.layout, self:block_list())
+  self:set_folds(list)
 end
 
 --- The blocks in insertion order.

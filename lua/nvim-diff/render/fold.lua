@@ -187,6 +187,37 @@ function M.restore(folds, base, ids)
   return out
 end
 
+--- The fold list for the same file under another diff mode (structural ↔ line). Both diffs
+--- have the same rows and unchanged runs, so context folds carry over as they are — what
+--- was expanded stays expanded — with their `id` renumbered to `base`'s (the new diff's
+--- `compute`), so collapsing still restores them. Reformat folds come from `base` alone:
+--- the new diff's reformats start folded, the old one's are dropped.
+---@param folds NvimDiff.Fold[] Current folds under the old diff.
+---@param base NvimDiff.Fold[] `compute` of the new diff.
+---@return NvimDiff.Fold[]
+function M.carry(folds, base)
+  local out = {}
+  for _, f in ipairs(folds) do
+    if f.kind == "context" then
+      local i = M.find(base, f.first)
+      if i and base[i].kind == "context" then
+        local c = copy(f)
+        c.id = base[i].id
+        out[#out + 1] = c
+      end
+    end
+  end
+  for _, f in ipairs(base) do
+    if f.kind == "reformat" then
+      out[#out + 1] = copy(f)
+    end
+  end
+  table.sort(out, function(a, b)
+    return a.first < b.first
+  end)
+  return out
+end
+
 --- The fold list with display row `d` visible: a context fold containing it is split
 --- around it, a reformat fold containing it opens. For blocks (comment threads), which
 --- must hang off a visible row.

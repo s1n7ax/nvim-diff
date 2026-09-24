@@ -60,7 +60,7 @@ local SIGNS = { context = " ", deleted = "-", added = "+" }
 ---@field kind NvimDiff.UnifiedKind `deleted`: an old line of a hunk. `added`: a new line of a hunk.
 ---@field old? integer Old line number; set for `context` and `deleted`.
 ---@field new? integer New line number; set for `context` and `added`.
----@field changed boolean On a `changed` row, so its tokens are painted.
+---@field changed boolean On a `changed` row (the other side has a line opposite).
 
 ---@class NvimDiff.UnifiedLayout
 ---@field diff NvimDiff.Diff
@@ -302,16 +302,16 @@ local function paint_lines(buf, layout)
     local g = GROUPS[l.kind]
     if g then
       line_mark(buf, i, g.line)
-      if l.changed then
-        for _, span in ipairs(tokens[g.side][l[g.side]] or {}) do
-          api.nvim_buf_set_extmark(buf, M.ns, i, span[1], {
-            end_row = i,
-            end_col = span[2],
-            hl_group = g.token,
-            priority = sidebyside.PRIORITY_TOKEN,
-            strict = false,
-          })
-        end
+      -- Whatever `tokens` holds: `changed` rows from either engine, and from the structural
+      -- one an added or deleted line that is partly new.
+      for _, span in ipairs(tokens[g.side][l[g.side]] or {}) do
+        api.nvim_buf_set_extmark(buf, M.ns, i, span[1], {
+          end_row = i,
+          end_col = span[2],
+          hl_group = g.token,
+          priority = sidebyside.PRIORITY_TOKEN,
+          strict = false,
+        })
       end
     end
   end

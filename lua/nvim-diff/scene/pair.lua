@@ -61,6 +61,7 @@ local SIDES = { "old", "new" }
 ---@field folds NvimDiff.Fold[]
 ---@field fold_base NvimDiff.Fold[] The folds the pair opened with; collapsing restores them.
 ---@field fold_step integer
+---@field fold_opts false|NvimDiff.FoldOpts The spec's `fold`: false when folding is off.
 ---@field scopes { old?: integer[], new?: integer[] } Scope-line index per side, built lazily.
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[] Ids in insertion order, so equal rows keep it.
@@ -101,6 +102,7 @@ function M.open(spec)
     folds = folds,
     fold_base = base,
     fold_step = fold_opts and fold_opts.step or fold.STEP,
+    fold_opts = fold_opts,
     scopes = {},
   }, Pair)
 
@@ -389,6 +391,29 @@ end
 --- Put every fold the pair opened with back.
 function Pair:collapse_all()
   self:set_folds(vim.deepcopy(self.fold_base))
+end
+
+--- Show another diff of the same two files — the structural and the line diff of one file
+--- pair have the same rows, so the panes, their text and the view stay; the highlights are
+--- repainted and the folds rebuilt with `fold.carry` (expanded context stays expanded, the
+--- new diff's reformats start folded).
+---@param diff NvimDiff.Diff Same `rows`, `old_count` and `new_count` as the current one.
+function Pair:set_diff(diff)
+  assert(
+    diff.rows == self.diff.rows and diff.old_count == self.diff.old_count and diff.new_count == self.diff.new_count,
+    "nvim-diff: set_diff needs a diff of the same files"
+  )
+  self.diff = diff
+  local base = self.fold_opts and fold.compute(diff, self.fold_opts) or {}
+  local list = self.fold_opts and fold.carry(self.folds, base) or {}
+  for _, b in ipairs(self:block_list()) do
+    list = fold.reveal(list, b.row)
+  end
+  self.fold_base = base
+  self.folds = list
+  self.map = rowmap.new(diff, self:block_list(), list)
+  sidebyside.render(self.bufs, self.map)
+  self:set_folds(list)
 end
 
 --- Insert (or replace) rows after display row `block.row` in both panes: `block.old` in

@@ -50,6 +50,7 @@ require("nvim-diff").setup({
   layout = "side_by_side",              -- "side_by_side" | "unified"
   layout_keymaps = {
     toggle = "g<C-x>",                  -- flip the current file's layout; false disables
+    toggle_structural = "gs",           -- flip the current file between structural and line diff
   },
 
   diff = {
