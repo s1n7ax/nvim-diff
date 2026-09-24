@@ -87,6 +87,52 @@ function M.read(repo, at, git_path)
   return blob(out:sub(header_end + 1, header_end + tonumber(size)))
 end
 
+--- Byte sizes of objects, from one `git cat-file --batch-check`. Headers only: no content
+--- is read, so this is cheap enough to run over every file in a list.
+---@param repo NvimDiff.Git.Repo
+---@param oids string[] Full object ids. All-zero ids are skipped.
+---@return table<string, integer>? sizes Oid to size; an oid git does not have is absent.
+---@return NvimDiff.Git.Error? err
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function M.sizes(repo, oids)
+  local wanted = {}
+  for _, oid in ipairs(oids) do
+    if not oid:match("^0+$") then
+      wanted[#wanted + 1] = oid
+    end
+  end
+  if #wanted == 0 then
+    return {}
+  end
+  local out, err = cmd.output(
+    repo.toplevel,
+    { "cat-file", "--batch-check" },
+    { stdin = table.concat(wanted, "\n") .. "\n" }
+  )
+  if not out then
+    return nil, err
+  end
+  local sizes = {}
+  for line in out:gmatch("[^\n]+") do
+    local oid, size = line:match("^(%x+) %a+ (%d+)$")
+    if oid then
+      sizes[oid] = tonumber(size)
+    end
+  end
+  return sizes
+end
+
+--- How many lines `bytes` holds, counted the way `M.lines` splits them.
+---@param bytes string
+---@return integer
+function M.line_count(bytes)
+  if bytes == "" then
+    return 0
+  end
+  local _, newlines = bytes:gsub("\n", "")
+  return bytes:sub(-1) == "\n" and newlines or newlines + 1
+end
+
 --- Split blob bytes into lines the way a buffer holds them.
 ---@param bytes string
 ---@return string[] lines No trailing empty line for a final newline; `{}` for empty content.
