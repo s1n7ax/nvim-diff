@@ -81,6 +81,17 @@ function M.output(cwd, args, opts)
   return res.stdout
 end
 
+--- Start git in `cwd` and read its stdout as it arrives. No timeout: a history walk over a
+--- big repository legitimately runs for longer than `git.timeout_ms`, and is stopped by
+--- killing the stream (or cancelling the task reading it) instead.
+---@param cwd string
+---@param args string[]
+---@param opts? NvimDiff.Git.CmdOpts
+---@return NvimDiff.Job.Stream
+function M.stream(cwd, args, opts)
+  return job.stream(M.argv(args, opts or {}), { cwd = cwd, env = { GIT_TERMINAL_PROMPT = "0" } })
+end
+
 --- Split NUL-terminated output (`-z`) into fields.
 ---@param out string
 ---@return string[]

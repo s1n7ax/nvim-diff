@@ -309,6 +309,125 @@ function M.await(cmd, opts)
   return res
 end
 
+--- A running command whose stdout is read as it arrives. See `M.stream`.
+---@class NvimDiff.Job.Stream
+---@field private chunks string[]
+---@field private head integer Index of the next unread chunk.
+---@field private eof boolean
+---@field private res? NvimDiff.Job.Result
+---@field private waiting? NvimDiff.Job.Task
+---@field private obj? vim.SystemObj
+local Stream = {}
+Stream.__index = Stream
+
+---@private
+function Stream:wake()
+  local task = self.waiting
+  if task and coroutine.status(task.co) == "suspended" then
+    self.waiting = nil
+    step(task)
+  end
+end
+
+---@private
+---@return boolean
+function Stream:ready()
+  return self.chunks[self.head] ~= nil or (self.res ~= nil and (self.eof or not self.res.spawned))
+end
+
+--- The next chunk of stdout, or nil once the output is over and the process has exited.
+--- Inside a task this yields; on the main thread it blocks.
+---@return string?
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function Stream:read()
+  -- Woken on every chunk, on end of output and on exit; the last two arrive separately.
+  while not self:ready() do
+    local task = M.current()
+    if task then
+      check_cancelled(task)
+      task.handle = {
+        kill = function()
+          self:kill()
+        end,
+        is_active = function()
+          return self.res == nil
+        end,
+      }
+      self.waiting = task
+      coroutine.yield()
+      task.handle = nil
+      check_cancelled(task)
+    else
+      vim.wait(math.huge, function()
+        return self:ready()
+      end, 5)
+    end
+  end
+  local chunk = self.chunks[self.head]
+  if chunk then
+    self.chunks[self.head] = nil
+    self.head = self.head + 1
+  end
+  return chunk
+end
+
+--- How the process ended. Only meaningful after `read` has returned nil.
+---@return NvimDiff.Job.Result
+function Stream:result()
+  return assert(self.res, "stream still running")
+end
+
+--- Stop the process. Reading drains what already arrived, then returns nil.
+function Stream:kill()
+  if self.obj and not self.res then
+    pcall(self.obj.kill, self.obj, "sigterm")
+  end
+end
+
+--- Start a command and read its stdout in chunks as it arrives, for output too long to
+--- wait for whole (a history walk). Chunks are raw bytes split wherever the pipe split
+--- them. There is no timeout unless `opts.timeout_ms` asks for one: a stream ends when the
+--- process does or when it is killed (cancelling the task reading it kills it).
+---@param cmd string[]
+---@param opts? NvimDiff.Job.Opts
+---@return NvimDiff.Job.Stream
+function M.stream(cmd, opts)
+  opts = opts or {}
+  local self = setmetatable({ chunks = {}, head = 1, eof = false }, Stream)
+  local tail = #self.chunks
+  local started = vim.uv.hrtime()
+  local stderr = {}
+  local sys = system_opts(opts)
+  sys.timeout = opts.timeout_ms
+  sys.stdout = function(_, data)
+    vim.schedule(function()
+      if data then
+        tail = tail + 1
+        self.chunks[tail] = data
+      else
+        self.eof = true
+      end
+      self:wake()
+    end)
+  end
+  sys.stderr = function(_, data)
+    stderr[#stderr + 1] = data
+  end
+  local ok, obj = pcall(vim.system, cmd, sys, function(completed)
+    vim.schedule(function()
+      self.res = result(cmd, started, completed)
+      self.res.stderr = table.concat(stderr)
+      self:wake()
+    end)
+  end)
+  if ok then
+    self.obj = obj
+  else
+    self.res = result(cmd, started, nil, tostring(obj))
+  end
+  return self
+end
+
 ---@param res NvimDiff.Job.Result
 ---@return boolean
 function M.ok(res)

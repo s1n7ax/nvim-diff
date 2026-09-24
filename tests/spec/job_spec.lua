@@ -144,4 +144,69 @@ describe("job", function()
       expect.falsy(task:is_cancelled())
     end)
   end)
+
+  describe("stream", function()
+    ---@param s NvimDiff.Job.Stream
+    ---@return string
+    local function drain(s)
+      local out = {}
+      for chunk in
+        function()
+          return s:read()
+        end
+      do
+        out[#out + 1] = chunk
+      end
+      return table.concat(out)
+    end
+
+    it("reads output as it arrives, blocking on the main thread", function()
+      local s = job.stream({ "sh", "-c", "printf 'a\\0b'; sleep 0.05; printf 'c'; echo err >&2; exit 3" })
+      expect.eq("a\0bc", drain(s))
+      local res = s:result()
+      expect.eq(3, res.code)
+      expect.eq("err\n", res.stderr)
+      expect.eq(nil, s:read())
+    end)
+
+    it("yields inside a task, chunk by chunk", function()
+      local chunks, ticked = {}, false
+      local task = job.task(function()
+        local s = job.stream({ "sh", "-c", "echo one; sleep 0.1; echo two" })
+        for chunk in
+          function()
+            return s:read()
+          end
+        do
+          chunks[#chunks + 1] = chunk
+        end
+        return s:result().code
+      end)
+      vim.schedule(function()
+        ticked = true
+      end)
+      expect.truthy(task:wait(2000))
+      expect.truthy(ticked)
+      expect.eq({ 0 }, task.values)
+      expect.eq({ "one\n", "two\n" }, chunks)
+    end)
+
+    it("reports a missing binary as an unspawned result", function()
+      local s = job.stream({ "nvim-diff-no-such-binary" })
+      expect.eq(nil, s:read())
+      expect.falsy(s:result().spawned)
+    end)
+
+    it("is killed when its task is cancelled", function()
+      local task = job.task(function()
+        local s = job.stream({ "sleep", "5" })
+        s:read()
+      end)
+      local started = vim.uv.hrtime()
+      task:cancel()
+      expect.truthy(task:wait(2000))
+      expect.truthy(job.is_cancelled(task.err))
+      expect.truthy((vim.uv.hrtime() - started) / 1e6 < 2000)
+    end)
+  end)
 end)

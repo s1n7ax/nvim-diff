@@ -100,6 +100,17 @@ M.groups = {
   NvimDiffConflictOurs = { dark = { bg = "#16304a" }, light = { bg = "#dbe9f7" } },
   NvimDiffConflictBase = { dark = { bg = "#2a2a2e" }, light = { bg = "#ececef" } },
   NvimDiffConflictTheirs = { dark = { bg = "#33244a" }, light = { bg = "#ebdff7" } },
+
+  -- The history panel: a commit's abbreviated id, date and author, the row marking where a
+  -- followed file was renamed, and a failed walk.
+  NvimDiffHistoryHash = { dark = { link = "Identifier" }, light = { link = "Identifier" } },
+  NvimDiffHistoryDate = { dark = { link = "Comment" }, light = { link = "Comment" } },
+  NvimDiffHistoryAuthor = { dark = { link = "Comment" }, light = { link = "Comment" } },
+  NvimDiffHistoryRename = {
+    dark = { link = "NvimDiffPanelRechanged" },
+    light = { link = "NvimDiffPanelRechanged" },
+  },
+  NvimDiffHistoryError = { dark = { link = "ErrorMsg" }, light = { link = "ErrorMsg" } },
 }
 
 --- Namespace-local remaps. These exist only inside plugin windows.

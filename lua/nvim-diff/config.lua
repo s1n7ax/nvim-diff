@@ -44,6 +44,10 @@ local M = {}
 ---@field listing "tree"|"flat" How the file panel groups files; toggled per view.
 ---@field width integer Columns.
 
+---@class NvimDiff.Config.History
+---@field follow boolean A single file's history follows it across renames.
+---@field height integer Rows of the commit panel, which sits under the diff.
+
 --- A key in `{lhs}` notation, or `false` for no mapping.
 ---@alias NvimDiff.Config.Key string|false
 
@@ -88,6 +92,7 @@ local M = {}
 ---@field highlights table<string, vim.api.keyset.highlight|string> Group name to attributes, or to a group to link to.
 ---@field log NvimDiff.Config.Log
 ---@field panel NvimDiff.Config.Panel
+---@field history NvimDiff.Config.History
 ---@field keymaps NvimDiff.Config.Keymaps
 
 ---@type NvimDiff.Config
@@ -137,6 +142,11 @@ local defaults = {
   panel = {
     listing = "tree",
     width = 35,
+  },
+
+  history = {
+    follow = true,
+    height = 16,
   },
 
   keymaps = {
@@ -216,6 +226,11 @@ local schema = {
   panel = {
     listing = { type = "string", one_of = { "tree", "flat" } },
     width = { type = "number", integer = true, min = 1 },
+  },
+
+  history = {
+    follow = { type = "boolean" },
+    height = { type = "number", integer = true, min = 1 },
   },
 
   keymaps = {
