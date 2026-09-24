@@ -53,7 +53,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
-- Injected languages (a Lua fence in markdown, a script tag in HTML, Vue SFCs) need the token list spliced together from one tree per language by byte offset. Whether that is worth doing in the first structural-diff step or deferred to its own step.
+- Injected languages (a Lua fence in markdown, a script tag in HTML, Vue SFCs) need the token list spliced together from one tree per language by byte offset. Not in the first structural step: the root tree is flattened alone — a later step or never?
 - How the user writes a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer.
 - What a "moved code" change should look like. Neither the token-stream design nor difftastic detects a moved block; it reads as a delete plus an add. (The per-language degradation half of this question is answered: it degrades, on three measured triggers.)
 - `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async, cancellable run.
@@ -80,7 +80,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 
 - The `LICENSE` file says `Copyright (c) 2026 s1n7ax`. Whether that should be a legal name instead.
 - The header at buffer line 1 is parsed by treesitter as code (an ERROR node at the top). It likely needs excluding via included regions — belongs to the structural-diff step, and matters for its `root:has_error()` fallback trigger.
-- A wholly added or deleted file renders a full pane of filler on the other side. Whether such files show as a single pane — for the entry-points step.
+- ~~A wholly added or deleted file renders a full pane of filler…~~ Settled: added, deleted and untracked files open unified; the toggle still flips them.
 - A cursor move that scrolls a pane may show one misaligned frame in a real terminal before `WinScrolled` fires. Not measurable headless.
 - `smoothscroll`, `splitkeep` and `scrolloff=0` were not exercised by the scroll-sync tests.
 - Which parsers the structural-diff tests run against: the four a `--clean` Neovim has here (c, lua, markdown, vim), or the user's own runtimepath.
@@ -103,6 +103,19 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Should one layout flip apply to every file in the view (diffview's behaviour) rather than only the current file? Today `<Tab>`-ing through a PR in unified means flipping each file.
 - Should a search or motion into a closed fold leave the cursor on the match? Both layouts jump to the fold's first line today.
 
+- Markdown paragraphs are one treesitter leaf, so structural mode lights whole prose lines. Should markdown fall back to the line diff?
+- A hunk with one real edit plus reflowed lines still paints every line red/green; only the tokens are precise. A dimmer background for lines with no semantic change would finish "only changed nodes light up".
+- Nothing on screen says which mode (structural / line) or range (`...` / `..`) is active beyond the title. A header or statusline indicator?
+- Should the structural/line flip apply to the whole view rather than one file? Same question as the layout flip.
+- Structural diff runs synchronously on open (about 100 ms at the 5,000-line cap). Make it async and cancellable?
+- `:NvimDiffOpen` with no args lists `HEAD` vs worktree as one list — no staged/unstaged split, pending the staging question.
+- Worktree/index views re-list on every `TabEnter`/`FocusGained`, up to ~222 ms at 3,001 files, not debounced; a changed current file reloads and drops fold expansions.
+- Should `:NvimDiffClose` close history and conflict views too? It only finds diff views today.
+- Take-base when the conflict markers have no base section (git's default `merge` style): regenerate with `git checkout --conflict=diff3` (rewrites the file), fall back to `git merge-file`, or keep refusing with a hint?
+- Conflict view: "resolve all" keys (ours/theirs for every conflict), a key to stage the resolved file, context folding in the three top panes, and whether the top panes should follow the result cursor outside conflicts too.
+- History: no "unfold all" key in folder/repo mode; no uncommitted pseudo-commit at the top; commit rows show no large-file marker until selected.
+- Merges in history need `--diff-merges=first-parent` (git 2.31, above the 2.25 minimum); older git lists no files for merges. Raise the minimum?
+
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
@@ -120,11 +133,12 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: file panel — list, stats, navigation, size-threshold deferral — [result](#result-implement-file-panel)
 - [x] implement: diff view holds a fileview, not a bare pair — layout toggle and folds reach the panel's diffs — [result](#result-implement-diff-view-holds-a-fileview)
 - [x] implement: context folding in the unified layout — [result](#result-implement-context-folding-in-the-unified-layout)
-- [ ] implement: working-tree and branch diff entry points — needs: diff view holds a fileview, not a bare pair
-- [ ] implement: structural diff as the default view, with the raw-line toggle
-- [ ] implement: file history panel — commits for file, folder and repo
-- [ ] implement: range compare and line history
-- [ ] implement: merge conflict three-way layout
+- [x] implement: working-tree and branch diff entry points — [result](#result-implement-working-tree-and-branch-diff-entry-points)
+- [x] implement: structural diff as the default view, with the raw-line toggle — [result](#result-implement-structural-diff-as-the-default-view)
+- [x] implement: file history panel — commits for file, folder and repo — [result](#result-implement-file-history-panel)
+- [ ] implement: range compare and line history — needs: file history panel
+- [x] implement: merge conflict three-way layout — [result](#result-implement-merge-conflict-three-way-layout)
+- [ ] implement: wire the conflict view in — a command, `U` entries in the file panel open it, stepping between conflicted files
 - [ ] implement: GitHub client — gh auth, Enterprise hosts, PR fetch
 - [ ] implement: PR review mode — worktree checkout, viewed marks, jump to next unviewed
 - [ ] implement: reading comment threads — collapsed virtual line, expand in place, side list
@@ -259,6 +273,17 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Fold state carries across the toggle through a `folds` field in both open specs; collapse targets are recomputed from the diff, so `zc` still restores originals. Reselecting a file (e.g. `<Tab>` away and back) starts folds fresh.
 - On a band the toggle keeps the side last used in side-by-side, falling back to the other side if the fold has no lines there. A cursor inside a closed fold counts as the fold's first line in both layouts. The toggle measures the cursor's screen row with each layout's row maths, not `winline()` — `winline()` ignores `topfill` above a closed fold at the view top and skips comment rows directly above a closed fold.
 - `scene/folds.lua` is shared by both layouts (key handling works on any scene with the fold methods). A comment row hanging inside a closed unified fold is never counted.
+- Entry points: `:NvimDiffOpen [rev | a...b | a..b | a b] [--cached|--staged] [--imply-local] [-- paths]` and `:NvimDiffClose`, separate commands (not subcommands) so each view adds its own; code in `commands/diff.lua`, Lua form `require("nvim-diff").open(opts)`. No args = `HEAD` vs worktree incl. untracked; unborn `HEAD` = the empty tree. Two bare revs follow `revs.merge_base`; explicit `..`/`...` are literal. Title as typed (`main...feature`), ` (worktree)` suffix. `gm` (`keymaps.view.toggle_range`) flips merge-base ↔ tip-to-tip and re-lists, keeping untouched entries. Repo from cwd, falling back to the current file's; paths relative to cwd. Command errors notify at ERROR regardless of `log.level`. `--imply-local` is a flag, not config.
+- Added, deleted and untracked files open unified; a flip is remembered per file. Worktree/index views re-list on `TabEnter`/`FocusGained`; commit-to-commit views never watch.
+- Structural diff (`diff/structural.lua`) refines the line diff and never re-hunks it: only highlighted tokens and a per-hunk reformat flag change. A hunk is a reformat when no changed token touches its lines on either side (hunk-by-hunk comparison fails when git cuts a split call badly). Token diff uses the line engine's histogram-with-myers-fallback budget.
+- A changed token widens to the largest enclosing node whose tokens all changed. Strings are one token (quotes included); comments split into words with a leading punctuation word dropped, so rewrapping a comment is formatting only. Added/deleted lines get bright tokens only when some but not all tokens changed. A blank-lines-only hunk is never a reformat.
+- Structural fallbacks beyond the research's three: NUL bytes, differing `lang` on the two sides, and `thresholds.structural_lines` (5,000). Computed lazily in the fileview so any entry point gets it; silent fallback on open, `gs` warns with the reason. Injections ignored.
+- `gs` (`layout_keymaps.toggle_structural`) flips structural ↔ line in place via `set_diff` (rows are identical, so buffers/windows/cursor/blocks survive); expanded folds carry through `fold.carry`, reformat folds start closed. Mode remembered per file, like layout. No echo on flip.
+- History: `git/log.lua` streams one `git log -z --raw --numstat --no-abbrev -M --diff-merges=first-parent` (probed; git < 2.31 lists no files for merges), records split on `\x1e\x1f`. With a path, commits that changed nothing under it are dropped. `core/job.lua` gained `job.stream`, `git/cmd.lua` `cmd.stream` (no timeout; killed on close/refresh).
+- History view extends the diff View class (layout toggle, folds, deferral, events for free) via a `View:sides(entry)` hook. Panel at the bottom, full width, 16 rows (`history.height`); single file = one row per commit with a `⤷ renamed from` marker row; folder/repo = foldable commit rows. First commit's file opens immediately, focus stays in the panel. Redraws ≤15/s while streaming, append-only. `:NvimDiffHistory [path]` (`%` = current file, none = repo). `history.follow = true` config, no toggle key. Short hash 7 chars, author date `YYYY-MM-DD` local.
+- Conflict view (`views/conflict.lua`): ours | base | theirs read-only on top, the **real file buffer** as the editable result below (LSP, `:w`, undo), in a new tab. Top panes aligned by `diff/merge.lua` (diff3-style chunks) with `render/threeway.lua` row maths; the result is not aligned — entering a conflict in it scrolls the top panes there, found by the conflict's text. Colours are relative to base (changed ours/theirs lines green, base lines either side changed red), no third diff colour; four invented `NvimDiffConflict*` groups for the result.
+- Conflict keys (diffview's, in all four windows): `<leader>co/cb/ct/ca`, `dx` take none (extra), `]x`/`[x`. `take_both` = ours then theirs. Each take is one undoable splice; nothing written or staged. Theirs head probed from `MERGE_HEAD`, `REBASE_HEAD`, `REVERT_HEAD`, `CHERRY_PICK_HEAD`. Missing stage = empty pane; binary refused. Markers fixed at 7 chars. Closing any window closes the view. No user command yet (a later step).
+- Merging the wave: the history view builds its own View, so it needed the structural step's `modes` table added (`3bfb8fa`).
 
 ## Results
 
@@ -1446,3 +1471,35 @@ Merged to `main` in `2c0aa1a` (branch `worktree-agent-a364721b2a3fbb2bd`, commit
 Measured: 600 random ops over 6 seeds mixing scroll, fold keys and toggles — 0 bad unified screens, 0/34 toggles changed folds; pair still 0/720 misaligned. At 50K lines / 501 folds: open unified folded 59 ms (47 unfolded), expand-10 3.3 ms, collapse-all 6.4 ms. Found: `winline()` is wrong next to closed folds (see notes); search into a fold already moved the cursor to the fold's first line in the pair, and unified now matches. Two old unified tests pass `fold = false`.
 
 After merging, a stale test comment in `views_diff_spec` claimed a flip drops expands — it was the reselect; fixed in `6bdb619`.
+
+### result: implement: working-tree and branch diff entry points
+
+Merged to `main` in `933b830` (branch `worktree-agent-ad8b382716c58b0b2`, commit `e4577ef`). `make check`: 316/316 on the branch (18 new); **393/393 on `main` after all four merges**.
+
+Built `commands/diff.lua` (`parse`, `resolve`, `open`, `run`, `close`, `complete`), `:NvimDiffOpen` / `:NvimDiffClose` in `plugin/`, `require("nvim-diff").open(opts)`, and in `views/diff.lua` the `range`/`resolve_opts`/`paths` options, `M.get(tab?)` and `View:toggle_range()` (`gm`). Completion covers flags, refs (also after `main...`) and paths after `--`. New spec `commands_diff_spec`; five `views_diff_spec` tests changed because a deleted file now opens unified.
+
+Smoke run on this repo: `:NvimDiffOpen HEAD~5 HEAD -- lua/` opened as `HEAD~5...HEAD`, `gm` flipped it to `HEAD~5..HEAD`. The README status line still says "nothing user-facing works yet" — left for the docs step. Decisions under Implementation notes; new fog under Open questions.
+
+### result: implement: structural diff as the default view
+
+Merged to `main` in `d3e9164` (branch `worktree-agent-ab514e9065a198070`, commit `643b8dc`). `make check`: 322/322 on the branch (24 new, the old 298 unchanged). Not split.
+
+Built `diff/structural.lua` (`diff`, `has_parser`, `defaults`), `fold.carry`, `set_diff` on pair and unified scenes, and on the fileview `mode`, `diffs`, `structural_reason`, `structural_diff()`, `diff()`, `set_mode()`, `toggle_mode()`. Renderers paint tokens on any line that has them. Specs `diff_structural_spec` (incl. two 40-seed property checks) and `scene_structural_spec` (child-Neovim screen test of the reformat band and `gs`).
+
+Measured (sync): 641-line file 13 ms; ~5,400 lines / 56 hunks 101 ms; 4,900 dense lines / 700 hunks 273 ms; parse ~40 ms a side. Histogram on 83K tokens took 376 ms until the myers fallback (21 ms); keeping a node per token cost ~65 ms of GC, so only changed tokens re-find theirs. A changed string first lit only its inside, hence strings as one token. `views/diff.lua` still has its own `lang_for` that could use `has_parser`.
+
+### result: implement: file history panel
+
+Merged to `main` in `19ce868` (branch `worktree-agent-aada9efe63892a440`, commit `0d66267`) with three keep-both conflicts (README, `ui/hl.lua`, `plugin/`), plus `3bfb8fa` for the missing `modes` table and a spec helper that now flips one-sided files. `make check`: 325/325 on the branch (27 new).
+
+Built `git/log.lua` (`walk`, `commits`, `kind`, parser pieces), `job.stream` / `cmd.stream`, `views/history.lua` (`open`, `command`, `select`, `next_file`/`prev_file`, `refresh`, `close`, `render`, `redraw_commit`, `sides`), panel `bottom` position with `draw`/`splice`, `history` config, five `NvimDiffHistory*` groups, `:NvimDiffHistory`. Specs `git_log_spec`, `views_history_spec` (incl. streaming-vs-full-redraw equality), four stream tests in `job_spec`.
+
+Found: `-m` lets git skip empty per-parent diffs, giving wrong folder history — hence first-parent. Measured on 20,000 commits: walk 1.08 s (first batch 23 ms), folder of 3,000 commits 192 ms, one file 129 ms; full redraw per batch took 20.7 s to show everything, append-only 1.56 s; fold 4.9 ms; first diff 96 ms. For range compare and line history: entries take revisions from `View:sides`, rows carry their commit, `log.walk` takes `rev`.
+
+### result: implement: merge conflict three-way layout
+
+Merged to `main` in `3466c2d` (branch `worktree-agent-a94d424192a3aeca9`, commit `9b6be56`). `make check`: 324/324 on the branch (26 new).
+
+Built `git/conflict.lua` (`parse`, `at`, `section_lines`, `choose`, `stages`, `other_head`), `diff/merge.lua` (`align`, `line_at`, `chunk_at`, `conflicts`), `render/threeway.lua`, `views/conflict.lua` (`open{path?, repo?}` → `take`, `next_conflict`, `prev_conflict`, `close`), `keymaps.conflict`, four `NvimDiffConflict*` groups. Specs `git_conflict_spec`, `diff_merge_spec`, `views_conflict_spec`. Opened from Lua only — wiring it in is the new next step.
+
+Measured: 0/150 real keystrokes left the three panes misaligned (126/150 with the corrector off); align 2 ms at 2K lines, 22 ms at 10K, 43 ms at 50K (1,572 chunks). Git's default conflict style has no base section, so take-base refuses with a `merge.conflictStyle=diff3` hint. A `map` field and `map()` method clash in Lua, so the method is `map_keys`.
