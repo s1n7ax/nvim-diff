@@ -60,9 +60,21 @@ local M = {}
 --- Flip a branch diff between merge-base (`a...b`) and tip-to-tip (`a..b`).
 ---@field toggle_range NvimDiff.Config.Key
 
+--- Buffer-local to the four windows of a merge conflict view. The take keys act on the
+--- conflict under the result's cursor.
+---@class NvimDiff.Config.ConflictKeymaps
+---@field take_ours NvimDiff.Config.Key
+---@field take_base NvimDiff.Config.Key
+---@field take_theirs NvimDiff.Config.Key
+---@field take_both NvimDiff.Config.Key Ours, then theirs.
+---@field take_none NvimDiff.Config.Key Delete the conflict.
+---@field next_conflict NvimDiff.Config.Key
+---@field prev_conflict NvimDiff.Config.Key
+
 ---@class NvimDiff.Config.Keymaps
 ---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
 ---@field view NvimDiff.Config.ViewKeymaps Buffer-local to the file panel and every pane of a view.
+---@field conflict NvimDiff.Config.ConflictKeymaps
 
 ---@class NvimDiff.Config
 ---@field layout "side_by_side"|"unified"
@@ -138,6 +150,16 @@ local defaults = {
       prev_file = "<S-Tab>",
       toggle_range = "gm",
     },
+    -- diffview's merge-tool keys, so muscle memory carries over.
+    conflict = {
+      take_ours = "<leader>co",
+      take_base = "<leader>cb",
+      take_theirs = "<leader>ct",
+      take_both = "<leader>ca",
+      take_none = "dx",
+      next_conflict = "]x",
+      prev_conflict = "[x",
+    },
   },
 
   log = {
@@ -206,6 +228,15 @@ local schema = {
       next_file = KEY,
       prev_file = KEY,
       toggle_range = KEY,
+    },
+    conflict = {
+      take_ours = KEY,
+      take_base = KEY,
+      take_theirs = KEY,
+      take_both = KEY,
+      take_none = KEY,
+      next_conflict = KEY,
+      prev_conflict = KEY,
     },
   },
 

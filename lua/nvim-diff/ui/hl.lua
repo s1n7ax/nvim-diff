@@ -91,6 +91,15 @@ M.groups = {
     light = { link = "NvimDiffPanelDeletions" },
   },
   NvimDiffPanelStatusConflicted = { dark = { link = "WarningMsg" }, light = { link = "WarningMsg" } },
+
+  -- The result buffer of a merge conflict view: the marker lines and the three sections.
+  NvimDiffConflictMarker = {
+    dark = { link = "NvimDiffHeader" },
+    light = { link = "NvimDiffHeader" },
+  },
+  NvimDiffConflictOurs = { dark = { bg = "#16304a" }, light = { bg = "#dbe9f7" } },
+  NvimDiffConflictBase = { dark = { bg = "#2a2a2e" }, light = { bg = "#ececef" } },
+  NvimDiffConflictTheirs = { dark = { bg = "#33244a" }, light = { bg = "#ebdff7" } },
 }
 
 --- Namespace-local remaps. These exist only inside plugin windows.

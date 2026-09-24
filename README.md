@@ -95,6 +95,15 @@ require("nvim-diff").setup({
       prev_file = "<S-Tab>",
       toggle_range = "gm",              -- flip a branch diff: merge-base (a...b) <-> tip to tip (a..b)
     },
+    conflict = {                        -- in the four windows of a merge conflict view;
+      take_ours = "<leader>co",         -- the take keys act on the conflict under the
+      take_base = "<leader>cb",         -- result's cursor
+      take_theirs = "<leader>ct",
+      take_both = "<leader>ca",         -- ours, then theirs
+      take_none = "dx",
+      next_conflict = "]x",
+      prev_conflict = "[x",
+    },
   },
 })
 ```
@@ -124,11 +133,11 @@ lua/nvim-diff/
   commands/   diff (:NvimDiffOpen, :NvimDiffClose)
   core/       event (the internal bus), log, job (vim.system + cancellable tasks), path
   ui/         hl (highlight groups and the private namespace), tree, panel
-  git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
-  diff/       hunk, line, inline, structural, entry
+  git/        cmd, error, repo, rev, revparse, files, blob, worktree, conflict; log to come
+  diff/       hunk, line, inline, merge, structural, entry
   scene/      buffer, window, pair, unified, fileview, scrollsync, folds, entry
-  render/     rowmap, sidebyside, unified, fold
-  views/      diff; history, conflict, review to come
+  render/     rowmap, sidebyside, unified, fold, threeway
+  views/      diff, conflict; history, review to come
   github/     gh, query, read, write
   review/     session, thread, threadview, sidelist, viewed
 ```
