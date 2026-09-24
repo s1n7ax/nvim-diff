@@ -74,13 +74,16 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Should the normal fold keys (`zo`/`zc`/`zR`/`zM`) open and close context folds, or only the plugin's expand-10 / expand-all keys? They work but desync the panes unless intercepted, and intercepting them surprises people who use folds reflexively.
 - Is a review tab with its own `:tcd` welcome, or intrusive?
 - Exact corrector behaviour under `smoothscroll`, `splitkeep` and horizontal sync (`scrollopt+=hor`, `sidescrolloff`); whether `WinScrolled` alone catches every scroll or `WinResized`/`TabEnter` are also needed.
-- Whether a merged filler extmark's `virt_lines` array can be updated **in place** cheaply enough for expand-10, or must be deleted and recreated.
+- `virt_lines` cannot be updated in place — delete and recreate; `set_block` costs 17.7 ms at 50K lines. Whether that is fast enough for expand-10 on huge files.
 - Fold creation cost at 50,000 lines with hundreds of context folds, and whether `foldmethod=expr` with a lookup table beats `manual` + `zE` for rebuilds.
 - Whether treesitter's highlighter attaches cleanly to a `buftype=nofile` scratch buffer with no file on disk, and whether injections still resolve there.
 - TUI paint cost with a real terminal attached — every redraw number measured so far is a headless grid-update cost.
 
 - The `LICENSE` file says `Copyright (c) 2026 s1n7ax`. Whether that should be a legal name instead.
-- The test harness has no screen-capture facility. Whether the renderer step adds the prototype's child-nvim-in-a-terminal capture to it, or verifies layout another way.
+- The header at buffer line 1 is parsed by treesitter as code (an ERROR node at the top). It likely needs excluding via included regions — belongs to the structural-diff step, and matters for its `root:has_error()` fallback trigger.
+- A wholly added or deleted file renders a full pane of filler on the other side. Whether such files show as a single pane — for the entry-points step.
+- A cursor move that scrolls a pane may show one misaligned frame in a real terminal before `WinScrolled` fires. Not measurable headless.
+- `smoothscroll`, `splitkeep` and `scrolloff=0` were not exercised by the scroll-sync tests.
 - Which parsers the structural-diff tests run against: the four a `--clean` Neovim has here (c, lua, markdown, vim), or the user's own runtimepath.
 
 ## Map
@@ -94,7 +97,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: plugin skeleton, config, health check, test harness — [result](#result-implement-plugin-skeleton-config-health-check-test-harness)
 - [x] implement: git layer — revs, merge-base, file lists, blobs, worktrees — [result](#result-implement-git-layer)
 - [x] implement: line diff engine and the hunk data model — [result](#result-implement-line-diff-engine-and-the-hunk-data-model)
-- [ ] implement: side-by-side renderer with scroll sync
+- [x] implement: side-by-side renderer with scroll sync — [result](#result-implement-side-by-side-renderer-with-scroll-sync)
 - [ ] implement: context folding — separator row, expand 10, expand all — needs: side-by-side renderer with scroll sync
 - [ ] implement: unified renderer and the layout toggle — needs: side-by-side renderer with scroll sync
 - [ ] implement: file panel — list, stats, navigation, size-threshold deferral
@@ -201,6 +204,17 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Intra-line tokens: word runs (multi-byte safe), whitespace runs, single punctuation, diffed with the token-per-line `vim.text.diff` trick. Lines over 4,096 bytes get one span over the differing middle. `tokens[side][lnum]` exists exactly on changed lines and may be empty.
 - `vim.text.diff` quirks handled: an empty array joined with a trailing newline is one empty line; a missing trailing newline on one side fakes a last-line change; a NUL arrives as `\n` and splits the line.
 - The diff engine never reads `config`; callers pass options, defaults live in `line.defaults`.
+
+- Renderer API: `scene/pair.lua` `open{diff, old, new, wins?}` returns a pair with `set_block(id,{row,old?,new?})` (padded to the taller side), `remove_block`, `jump`, `cursor_line`, `side_of`, `close`, and `pair.sync`. Pure row math lives in `render/rowmap.lua`; painting in `render/sidebyside.lua`; the corrector in `scene/scrollsync.lua` works for any number of panes, so 3-way reuses it.
+- Scroll behaviour is tested in a child `nvim --embed --headless` over RPC (`tests/child.lua`): real keys in, screen text out, each input followed by a `<Cmd>` sentinel. The screen check uses only the screen and the `Diff`, never the row map. This is the harness's screen-capture answer.
+- Headless child Neovim must stay at or below 80x24: larger grids corrupt and later segfault in `grid_clear_line` (0.12.4 and nightly).
+- Virtual lines live in their own namespace, one extmark per side per anchor line; a filler run is cut where a block sits inside it. Inserted blocks (threads, later) are counted by the row map from day one.
+- An empty trailer line is added to both panes only when the last display row is filler on one side — the view top cannot scroll into `virt_lines` below the last buffer line.
+- The corrector also keeps the other pane's cursor on the counterpart line, clamped inside its view with `scrolloff` respected; it listens on `WinScrolled`, `CursorMoved` and `WinResized`, and syncs `leftcol`.
+- Filler width is `&columns`, repainted when the screen grows, not a fixed 400 cells (~60 MB of filler text on a 50K-line added file).
+- `statuscolumn` is `%W{…?'':v:lnum-1} ` — a `%{}` result drops a leading space. Number width is shared by both panes, minimum 3.
+- Panes get syntax via `vim.treesitter.start` only; `filetype` is never set, so no ftplugin can touch pane window options. Pane windows set `number` (so `statuscolumn` draws), `signcolumn=no`, `nolist`, `nospell` window-locally.
+- Closing either pane closes the whole pair through a scheduled `WinClosed` handler.
 
 ## Results
 
@@ -1331,3 +1345,12 @@ Built `diff/line.lua` (`diff(old, new, opts)` → model), `diff/hunk.lua` (model
 
 With the myers fallback and per-hunk linematch, 50K lines with 5,000 hunks diff in 48 ms end to end (was 4.4 s). Decisions are under Implementation notes.
 
+### result: implement: side-by-side renderer with scroll sync
+
+Merged to `main` in `303601b` (branch `worktree-agent-af07b48fd2e8ae2a8`, commit `5fa306c`). `make test`: 200/200 after merge (26 new); stylua and luacheck clean.
+
+Built `render/rowmap.lua` (topline/topfill ↔ display row, trailer, blocks), `render/sidebyside.lua` (header, line/token highlights, filler, `statuscolumn`), `scene/{buffer,window,scrollsync,pair}.lua`, plus `tests/child.lua` (RPC-driven child Neovim) and `tests/diffgen.lua` (random file pairs). Specs `render_rowmap`, `render_sidebyside`, `scene_scrollsync`. The pair fires `diff_buf_ready(buf, {side, pair})`.
+
+Measured: 0/2,000 real-keystroke operations misaligned (10 random diffs, `scrolloff` 0/3/5/8, some with 6–12 blocks; `<C-e/y/d/u/f/b>`, `zt/zb/zz`, `H/L/M`, `G/gg`, `{}`, `j/k`, mouse wheel, `<C-w>w`); 0/227 pane switches scrolled the entered pane; with the corrector detached, 127/150 misaligned (the check works). Render: 7 ms at 2K lines, 16 ms at 10K, 79 ms at 50K (41K marks); `sync` ≈ 0.03 ms per call; `set_block` 0.8 / 3.2 / 17.7 ms.
+
+Not built (separate steps): folding, unified layout, file panel, commands. Decisions are under Implementation notes; new fog under Open questions.
