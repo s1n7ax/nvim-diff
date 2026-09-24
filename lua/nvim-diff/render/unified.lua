@@ -20,8 +20,16 @@
 --- buffer line live in buffer variables that a plain Vimscript `statuscolumn` indexes, so
 --- no Lua runs per drawn row.
 ---
---- Pure layout (`layout`, `text`, `virt_rows`) plus painting (`render`, `paint_virt`).
+--- Context folding uses the side-by-side fold list unchanged (`render/fold.lua`: display-row
+--- ranges). Every fold is a run of whole display rows, and the lines of such a run are
+--- contiguous here too — an unchanged run is one line per row, a reformat fold is a whole
+--- hunk, which is its old lines then its new lines — so each fold is one range of buffer
+--- lines (`fold_lines`) and shows as one separator band.
+---
+--- Pure layout (`layout`, `text`, `virt_rows`, `fold_lines`) plus painting (`render`,
+--- `paint_virt`).
 
+local fold = require("nvim-diff.render.fold")
 local sidebyside = require("nvim-diff.render.sidebyside")
 
 local api = vim.api
@@ -233,19 +241,26 @@ end
 --- leading space, so padded text shifts; and an empty `%3{}` takes no width at all (the
 --- statuscolumn then right-pads the shorter row, moving the sign), while `%3(%{}%)` keeps
 --- its three cells when empty.
+---
+--- On a closed fold the whole column is band fill in the separator's colour, as in the
+--- side-by-side panes, so the band runs from column 1 to the window edge.
 ---@param width integer Digits per number, `sidebyside.number_width(diff)`.
 ---@return string
 function M.statuscolumn(width)
+  local folded = "v:virtnum==0&&foldclosed(v:lnum)>0"
   local function item(var, w)
-    return ("%%%d(%%{v:virtnum<0?'':get(b:%s,v:lnum-1,'')}%%)"):format(w, var)
+    return ("%%%d(%%{%s?repeat('%s',%d):v:virtnum<0?'':get(b:%s,v:lnum-1,'')}%%)"):format(w, folded, fold.FILL, w, var)
   end
-  return "%#NonText#"
+  local function gap(text)
+    return ("%%{%%%s?'%s':'%s'%%}"):format(folded, fold.FILL, text)
+  end
+  return ("%%{%%%s?'%%#NvimDiffContextSeparator#':'%%#NonText#'%%}"):format(folded)
     .. item(M.VAR_OLD, width)
-    .. " "
+    .. gap(" ")
     .. item(M.VAR_NEW, width)
-    .. " "
+    .. gap(" ")
     .. item(M.VAR_SIGN, 1)
-    .. "%#Normal# "
+    .. gap("%#Normal# ")
 end
 
 --- The three lists the `statuscolumn` reads, index 1 (Vim's 0) being the header.
@@ -333,54 +348,141 @@ function M.render(buf, layout, blocks)
   return M.paint_virt(buf, layout, blocks or {})
 end
 
---- Screen row (0 = the header) of buffer line `bl`, given the painted virtual rows.
+-- Folding ------------------------------------------------------------------------------
+
+--- A closed fold as buffer lines of the pane, inclusive.
+---@class NvimDiff.UnifiedFoldRange
+---@field first integer
+---@field last integer
+
+--- The buffer lines fold `f` covers: from its first row's first line to its last row's last
+--- line, over both sides.
+---@param layout NvimDiff.UnifiedLayout
+---@param f NvimDiff.Fold
+---@return integer first
+---@return integer last
+function M.fold_lines(layout, f)
+  local lo, hi
+  for _, side in ipairs({ "old", "new" }) do
+    local a, b = fold.side_lines(layout.diff, f, side)
+    if a and b then
+      local ia, ib = layout.index[side][a], layout.index[side][b]
+      lo = lo and math.min(lo, ia) or ia
+      hi = hi and math.max(hi, ib) or ib
+    end
+  end
+  assert(lo and hi, "nvim-diff: a fold with no lines")
+  return lo + 1, hi + 1
+end
+
+--- `fold_lines` of every fold, in order.
+---@param layout NvimDiff.UnifiedLayout
+---@param folds NvimDiff.Fold[]
+---@return NvimDiff.UnifiedFoldRange[]
+function M.fold_ranges(layout, folds)
+  local out = {}
+  for i, f in ipairs(folds) do
+    local a, b = M.fold_lines(layout, f)
+    out[i] = { first = a, last = b }
+  end
+  return out
+end
+
+--- Index of the range holding buffer line `bl`, if any.
+---@param ranges NvimDiff.UnifiedFoldRange[]
+---@param bl integer
+---@return integer?
+function M.range_at(ranges, bl)
+  local lo, hi = 1, #ranges
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    local r = ranges[mid]
+    if bl < r.first then
+      hi = mid - 1
+    elseif bl > r.last then
+      lo = mid + 1
+    else
+      return mid
+    end
+  end
+  return nil
+end
+
+--- Screen row (0 = the header) of buffer line `bl`, given the painted virtual rows and the
+--- closed folds. A line inside a fold is on the fold's one row. Virtual rows anchored inside
+--- a closed fold are not drawn (measured in the side-by-side folding step), so they count
+--- for nothing.
 ---@param virt { anchor: integer, lines: NvimDiff.VirtLine[] }[]
 ---@param bl integer
+---@param ranges? NvimDiff.UnifiedFoldRange[] Closed folds, from `fold_ranges`.
 ---@return integer
-function M.line_view(virt, bl)
+function M.line_view(virt, bl, ranges)
+  ranges = ranges or {}
   local v = bl - 1
+  for _, r in ipairs(ranges) do
+    if r.first >= bl then
+      break
+    end
+    v = v - (math.min(r.last, bl) - r.first)
+  end
   for _, x in ipairs(virt) do
     if x.anchor >= bl - 1 then
       break
     end
-    v = v + #x.lines
+    if not M.range_at(ranges, x.anchor + 1) then
+      v = v + #x.lines
+    end
   end
   return v
 end
 
 --- The `topline`/`topfill` that puts screen row `v` at the top of the pane, clamped to
---- the pane: a row inside virtual rows is shown as the line below with `topfill`.
+--- the pane: a row inside virtual rows is shown as the line below with `topfill`, and a
+--- fold's row as the fold's first line.
 ---@param virt { anchor: integer, lines: NvimDiff.VirtLine[] }[]
 ---@param line_count integer Buffer lines.
 ---@param v integer
+---@param ranges? NvimDiff.UnifiedFoldRange[] Closed folds, from `fold_ranges`.
 ---@return integer topline
 ---@return integer topfill
-function M.view_top(virt, line_count, v)
+function M.view_top(virt, line_count, v, ranges)
+  ranges = ranges or {}
   if v <= 0 then
     return 1, 0
   end
-  local bl, extra, vi = 1, 0, 1
-  -- Walk line by line: `extra` is the virtual rows above line `bl`.
-  while bl < line_count do
-    local here = bl - 1 + extra
+  -- Walk one screen row of buffer text at a time: a line, or a whole closed fold, from
+  -- `bl` to `last`, on screen row `row`.
+  local bl, row, vi, ri = 1, 0, 1, 1
+  while true do
+    local last = bl
+    local r = ranges[ri]
+    if r and r.first == bl then
+      last = r.last
+      ri = ri + 1
+    end
+    if last >= line_count then
+      return bl, 0
+    end
+    while virt[vi] and virt[vi].anchor < last - 1 do
+      vi = vi + 1 -- anchored inside the fold: not drawn
+    end
     local below = 0
-    if virt[vi] and virt[vi].anchor == bl - 1 then
-      below = #virt[vi].lines
-    end
-    -- Rows of line `bl` and the virtual rows under it: here .. here + below.
-    if v <= here + below then
-      if v == here then
-        return bl, 0
+    if virt[vi] and virt[vi].anchor == last - 1 then
+      if last == bl then
+        below = #virt[vi].lines
       end
-      return bl + 1, here + below - v + 1
-    end
-    extra = extra + below
-    if below > 0 then
       vi = vi + 1
     end
-    bl = bl + 1
+    -- Rows of this line (or fold) and the virtual rows under it: row .. row + below.
+    if v <= row + below then
+      if v == row then
+        return bl, 0
+      end
+      return last + 1, row + below - v + 1
+    end
+    row = row + 1 + below
+    bl = last + 1
   end
-  return line_count, 0
 end
 
 return M

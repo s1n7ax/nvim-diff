@@ -4,6 +4,11 @@
 --- either without caring which one is open. There is no scroll corrector: one pane has
 --- nothing to stay aligned with.
 ---
+--- Context folding is the pair's: the same fold list (display-row ranges from
+--- `render/fold.lua`), the same fold methods and the same fold keys (`scene/folds.lua`).
+--- Each fold is one range of buffer lines here (`render/unified.lua` `fold_lines`), so a
+--- reformatted hunk — old lines and new lines — collapses to one band.
+---
 ---     local u = require("nvim-diff.scene.unified").open({
 ---       diff = require("nvim-diff.diff.line").diff(old_lines, new_lines),
 ---       old = { lines = old_lines, label = "a/lua/foo.lua" },
@@ -12,6 +17,8 @@
 
 local buffer = require("nvim-diff.scene.buffer")
 local event = require("nvim-diff.core.event")
+local fold = require("nvim-diff.render.fold")
+local folds_scene = require("nvim-diff.scene.folds")
 local hl = require("nvim-diff.ui.hl")
 local sidebyside = require("nvim-diff.render.sidebyside")
 local unified = require("nvim-diff.render.unified")
@@ -28,6 +35,10 @@ local M = {}
 ---@field header? string Full header text; default `── <old label> → <new label> ──`.
 ---@field name? string Buffer name. Unnamed when omitted: the pair's per-blob names belong to the pair.
 ---@field win? integer Window to show the pane in. Omitted: a new tabpage.
+--- Context folding, as `NvimDiff.PairSpec.fold`: `false` to show every line.
+---@field fold? false|{ context?: integer, step?: integer }
+--- The folds to open with instead of the computed ones, as `NvimDiff.PairSpec.folds`.
+---@field folds? NvimDiff.Fold[]
 
 ---@class NvimDiff.Unified
 ---@field diff NvimDiff.Diff
@@ -35,6 +46,13 @@ local M = {}
 ---@field buf integer
 ---@field win integer
 ---@field closed boolean
+---@field lines { old: string[], new: string[] }
+--- Closed folds, as display-row ranges: the same list a pair of this diff would carry.
+---@field folds NvimDiff.Fold[]
+---@field fold_base NvimDiff.Fold[] The folds the pane opened with; collapsing restores them.
+---@field fold_step integer
+---@field ranges NvimDiff.UnifiedFoldRange[] `folds` as buffer lines of the pane.
+---@field scopes { new?: integer[] } Scope-line index of the new file, built lazily.
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[]
 ---@field private augroup integer
@@ -59,12 +77,20 @@ function M.open(spec)
   hl.setup()
   local diff = spec.diff
   local layout = unified.layout(diff)
+  local fold_opts = spec.fold == nil and {} or spec.fold
+  local base = fold_opts and fold.compute(diff, fold_opts) or {}
   local self = setmetatable({
     diff = diff,
     layout = layout,
     blocks = {},
     block_order = {},
     closed = false,
+    lines = { old = spec.old.lines, new = spec.new.lines },
+    folds = fold_opts and spec.folds and vim.deepcopy(spec.folds) or base,
+    fold_base = base,
+    fold_step = fold_opts and fold_opts.step or fold.STEP,
+    ranges = {},
+    scopes = {},
   }, Unified)
 
   self.buf = buffer.create({
@@ -83,6 +109,8 @@ function M.open(spec)
     placeholder = api.nvim_win_get_buf(self.win)
   end
   window.pane(self.win, self.buf, { statuscolumn = unified.statuscolumn(sidebyside.number_width(diff)) })
+  folds_scene.setup_window(self.win)
+  self:apply_folds()
   api.nvim_win_set_cursor(self.win, { 1, 0 })
   if placeholder and api.nvim_buf_is_valid(placeholder) and api.nvim_buf_get_name(placeholder) == "" then
     pcall(api.nvim_buf_delete, placeholder, { force = true })
@@ -100,6 +128,7 @@ function M.open(spec)
       end)
     end,
   })
+  folds_scene.attach(self, { self.buf }, self.augroup)
 
   event.emit_in({ win = self.win, buf = self.buf }, event.events.DIFF_BUF_READY, self.buf, {
     layout = "unified",
@@ -149,28 +178,168 @@ function Unified:jump(side, lnum)
 end
 
 --- Put the cursor on buffer line `bl` with the view scrolled so it sits on screen row
---- `winline` (1-based), as far as the file allows.
+--- `winline` (1-based), as far as the file allows. A line inside a closed fold sits on the
+--- fold's row.
 ---@param bl integer
 ---@param winline integer
 function Unified:place(bl, winline)
-  local v = unified.line_view(self.virt, bl) - (winline - 1)
-  local tl, tf = unified.view_top(self.virt, api.nvim_buf_line_count(self.buf), v)
+  local v = unified.line_view(self.virt, bl, self.ranges) - (winline - 1)
+  local tl, tf = unified.view_top(self.virt, api.nvim_buf_line_count(self.buf), v, self.ranges)
   api.nvim_win_call(self.win, function()
     vim.fn.winrestview({ topline = tl, topfill = tf, lnum = bl, col = 0, curswant = 0 })
   end)
 end
 
---- Repaint every virtual row from the current blocks.
-function Unified:repaint_virt()
+--- The cursor's screen row in the pane (1-based), from the pane's own row maths. Not
+--- `winline()`: measured, it is off with a closed fold at the top of the view under
+--- `topfill`, or right below virtual rows, while the screen is right.
+---@return integer
+function Unified:winline()
+  local view = api.nvim_win_call(self.win, vim.fn.winsaveview)
+  local top = unified.line_view(self.virt, view.topline, self.ranges) - view.topfill
+  return unified.line_view(self.virt, view.lnum, self.ranges) - top + 1
+end
+
+--- The blocks in insertion order.
+---@return NvimDiff.Block[]
+function Unified:block_list()
   local list = {}
   for _, id in ipairs(self.block_order) do
     list[#list + 1] = self.blocks[id]
   end
-  self.virt = unified.paint_virt(self.buf, self.layout, list)
+  return list
 end
 
+--- Repaint every virtual row from the current blocks.
+function Unified:repaint_virt()
+  self.virt = unified.paint_virt(self.buf, self.layout, self:block_list())
+end
+
+-- Folding --------------------------------------------------------------------------------
+
+--- Rebuild the window's folds from `folds`. Moves the view: callers restore it.
+function Unified:apply_folds()
+  self.ranges = unified.fold_ranges(self.layout, self.folds)
+  local list = {}
+  for i, f in ipairs(self.folds) do
+    local _, last = fold.side_lines(self.diff, f, "new")
+    list[i] = {
+      first = self.ranges[i].first,
+      last = self.ranges[i].last,
+      -- Unchanged lines show the new side's text, so the scope is named from it.
+      text = folds_scene.label(self.diff, f, self.lines.new, last or 0, self.scopes, "new"),
+      group = fold.group(f),
+    }
+  end
+  folds_scene.build(self.win, self.buf, list)
+end
+
+--- The side and file line under the cursor, when the current window is the pane.
+---@return NvimDiff.Side?
+---@return integer?
+function Unified:fold_cursor()
+  if api.nvim_get_current_win() ~= self.win then
+    return nil, nil
+  end
+  return self:cursor_pos()
+end
+
+--- The closed fold holding the file's line `lnum` of `side`, and its index in `folds`.
+---@param side NvimDiff.Side
+---@param lnum integer
+---@return NvimDiff.Fold?
+---@return integer?
+function Unified:fold_at(side, lnum)
+  local d = self.diff:row_of(side, lnum)
+  local i = d and fold.find(self.folds, d)
+  if not i then
+    return nil, nil
+  end
+  return self.folds[i], i
+end
+
+--- The closed fold on buffer line `bl`, if any.
+---@param bl integer
+---@return NvimDiff.Fold?
+function Unified:fold_on_line(bl)
+  local i = unified.range_at(self.ranges, bl)
+  return i and self.folds[i] or nil
+end
+
+--- Replace the fold list and rebuild the pane's folds, keeping the view and putting the
+--- cursor on buffer line `cursor` when given. Rows that blocks hang off are always kept
+--- visible.
+---@param list NvimDiff.Fold[]
+---@param cursor? integer
+function Unified:set_folds(list, cursor)
+  for _, b in ipairs(self:block_list()) do
+    list = fold.reveal(list, b.row)
+  end
+  self.folds = list
+  local view = api.nvim_win_call(self.win, vim.fn.winsaveview)
+  self:apply_folds()
+  if cursor then
+    view.lnum, view.col, view.curswant = cursor, 0, 0
+  end
+  api.nvim_win_call(self.win, function()
+    vim.fn.winrestview(view)
+    vim.fn.winline() -- scroll now if the cursor left the view
+  end)
+end
+
+--- Reveal rows of the fold holding the file's line `lnum` of `side`, as `Pair:expand`: `n`
+--- of them (default: all), from the end `dir` says. The cursor lands on what is left of the
+--- fold, or on the first revealed line once the fold is gone. False when `lnum` is not
+--- folded.
+---@param side NvimDiff.Side
+---@param lnum integer
+---@param n? integer
+---@param dir? NvimDiff.FoldDir
+---@return boolean
+function Unified:expand(side, lnum, n, dir)
+  local f, i = self:fold_at(side, lnum)
+  if not f or not i then
+    return false
+  end
+  local list = fold.expand(self.folds, i, n, dir)
+  local rest = fold.find(list, f.first) or fold.find(list, f.last)
+  local target = rest and list[rest] or f
+  self:set_folds(list, (unified.fold_lines(self.layout, target)))
+  return true
+end
+
+--- Reveal every fold.
+function Unified:expand_all()
+  self:set_folds({})
+end
+
+--- Fold back up the context the file's line `lnum` of `side` came out of, as
+--- `Pair:collapse`. The cursor lands on it. False when the line was never folded.
+---@param side NvimDiff.Side
+---@param lnum integer
+---@return boolean
+function Unified:collapse(side, lnum)
+  local d = self.diff:row_of(side, lnum)
+  local i = d and fold.find(self.fold_base, d)
+  if not i then
+    return false
+  end
+  local f = self.fold_base[i]
+  local list = fold.restore(self.folds, self.fold_base, { [f.id] = true })
+  self:set_folds(list, (unified.fold_lines(self.layout, f)))
+  return true
+end
+
+--- Put every fold the pane opened with back.
+function Unified:collapse_all()
+  self:set_folds(vim.deepcopy(self.fold_base))
+end
+
+-- Blocks ---------------------------------------------------------------------------------
+
 --- Insert (or replace) rows after display row `block.row`: `block.old` under the old line,
---- `block.new` under the new line. Same contract as `Pair:set_block`.
+--- `block.new` under the new line. Same contract as `Pair:set_block`, a fold over that row
+--- included: it is split around it.
 ---@param id any
 ---@param block NvimDiff.Block
 function Unified:set_block(id, block)
@@ -179,6 +348,9 @@ function Unified:set_block(id, block)
   end
   self.blocks[id] = block
   self:repaint_virt()
+  if fold.find(self.folds, block.row) then
+    self:set_folds(self.folds)
+  end
 end
 
 --- Remove a block. No-op for an unknown id.
@@ -221,6 +393,7 @@ function Unified:close(opts)
       api.nvim_win_set_buf(self.win, api.nvim_create_buf(true, false))
     end
   end
+  folds_scene.forget(self.buf)
   if api.nvim_buf_is_valid(self.buf) then
     pcall(api.nvim_buf_delete, self.buf, { force = true })
   end
