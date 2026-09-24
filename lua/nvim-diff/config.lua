@@ -32,11 +32,16 @@ local M = {}
 ---@field timeout_ms integer
 ---@field host? string GitHub Enterprise host; resolved from the remote when unset.
 
+--- Keys of the layout toggle, buffer-local to diff panes. `false` disables a key.
+---@class NvimDiff.Config.LayoutKeymaps
+---@field toggle string|false Flip the current file between side-by-side and unified.
+
 ---@class NvimDiff.Config.Log
 ---@field level "trace"|"debug"|"info"|"warn"|"error"|"off"
 
 ---@class NvimDiff.Config
 ---@field layout "side_by_side"|"unified"
+---@field layout_keymaps NvimDiff.Config.LayoutKeymaps
 ---@field diff NvimDiff.Config.Diff
 ---@field revs NvimDiff.Config.Revs
 ---@field thresholds NvimDiff.Config.Thresholds
@@ -49,6 +54,10 @@ local M = {}
 ---@type NvimDiff.Config
 local defaults = {
   layout = "side_by_side",
+  -- diffview's cycle-layout key, so muscle memory carries over.
+  layout_keymaps = {
+    toggle = "g<C-x>",
+  },
 
   diff = {
     structural = true,
@@ -89,11 +98,15 @@ local defaults = {
   },
 }
 
---- A leaf rule is `{ type = ... }`, optionally with `one_of`, `min` or `integer`.
+--- A leaf rule is `{ type = ... }`, optionally with `one_of`, `min`, `integer`, or `keymap`
+--- (a non-empty key string, or `false` to disable).
 --- A table without a `type` key is a branch, and its values are rules for its children.
 --- `free` marks a branch whose keys are user-chosen; `values` then validates each value.
 local schema = {
   layout = { type = "string", one_of = { "side_by_side", "unified" } },
+  layout_keymaps = {
+    toggle = { type = { "string", "boolean" }, keymap = true },
+  },
 
   diff = {
     structural = { type = "boolean" },
@@ -172,6 +185,9 @@ local function check_leaf(value, rule, path, errors)
       table.concat(rule.one_of, ", "),
       vim.inspect(value)
     )
+  end
+  if rule.keymap and (value == true or value == "") then
+    errors[#errors + 1] = ("`%s`: expected a key or false, got %s"):format(path, vim.inspect(value))
   end
   if rule.integer and value % 1 ~= 0 then
     errors[#errors + 1] = ("`%s`: expected a whole number, got %s"):format(path, tostring(value))

@@ -103,6 +103,17 @@ describe("config", function()
       )
     end)
 
+    it("takes a key or false for the layout toggle, and nothing else", function()
+      expect.eq("g<C-x>", config.get().layout_keymaps.toggle)
+      expect.eq({}, config.validate({ layout_keymaps = { toggle = "<leader>u" } }))
+      expect.eq({}, config.validate({ layout_keymaps = { toggle = false } }))
+      for _, bad in ipairs({ true, "", 1 }) do
+        local errors = config.validate({ layout_keymaps = { toggle = bad } })
+        expect.eq(1, #errors, vim.inspect(bad))
+        expect.matches("`layout_keymaps%.toggle`", errors[1])
+      end
+    end)
+
     it("reports every problem at once", function()
       local errors = config.validate({
         layout = 42,

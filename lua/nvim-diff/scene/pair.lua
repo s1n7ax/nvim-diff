@@ -410,18 +410,26 @@ function Pair:remove_block(id)
 end
 
 --- Tear the pair down: stop syncing, close both panes, wipe both buffers. Idempotent.
-function Pair:close()
+--- `opts.keep` leaves that window open (the layout toggle reuses it), on an empty scratch
+--- buffer if it still shows a pane.
+---@param opts? NvimDiff.SceneCloseOpts
+function Pair:close(opts)
   if self.closed then
     return
   end
   self.closed = true
+  local keep = opts and opts.keep
   self.sync:detach()
   pcall(api.nvim_del_augroup_by_id, self.augroup)
   for _, side in ipairs(SIDES) do
     local win = self.wins[side]
     if api.nvim_win_is_valid(win) then
       api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
-      if not pcall(api.nvim_win_close, win, true) then
+      if win == keep then
+        if api.nvim_win_get_buf(win) == self.bufs[side] then
+          api.nvim_win_set_buf(win, window.scratch())
+        end
+      elseif not pcall(api.nvim_win_close, win, true) then
         -- The last window cannot close; leave it on an empty buffer instead.
         api.nvim_win_set_buf(win, api.nvim_create_buf(true, false))
       end

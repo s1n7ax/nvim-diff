@@ -52,4 +52,13 @@ function M.pane(win, buf, opts)
   hl.apply_window(win)
 end
 
+--- An empty throwaway buffer, wiped as soon as it is replaced: what a window a scene gives
+--- up (but does not close) shows until the next scene takes it.
+---@return integer buf
+function M.scratch()
+  local buf = api.nvim_create_buf(false, true)
+  api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+  return buf
+end
+
 return M
