@@ -1,8 +1,8 @@
 --- A diff view: a tabpage holding the file panel on the left and, beside it, the diff of the
 --- file selected in it.
 ---
---- This is the Lua API the working-tree and branch commands will be built on; it adds no
---- command itself.
+--- The Lua API under `:NvimDiffOpen` (`commands/diff.lua`), which resolves what the user
+--- typed and hands this module two revisions and, for a branch diff, the range they came from.
 ---
 ---     local view = require("nvim-diff.views.diff").open({
 ---       repo = repo, left = rev.commit(base), right = rev.worktree(),
@@ -22,6 +22,13 @@
 --- is listed with its stats and a deferred marker, and selecting it shows a note instead of
 --- fetching and diffing it. Selecting it again while that note shows loads it. Above
 --- `thresholds.panel_entries` files the panel summarises: every directory starts collapsed.
+---
+--- A file that exists on one side only (added, deleted, untracked) opens unified, since
+--- side-by-side would be one pane of text beside one pane of filler; the toggle still flips it.
+---
+--- A view given a `range` can flip it between merge-base (`a...b`) and tip-to-tip (`a..b`)
+--- with `keymaps.view.toggle_range`. A view whose right side is the worktree or the index
+--- re-lists its files when its tabpage is entered and when Neovim regains focus.
 
 local blob = require("nvim-diff.git.blob")
 local config = require("nvim-diff.config")
@@ -30,14 +37,20 @@ local event = require("nvim-diff.core.event")
 local files = require("nvim-diff.git.files")
 local fileview = require("nvim-diff.scene.fileview")
 local line_diff = require("nvim-diff.diff.line")
+local log = require("nvim-diff.core.log")
 local panel_mod = require("nvim-diff.ui.panel")
 local path = require("nvim-diff.core.path")
 local rev_mod = require("nvim-diff.git.rev")
+local revparse = require("nvim-diff.git.revparse")
 local tree = require("nvim-diff.ui.tree")
 
 local api = vim.api
 
 local M = {}
+
+--- Open views by tabpage, for `M.get`.
+---@type table<integer, NvimDiff.DiffView>
+local by_tab = {}
 
 ---@class NvimDiff.DiffViewOpts
 ---@field repo NvimDiff.Git.Repo
@@ -47,12 +60,21 @@ local M = {}
 ---@field changes? NvimDiff.Git.FileChange[]
 ---@field title? string Panel title. Defaults to `<left> → <right>`.
 ---@field listing? NvimDiff.Listing Defaults to `panel.listing`.
+--- The range `left`/`right` were resolved from. A `merge_base` or `tip` range makes
+--- `toggle_range` work and titles the panel `a...b` / `a..b`.
+---@field range? NvimDiff.Git.Range
+---@field resolve_opts? NvimDiff.Git.ResolveOpts Passed back to `revparse.toggle`.
+---@field paths? string[] Limit the listing to these git paths.
 
 ---@class NvimDiff.DiffView
 ---@field repo NvimDiff.Git.Repo
 ---@field left NvimDiff.Git.Rev
 ---@field right NvimDiff.Git.Rev
 ---@field title string
+---@field range? NvimDiff.Git.Range
+---@field resolve_opts? NvimDiff.Git.ResolveOpts
+---@field paths? string[]
+---@field augroup? integer Auto-refresh autocmds, for a worktree or index right side.
 ---@field list NvimDiff.FileList
 ---@field listing NvimDiff.Listing
 ---@field collapsed table<string, boolean> Directory path to the user's own fold choice.
@@ -85,6 +107,32 @@ local function stamper(repo, right)
   end
 end
 
+--- The panel title for a range: what the user would type, so a merge-base diff reads
+--- `main...feature` rather than `merge-base(main, feature) → feature`.
+---@param range? NvimDiff.Git.Range
+---@param left NvimDiff.Git.Rev
+---@param right NvimDiff.Git.Rev
+---@return string
+local function title_of(range, left, right)
+  local spec = range and range.spec
+  if spec and spec.mode ~= "single" then
+    local text = spec.left .. (spec.mode == "merge_base" and "..." or "..") .. spec.right
+    return right.type == "worktree" and (text .. " (worktree)") or text
+  end
+  return rev_mod.display(left) .. " → " .. rev_mod.display(right)
+end
+
+--- The view open in `tab`, if any.
+---@param tab? integer Defaults to the current tabpage.
+---@return NvimDiff.DiffView?
+function M.get(tab)
+  local view = by_tab[tab or api.nvim_get_current_tabpage()]
+  if view and view:is_valid() then
+    return view
+  end
+  return nil
+end
+
 ---@param buf integer
 ---@param lines string[]
 local function set_note(buf, lines)
@@ -110,7 +158,7 @@ function M.open(opts)
   local changes = opts.changes
   if not changes then
     local err
-    changes, err = files.diff(opts.repo, opts.left, opts.right)
+    changes, err = files.diff(opts.repo, opts.left, opts.right, { paths = opts.paths })
     if not changes then
       error("nvim-diff: " .. (err and err.message or "cannot list files"), 0)
     end
@@ -120,7 +168,10 @@ function M.open(opts)
     repo = opts.repo,
     left = opts.left,
     right = opts.right,
-    title = opts.title or (rev_mod.display(opts.left) .. " → " .. rev_mod.display(opts.right)),
+    title = opts.title or title_of(opts.range, opts.left, opts.right),
+    range = opts.range,
+    resolve_opts = opts.resolve_opts,
+    paths = opts.paths,
     listing = opts.listing or cfg.panel.listing,
     collapsed = {},
     layouts = setmetatable({}, { __mode = "k" }),
@@ -153,6 +204,8 @@ function M.open(opts)
   self:map_view(self.note_buf)
   self:render()
   api.nvim_set_current_win(self.panel.win)
+  by_tab[self.tab] = self
+  self:watch()
 
   event.emit_in({ win = self.panel.win, buf = self.panel.buf }, event.events.VIEW_OPENED, self)
   return self
@@ -173,6 +226,34 @@ function View:map_view(buf)
   map(keys.prev_file, function()
     self:prev_file()
   end, "previous file")
+  map(keys.toggle_range, function()
+    self:toggle_range()
+  end, "flip between merge-base (a...b) and tip-to-tip (a..b)")
+end
+
+--- Re-list the files when the view's tabpage is entered or Neovim regains focus, for a
+--- right side that changes under the view (the worktree or the index). A commit is
+--- resolved once and never moves, so a view of two commits is not watched.
+function View:watch()
+  if self.right.type == "commit" then
+    return
+  end
+  self.augroup = api.nvim_create_augroup(("nvim-diff.view.%d"):format(self.tab), { clear = true })
+  api.nvim_create_autocmd({ "TabEnter", "FocusGained" }, {
+    group = self.augroup,
+    callback = function()
+      if api.nvim_get_current_tabpage() ~= self.tab then
+        return
+      end
+      -- After the event: a refresh may close and split windows, which is not safe to do
+      -- inside `TabEnter`.
+      vim.schedule(function()
+        if self:is_valid() and api.nvim_get_current_tabpage() == self.tab then
+          self:refresh()
+        end
+      end)
+    end,
+  })
 end
 
 function View:map_panel()
@@ -400,6 +481,22 @@ function View:diff_win(side)
   return file.scene.wins[side]
 end
 
+--- The layout a file opens in: the one it was left in, else unified for a file that exists
+--- on one side only, else `config.layout`.
+---@param entry NvimDiff.FileEntry
+---@return NvimDiff.Layout
+function View:layout_for(entry)
+  local remembered = self.layouts[entry]
+  if remembered then
+    return remembered
+  end
+  local status = entry.change.status
+  if status == "A" or status == "D" or status == "?" then
+    return "unified"
+  end
+  return config.get().layout
+end
+
 ---@param entry NvimDiff.FileEntry
 function View:show_diff(entry)
   local old, problem = self:read_side(entry, "old")
@@ -415,7 +512,7 @@ function View:show_diff(entry)
 
   local d = line_diff.diff(old, new, { algorithm = config.get().diff.algorithm })
   self:clear_area()
-  local layout = self.layouts[entry] or config.get().layout
+  local layout = self:layout_for(entry)
   local wins = self:area_windows(layout == "unified" and 1 or 2)
   local old_path = entry.oldpath or entry.path
   self.file = fileview.open({
@@ -568,9 +665,9 @@ function View:refresh(changes)
   end
   if not changes then
     local err
-    changes, err = files.diff(self.repo, self.left, self.right)
+    changes, err = files.diff(self.repo, self.left, self.right, { paths = self.paths })
     if not changes then
-      require("nvim-diff.core.log").error("refresh failed: %s", err and err.message or "?")
+      log.error("refresh failed: %s", err and err.message or "?")
       return nil
     end
   end
@@ -606,10 +703,40 @@ function View:refresh(changes)
   return ops
 end
 
+--- Flip a branch diff between merge-base (`a...b`, what a PR shows) and tip-to-tip
+--- (`a..b`, what a rebase brings in), then re-list. Files the flip does not touch keep
+--- their state and their open diff.
+---@return boolean flipped False, with a warning, when the view has no range to flip.
+function View:toggle_range()
+  if not self:is_valid() then
+    return false
+  end
+  if not self.range or self.range.spec.mode == "single" then
+    log.warn("this diff is not between two revisions; there is no merge-base to flip")
+    return false
+  end
+  local range, err = revparse.toggle(self.repo, self.range, self.resolve_opts)
+  if not range then
+    log.error("cannot flip the range: %s", err and err.message or "?")
+    return false
+  end
+  self.range, self.left, self.right = range, range.left, range.right
+  self.title = title_of(range, range.left, range.right)
+  self:refresh()
+  return true
+end
+
 --- Close the view: its diff, its panel and its tabpage. Idempotent.
 function View:close()
   if self.closed then
     return
+  end
+  if by_tab[self.tab] == self then
+    by_tab[self.tab] = nil
+  end
+  if self.augroup then
+    pcall(api.nvim_del_augroup_by_id, self.augroup)
+    self.augroup = nil
   end
   if self.panel:is_open() then
     event.emit_in({ win = self.panel.win, buf = self.panel.buf }, event.events.VIEW_CLOSED, self)

@@ -21,6 +21,16 @@ function M.setup(opts)
   return config
 end
 
+--- Open a working-tree or branch diff in a new tabpage — the Lua form of `:NvimDiffOpen`.
+---
+---     require("nvim-diff").open({ range = "main...feature" })
+---@param opts? NvimDiff.OpenOpts Omitted: `HEAD` against the worktree.
+---@return NvimDiff.DiffView? view
+---@return string? err Why nothing opened.
+function M.open(opts)
+  return require("nvim-diff.commands.diff").open(opts)
+end
+
 --- Whether the plugin can run here. Cheap; `:checkhealth nvim-diff` explains the failures.
 ---@return boolean ok
 ---@return string? reason

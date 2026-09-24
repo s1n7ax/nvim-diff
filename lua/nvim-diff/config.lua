@@ -56,6 +56,8 @@ local M = {}
 ---@class NvimDiff.Config.ViewKeymaps
 ---@field next_file NvimDiff.Config.Key In the panel and in the diff panes.
 ---@field prev_file NvimDiff.Config.Key
+--- Flip a branch diff between merge-base (`a...b`) and tip-to-tip (`a..b`).
+---@field toggle_range NvimDiff.Config.Key
 
 ---@class NvimDiff.Config.Keymaps
 ---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
@@ -131,6 +133,7 @@ local defaults = {
     view = {
       next_file = "<Tab>",
       prev_file = "<S-Tab>",
+      toggle_range = "gm",
     },
   },
 
@@ -198,6 +201,7 @@ local schema = {
     view = {
       next_file = KEY,
       prev_file = KEY,
+      toggle_range = KEY,
     },
   },
 
