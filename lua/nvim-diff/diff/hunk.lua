@@ -64,10 +64,12 @@ local M = {}
 ---@field count integer
 ---@field row integer Display row of the first filler row.
 
---- Changed byte ranges, per side, keyed by line number. A line has an entry exactly when it
---- is on a `changed` row (the list may be empty: text purely inserted into a line leaves
---- nothing to light up on the old side). `added` and `deleted` lines never have one — a
---- wholly new line is uniform colour. Spans are 0-based, end-exclusive byte columns.
+--- Changed byte ranges, per side, keyed by line number. Every line on a `changed` row has an
+--- entry (the list may be empty: text purely inserted into a line leaves nothing to light up
+--- on the old side). From the line engine, `added` and `deleted` lines never have one — a
+--- wholly new line is uniform colour; the structural engine gives one to an added or deleted
+--- line only when some, not all, of its syntax is new. Spans are 0-based, end-exclusive
+--- byte columns, ascending.
 ---@class NvimDiff.Tokens
 ---@field old table<integer, NvimDiff.Diff.Span[]>
 ---@field new table<integer, NvimDiff.Diff.Span[]>

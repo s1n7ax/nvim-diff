@@ -11,6 +11,13 @@
 --- new scene opens with the old scene's current folds (what was expanded stays expanded)
 --- and the same base to collapse back to.
 ---
+--- A second key flips the diff mode: structural (treesitter, `diff/structural.lua`; the
+--- default when `diff.structural` is on) or raw line diff. Both are diffs of the same lines
+--- with the same rows, so the flip repaints the scene in place rather than rebuilding it.
+--- The structural diff is computed on first need, and when it cannot be (no parser, a
+--- syntax error, the two sides in different languages, over `thresholds.structural_lines`)
+--- the view shows the line diff and says why when asked to flip.
+---
 ---     local view = require("nvim-diff.scene.fileview").open({
 ---       diff = d,
 ---       old = { lines = old_lines, label = "a/foo.lua" },
@@ -20,7 +27,9 @@
 
 local config = require("nvim-diff.config")
 local fold = require("nvim-diff.render.fold")
+local log = require("nvim-diff.core.log")
 local pair = require("nvim-diff.scene.pair")
+local structural = require("nvim-diff.diff.structural")
 local unified = require("nvim-diff.scene.unified")
 local window = require("nvim-diff.scene.window")
 
@@ -30,11 +39,17 @@ local M = {}
 
 ---@alias NvimDiff.Layout "side_by_side"|"unified"
 
+--- Which diff a view shows: syntax-aware, or the raw line diff.
+---@alias NvimDiff.DiffMode "structural"|"line"
+
 ---@class NvimDiff.FileViewSpec
----@field diff NvimDiff.Diff
+---@field diff NvimDiff.Diff The line diff of `old.lines` and `new.lines`.
 ---@field old NvimDiff.PairSide
 ---@field new NvimDiff.PairSide
 ---@field layout? NvimDiff.Layout Default: `config.layout`.
+--- Default: `"structural"` when `diff.structural` is on. A structural diff that cannot be
+--- computed opens as `"line"`.
+---@field mode? NvimDiff.DiffMode
 --- Windows to open in: `{ old, new }` for side-by-side, `{ win }` for unified. Omitted: a
 --- new tabpage.
 ---@field wins? { old?: integer, new?: integer, win?: integer }
@@ -47,6 +62,10 @@ local M = {}
 
 ---@class NvimDiff.FileView
 ---@field layout NvimDiff.Layout
+---@field mode NvimDiff.DiffMode
+--- The line diff, and the structural one once computed (`false`: it cannot be).
+---@field diffs { line: NvimDiff.Diff, structural?: NvimDiff.Diff|false }
+---@field structural_reason? string Why there is no structural diff.
 ---@field scene NvimDiff.Pair|NvimDiff.Unified
 ---@field private spec NvimDiff.FileViewSpec
 ---@field private blocks table<any, NvimDiff.Block>
@@ -67,13 +86,16 @@ View.__index = View
 ---@return NvimDiff.FileView
 function M.open(spec)
   local layout = spec.layout or config.get().layout
+  local mode = spec.mode or (config.get().diff.structural and "structural" or "line")
   local self = setmetatable({
     spec = spec,
     layout = layout,
+    diffs = { line = spec.diff },
     blocks = {},
     block_order = {},
     side = "new",
   }, View)
+  self.mode = mode == "structural" and self:structural_diff() and "structural" or "line"
   local wins = spec.wins or {}
   if layout == "unified" then
     self:open_unified(wins.win)
@@ -82,6 +104,39 @@ function M.open(spec)
   end
   self:notify()
   return self
+end
+
+--- The structural diff, computed on first call; nil when it cannot be, with the reason
+--- in `structural_reason`.
+---@return NvimDiff.Diff?
+function View:structural_diff()
+  if self.diffs.structural == nil then
+    local s = self.spec
+    local lang = s.new.lang or s.old.lang
+    local why
+    local d
+    if not lang then
+      why = "no treesitter parser for this file"
+    elseif s.old.lang and s.new.lang and s.old.lang ~= s.new.lang then
+      why = ("the sides are different languages (%s, %s)"):format(s.old.lang, s.new.lang)
+    else
+      local c = config.get()
+      d, why = structural.diff(s.diff, s.old.lines, s.new.lines, lang, {
+        algorithm = c.diff.algorithm,
+        max_lines = c.thresholds.structural_lines,
+        normalize_comments = c.diff.normalize_comment_whitespace,
+      })
+    end
+    self.diffs.structural = d or false
+    self.structural_reason = why
+  end
+  return self.diffs.structural or nil
+end
+
+--- The diff showing.
+---@return NvimDiff.Diff
+function View:diff()
+  return self.diffs[self.mode] or self.diffs.line
 end
 
 --- Tell the owner a scene is up.
@@ -113,7 +168,7 @@ end
 ---@param folds? NvimDiff.Fold[] Folds to carry over from the scene being replaced.
 function View:open_unified(win, folds)
   local s = self.spec
-  self.scene = unified.open({ diff = s.diff, old = s.old, new = s.new, win = win, fold = s.fold, folds = folds })
+  self.scene = unified.open({ diff = self:diff(), old = s.old, new = s.new, win = win, fold = s.fold, folds = folds })
   self:after_open({ self.scene.buf })
 end
 
@@ -121,7 +176,7 @@ end
 ---@param folds? NvimDiff.Fold[] Folds to carry over from the scene being replaced.
 function View:open_pair(wins, folds)
   local s = self.spec
-  self.scene = pair.open({ diff = s.diff, old = s.old, new = s.new, wins = wins, fold = s.fold, folds = folds })
+  self.scene = pair.open({ diff = self:diff(), old = s.old, new = s.new, wins = wins, fold = s.fold, folds = folds })
   self:after_open({ self.scene.bufs.old, self.scene.bufs.new })
 end
 
@@ -131,12 +186,17 @@ function View:after_open(bufs)
   for _, id in ipairs(self.block_order) do
     self.scene:set_block(id, self.blocks[id])
   end
-  local key = config.get().layout_keymaps.toggle
-  if type(key) == "string" then
-    for _, buf in ipairs(bufs) do
-      vim.keymap.set("n", key, function()
+  local keys = config.get().layout_keymaps
+  for _, buf in ipairs(bufs) do
+    if type(keys.toggle) == "string" then
+      vim.keymap.set("n", keys.toggle, function()
         self:toggle()
       end, { buffer = buf, nowait = true, desc = "nvim-diff: toggle side-by-side / unified" })
+    end
+    if type(keys.toggle_structural) == "string" then
+      vim.keymap.set("n", keys.toggle_structural, function()
+        self:toggle_mode()
+      end, { buffer = buf, nowait = true, desc = "nvim-diff: toggle structural / line diff" })
     end
   end
 end
@@ -253,6 +313,40 @@ function View:set_layout(layout)
     place_pair(p, at.side, bl, at.winline)
   end
   self:notify()
+end
+
+--- Flip between the structural and the line diff.
+---@return boolean ok False when the structural diff cannot be shown (see `set_mode`).
+function View:toggle_mode()
+  return (self:set_mode(self.mode == "structural" and "line" or "structural"))
+end
+
+--- Show the `mode` diff, repainting the scene in place: same buffers, windows and cursor,
+--- context folds as they were, the new diff's reformats folded. A no-op when it already
+--- shows or the view is closed. Asking for structural where it cannot be computed warns
+--- with the reason and keeps the line diff.
+---@param mode NvimDiff.DiffMode
+---@return boolean ok
+---@return string? reason Why not, when not ok.
+function View:set_mode(mode)
+  if self:is_closed() then
+    return false, "closed"
+  end
+  if mode == self.mode then
+    return true
+  end
+  local d = self.diffs.line
+  if mode == "structural" then
+    d = self:structural_diff()
+  end
+  if not d then
+    log.warn("structural diff unavailable: %s", self.structural_reason)
+    return false, self.structural_reason
+  end
+  self.mode = mode
+  self.scene:set_diff(d)
+  self:notify()
+  return true
 end
 
 --- Insert (or replace) rows after display row `block.row`, in whichever layout is showing,

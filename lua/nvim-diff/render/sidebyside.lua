@@ -117,7 +117,9 @@ local function paint_lines(buf, diff, side)
       if lnum then
         -- Buffer row (0-based) of file line `lnum` is `lnum`: the header is row 0.
         line_mark(buf, lnum, groups.line)
-        for _, span in ipairs(r.kind == "changed" and tokens[lnum] or {}) do
+        -- The line engine sets tokens on `changed` rows only; the structural engine may
+        -- also set them on an added or deleted line that is partly new.
+        for _, span in ipairs(tokens[lnum] or {}) do
           api.nvim_buf_set_extmark(buf, M.ns, lnum, span[1], {
             end_row = lnum,
             end_col = span[2],

@@ -35,6 +35,7 @@ local M = {}
 --- Keys of the layout toggle, buffer-local to diff panes. `false` disables a key.
 ---@class NvimDiff.Config.LayoutKeymaps
 ---@field toggle string|false Flip the current file between side-by-side and unified.
+---@field toggle_structural string|false Flip the current file between structural and line diff.
 
 ---@class NvimDiff.Config.Log
 ---@field level "trace"|"debug"|"info"|"warn"|"error"|"off"
@@ -81,6 +82,8 @@ local defaults = {
   -- diffview's cycle-layout key, so muscle memory carries over.
   layout_keymaps = {
     toggle = "g<C-x>",
+    -- "go structural"; plain `gs` only sleeps.
+    toggle_structural = "gs",
   },
 
   diff = {
@@ -149,6 +152,7 @@ local schema = {
   layout = { type = "string", one_of = { "side_by_side", "unified" } },
   layout_keymaps = {
     toggle = { type = { "string", "boolean" }, keymap = true },
+    toggle_structural = { type = { "string", "boolean" }, keymap = true },
   },
 
   diff = {
