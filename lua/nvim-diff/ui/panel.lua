@@ -8,6 +8,10 @@
 --- Layout, top to bottom: the title, a counts line (`12 files  +340 -120`, plus
 --- `3/7 viewed` in a review), a notice line when the list is summarised, then one row per
 --- directory or file. The cursor is kept off the header lines.
+---
+--- The history view reuses the window and buffer with its own rows: a panel along the
+--- bottom (`position = "bottom"`), drawn through `draw` and grown or patched through
+--- `splice` so a long history never costs a full redraw per batch.
 
 local hl = require("nvim-diff.ui.hl")
 
@@ -73,6 +77,8 @@ end
 ---@field buf integer
 ---@field win? integer
 ---@field width integer
+---@field height? integer For a panel at the bottom.
+---@field position "left"|"bottom"
 ---@field rows table<integer, NvimDiff.TreeRow> Buffer line to row.
 ---@field first_row integer Buffer line of the first row.
 ---@field model? NvimDiff.PanelModel
@@ -80,7 +86,9 @@ local Panel = {}
 Panel.__index = Panel
 
 ---@class NvimDiff.PanelOpts
----@field width integer
+---@field width integer Columns, for a panel on the left.
+---@field height? integer Rows, for a panel at the bottom.
+---@field position? "left"|"bottom" Defaults to `"left"`.
 
 --- Create the panel's buffer. No window yet; see `open`.
 ---@param opts NvimDiff.PanelOpts
@@ -100,7 +108,14 @@ function M.new(opts)
   end
   api.nvim_buf_set_name(buf, "nvim-diff://panel/" .. buf)
   api.nvim_set_option_value("filetype", "nvim-diff-panel", { buf = buf })
-  local self = setmetatable({ buf = buf, width = opts.width, rows = {}, first_row = 1 }, Panel)
+  local self = setmetatable({
+    buf = buf,
+    width = opts.width,
+    height = opts.height,
+    position = opts.position or "left",
+    rows = {},
+    first_row = 1,
+  }, Panel)
 
   api.nvim_create_autocmd("CursorMoved", {
     buffer = buf,
@@ -111,13 +126,23 @@ function M.new(opts)
   return self
 end
 
---- Show the panel in a new window split to the left of `anchor`, `width` columns wide.
+--- Show the panel in a new window split to the left of `anchor`, `width` columns wide — or,
+--- for a bottom panel, below it, `height` rows high.
 ---@param anchor integer
 ---@return integer win
 function Panel:open(anchor)
-  local win = api.nvim_open_win(self.buf, false, { split = "left", win = anchor, width = self.width })
+  local win
+  if self.position == "bottom" then
+    win = api.nvim_open_win(self.buf, false, { split = "below", win = anchor, height = self.height })
+  else
+    win = api.nvim_open_win(self.buf, false, { split = "left", win = anchor, width = self.width })
+  end
   for name, value in pairs(M.WIN_OPTIONS) do
     api.nvim_set_option_value(name, value, { win = win, scope = "local" })
+  end
+  if self.position == "bottom" then
+    api.nvim_set_option_value("winfixwidth", false, { win = win, scope = "local" })
+    api.nvim_set_option_value("winfixheight", true, { win = win, scope = "local" })
   end
   api.nvim_set_option_value("winfixbuf", true, { win = win, scope = "local" })
   hl.apply_window(win)
@@ -130,9 +155,15 @@ function Panel:is_open()
   return self.win ~= nil and api.nvim_win_is_valid(self.win) and api.nvim_win_get_buf(self.win) == self.buf
 end
 
---- Put the panel back at its width, e.g. after a window next to it was split.
+--- Put the panel back at its width (a bottom panel: its height), e.g. after a window next
+--- to it was split.
 function Panel:fix_width()
-  if self:is_open() then
+  if not self:is_open() then
+    return
+  end
+  if self.position == "bottom" then
+    api.nvim_win_set_height(self.win, self.height)
+  else
     api.nvim_win_set_width(self.win, self.width)
   end
 end
@@ -168,6 +199,9 @@ local function put_stats(l, additions, deletions)
   put(l, " ")
   put(l, "-" .. M.thousands(deletions or 0), "NvimDiffPanelDeletions")
 end
+
+-- The line builders, for other panels drawing through `Panel:draw`.
+M.line, M.put, M.put_stats, M.STATUS_HL = line, put, put_stats, STATUS_HL
 
 ---@param entries NvimDiff.FileEntry[]
 ---@return boolean
@@ -270,30 +304,79 @@ function Panel:render(model)
   local flat = model.listing == "flat"
 
   local lines = header(model)
-  self.first_row = #lines + 1
-  self.rows = {}
+  local first_row = #lines + 1
+  local rows = {}
   for _, row in ipairs(model.tree.rows) do
     lines[#lines + 1] = row_line(row, review, flat)
-    self.rows[#lines] = row
+    rows[#lines] = row
   end
+  self:draw(lines, rows, first_row, model.current)
+end
 
+--- Write built lines into the buffer. `rows` maps a buffer line to the row it shows; a row
+--- with an `entry` is what `line_of`/`set_current` find. Lines above `first_row` are header
+--- the cursor is kept off.
+---@param lines NvimDiff.PanelLine[]
+---@param rows table<integer, { entry?: table }>
+---@param first_row integer
+---@param current? table
+function Panel:draw(lines, rows, first_row, current)
+  self.rows, self.first_row = rows, first_row
+  self:write(0, -1, lines)
+  self:set_current(current)
+  self:clamp_cursor()
+end
+
+--- Replace buffer lines `first` up to (not including) `last` with `lines` — `first == last`
+--- inserts — keeping every other line's row and highlights. For a panel that grows or
+--- changes in one place (a history streaming in, one commit folding) without paying for a
+--- full redraw. `rows[i]` is the row `lines[i]` shows, if any. The current mark is left to
+--- the caller (`set_current`).
+---@param first integer 1-based.
+---@param last integer
+---@param lines NvimDiff.PanelLine[] At least one.
+---@param rows table<integer, table>
+function Panel:splice(first, last, lines, rows)
+  local shift = #lines - (last - first)
+  local moved = {}
+  for lnum, row in pairs(self.rows) do
+    if lnum < first then
+      moved[lnum] = row
+    elseif lnum >= last then
+      moved[lnum + shift] = row
+    end
+  end
+  for i = 1, #lines do
+    moved[first + i - 1] = rows[i]
+  end
+  self.rows = moved
+  self:write(first - 1, last - 1, lines)
+  self:clamp_cursor()
+end
+
+--- Set buffer lines `start..end_` (0-based, end-exclusive, -1 = to the end) to `lines`,
+--- with their highlights.
+---@private
+---@param start integer
+---@param end_ integer
+---@param lines NvimDiff.PanelLine[]
+function Panel:write(start, end_, lines)
   local text = {}
   for i, l in ipairs(lines) do
     text[i] = table.concat(l.text)
   end
   api.nvim_set_option_value("modifiable", true, { buf = self.buf })
-  api.nvim_buf_set_lines(self.buf, 0, -1, false, text)
+  api.nvim_buf_set_lines(self.buf, start, end_, false, text)
   api.nvim_set_option_value("modifiable", false, { buf = self.buf })
   api.nvim_set_option_value("modified", false, { buf = self.buf })
 
-  api.nvim_buf_clear_namespace(self.buf, M.ns, 0, -1)
+  -- Marks on replaced lines collapse onto the first new one; clear them with the rest.
+  api.nvim_buf_clear_namespace(self.buf, M.ns, start, start + #lines)
   for i, l in ipairs(lines) do
     for _, h in ipairs(l.hls) do
-      api.nvim_buf_set_extmark(self.buf, M.ns, i - 1, h[1], { end_col = h[2], hl_group = h[3], priority = 150 })
+      api.nvim_buf_set_extmark(self.buf, M.ns, start + i - 1, h[1], { end_col = h[2], hl_group = h[3], priority = 150 })
     end
   end
-  self:set_current(model.current)
-  self:clamp_cursor()
 end
 
 --- The row shown on buffer line `lnum`.
@@ -313,11 +396,11 @@ function Panel:cursor_row()
 end
 
 --- Buffer line showing `entry`, or nil when it is not visible.
----@param entry NvimDiff.FileEntry
+---@param entry table A `FileEntry`, or whatever another panel's rows carry as `entry`.
 ---@return integer?
 function Panel:line_of(entry)
   for lnum, row in pairs(self.rows) do
-    if row.kind == "file" and row.entry == entry then
+    if row.entry == entry then
       return lnum
     end
   end

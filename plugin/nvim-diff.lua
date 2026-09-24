@@ -9,3 +9,11 @@ if vim.g.loaded_nvim_diff then
   return
 end
 vim.g.loaded_nvim_diff = 1
+
+vim.api.nvim_create_user_command("NvimDiffHistory", function(args)
+  require("nvim-diff.views.history").command(args.args)
+end, {
+  nargs = "?",
+  complete = "file",
+  desc = "nvim-diff: commit history of a file or directory (% = current file), or of the repository",
+})

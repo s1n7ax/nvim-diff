@@ -65,6 +65,11 @@ require("nvim-diff").setup({
     width = 35,
   },
 
+  history = {
+    follow = true,                      -- a single file's history follows renames
+    height = 16,                        -- rows of the commit panel under the diff
+  },
+
   keymaps = {                           -- each a key, or false for none
     panel = {
       select = "<CR>",                  -- open the file / fold the directory; again on a deferred file: load it
@@ -81,6 +86,15 @@ require("nvim-diff").setup({
 
 An option that is misspelled or of the wrong type is reported by `setup()` itself, with
 the full path of the offending key.
+
+## File history
+
+`:NvimDiffHistory [path]` opens the commits that touched a file or directory (`%` is the
+current file), or the whole repository when no path is given, in a panel under the diff.
+Each commit's file is diffed against the commit's first parent. A single file's history
+follows renames and marks the commit where the name changed. `<CR>` opens a commit (or
+folds a directory/repository commit to its files), `<Tab>`/`<S-Tab>` step through the
+files of every commit, `R` reads the history again.
 
 ## Highlight groups
 
@@ -103,11 +117,11 @@ lua/nvim-diff/
   health.lua  :checkhealth nvim-diff
   core/       event (the internal bus), log, job (vim.system + cancellable tasks), path
   ui/         hl (highlight groups and the private namespace), tree, panel
-  git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
+  git/        cmd, error, repo, rev, revparse, files, blob, worktree, log; conflict to come
   diff/       hunk, line, inline, structural, entry
   scene/      buffer, window, pair, unified, fileview, scrollsync, folds, entry
   render/     rowmap, sidebyside, unified, fold
-  views/      diff; history, conflict, review to come
+  views/      diff, history; conflict, review to come
   github/     gh, query, read, write
   review/     session, thread, threadview, sidelist, viewed
 ```

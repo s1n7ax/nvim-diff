@@ -286,6 +286,15 @@ function View:buf_name(at, git_path)
   return vim.fn.bufexists(name) == 0 and name or nil
 end
 
+--- The two revisions `entry` is diffed between. The view's own pair here; a history view
+--- gives each commit's entries that commit and its parent.
+---@param _entry NvimDiff.FileEntry
+---@return NvimDiff.Git.Rev left
+---@return NvimDiff.Git.Rev right
+function View:sides(_entry)
+  return self.left, self.right
+end
+
 --- Read one side of `entry` as lines.
 ---@param entry NvimDiff.FileEntry
 ---@param side "old"|"new"
@@ -298,7 +307,8 @@ function View:read_side(entry, side)
   elseif side == "new" and c.status == "D" then
     return {}
   end
-  local at = side == "old" and self.left or self.right
+  local left, right = self:sides(entry)
+  local at = side == "old" and left or right
   local git_path = side == "old" and (entry.oldpath or entry.path) or entry.path
   local b, err = blob.read(self.repo, at, git_path)
   if not b then
@@ -418,19 +428,20 @@ function View:show_diff(entry)
   local layout = self.layouts[entry] or config.get().layout
   local wins = self:area_windows(layout == "unified" and 1 or 2)
   local old_path = entry.oldpath or entry.path
+  local left, right = self:sides(entry)
   self.file = fileview.open({
     diff = d,
     layout = layout,
     old = {
       lines = old,
       label = "a/" .. old_path,
-      name = self:buf_name(self.left, old_path),
+      name = self:buf_name(left, old_path),
       lang = lang_for(old_path),
     },
     new = {
       lines = new,
       label = "b/" .. entry.path,
-      name = self:buf_name(self.right, entry.path),
+      name = self:buf_name(right, entry.path),
       lang = lang_for(entry.path),
     },
     wins = layout == "unified" and { win = wins[1] } or { old = wins[1], new = wins[2] },
@@ -631,5 +642,8 @@ function View:close()
     pcall(api.nvim_buf_delete, self.note_buf, { force = true })
   end
 end
+
+--- The view class, for views that build on this one (`views/history.lua`).
+M.View = View
 
 return M
