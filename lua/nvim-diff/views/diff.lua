@@ -9,10 +9,14 @@
 ---     })
 ---     view:next_file()
 ---
---- The area right of the panel shows one of two things: a side-by-side pair
---- (`scene/pair.lua`), or a single note window — for no selection, a binary file, a file
---- over the size threshold, or an error. Changing files closes whatever is there and opens
---- fresh windows beside the panel; the pair owns and closes its own windows.
+--- The area right of the panel shows one of two things: the file's diff, as a
+--- `scene/fileview.lua` (side-by-side or unified, flipped with its toggle key, with context
+--- folding), or a single note window — for no selection, a binary file, a file over the
+--- size threshold, or an error. Changing files closes whatever is there and opens fresh
+--- windows beside the panel; the fileview owns and closes its own windows.
+---
+--- A file opens in `config.layout` until it is flipped; after that, reselecting it in the
+--- same view opens it in the layout it was left in.
 ---
 --- Size threshold: a file whose larger side has more lines than `thresholds.defer_lines`
 --- is listed with its stats and a deferred marker, and selecting it shows a note instead of
@@ -24,8 +28,8 @@ local config = require("nvim-diff.config")
 local entry_mod = require("nvim-diff.scene.entry")
 local event = require("nvim-diff.core.event")
 local files = require("nvim-diff.git.files")
+local fileview = require("nvim-diff.scene.fileview")
 local line_diff = require("nvim-diff.diff.line")
-local pair_mod = require("nvim-diff.scene.pair")
 local panel_mod = require("nvim-diff.ui.panel")
 local path = require("nvim-diff.core.path")
 local rev_mod = require("nvim-diff.git.rev")
@@ -57,7 +61,8 @@ local M = {}
 ---@field panel NvimDiff.Panel
 ---@field tab integer
 ---@field current? NvimDiff.FileEntry
----@field pair? NvimDiff.Pair
+---@field file? NvimDiff.FileView The diff showing, if one is.
+---@field layouts table<NvimDiff.FileEntry, NvimDiff.Layout> Layout each opened file was left in.
 ---@field note_buf integer
 ---@field note_win? integer
 ---@field closed boolean
@@ -118,6 +123,7 @@ function M.open(opts)
     title = opts.title or (rev_mod.display(opts.left) .. " → " .. rev_mod.display(opts.right)),
     listing = opts.listing or cfg.panel.listing,
     collapsed = {},
+    layouts = setmetatable({}, { __mode = "k" }),
     closed = false,
   }, View)
   self.list = entry_mod.list(changes, stamper(self.repo, self.right))
@@ -220,10 +226,10 @@ end
 
 --- Close whatever shows in the area right of the panel.
 function View:clear_area()
-  if self.pair and not self.pair.closed then
-    self.pair:close()
+  if self.file and not self.file:is_closed() then
+    self.file:close()
   end
-  self.pair = nil
+  self.file = nil
   if self.note_win and api.nvim_win_is_valid(self.note_win) then
     api.nvim_set_option_value("winfixbuf", false, { win = self.note_win, scope = "local" })
     pcall(api.nvim_win_close, self.note_win, true)
@@ -315,7 +321,7 @@ function View:select(entry, opts)
     return
   end
   local from = api.nvim_get_current_win()
-  local from_side = self.pair and not self.pair.closed and self.pair:side_of(from) or nil
+  local from_side = self:diff_side(from)
   local from_area = from_side ~= nil or from == self.note_win
 
   self.current = entry
@@ -348,10 +354,8 @@ function View:select(entry, opts)
 
   -- Keep the cursor in the same kind of window it was in.
   if from_area then
-    if self.pair and from_side then
-      api.nvim_set_current_win(self.pair.wins[from_side])
-    elseif self.pair then
-      api.nvim_set_current_win(self.pair.wins.new)
+    if self.file then
+      api.nvim_set_current_win(self:diff_win(from_side or "new"))
     elseif self.note_win then
       api.nvim_set_current_win(self.note_win)
     end
@@ -364,6 +368,36 @@ end
 ---@param entry NvimDiff.FileEntry
 function View:load(entry)
   self:select(entry, { force = true })
+end
+
+--- Which side of the showing diff `win` is: `"old"`/`"new"` for a side-by-side pane, the
+--- cursor's side for the unified pane, nil for any other window.
+---@param win integer
+---@return NvimDiff.Side?
+function View:diff_side(win)
+  local file = self.file
+  if not file or file:is_closed() then
+    return nil
+  end
+  if file.layout == "unified" then
+    if win ~= file.scene.win then
+      return nil
+    end
+    local side = file.scene:cursor_pos()
+    return side or "new"
+  end
+  return file.scene:side_of(win)
+end
+
+--- The showing diff's window for `side`; unified has only one.
+---@param side NvimDiff.Side
+---@return integer
+function View:diff_win(side)
+  local file = assert(self.file)
+  if file.layout == "unified" then
+    return file.scene.win
+  end
+  return file.scene.wins[side]
 end
 
 ---@param entry NvimDiff.FileEntry
@@ -381,10 +415,12 @@ function View:show_diff(entry)
 
   local d = line_diff.diff(old, new, { algorithm = config.get().diff.algorithm })
   self:clear_area()
-  local wins = self:area_windows(2)
+  local layout = self.layouts[entry] or config.get().layout
+  local wins = self:area_windows(layout == "unified" and 1 or 2)
   local old_path = entry.oldpath or entry.path
-  self.pair = pair_mod.open({
+  self.file = fileview.open({
     diff = d,
+    layout = layout,
     old = {
       lines = old,
       label = "a/" .. old_path,
@@ -397,12 +433,24 @@ function View:show_diff(entry)
       name = self:buf_name(self.right, entry.path),
       lang = lang_for(entry.path),
     },
-    wins = { old = wins[1], new = wins[2] },
+    wins = layout == "unified" and { win = wins[1] } or { old = wins[1], new = wins[2] },
+    on_scene = function(file)
+      self:on_scene(entry, file)
+    end,
   })
+end
+
+--- A diff's scene is up — first open or after a flip: map the view keys in its new buffers,
+--- keep the panel at its width (a flip closes or splits a window beside it) and remember
+--- the layout for the file.
+---@param entry NvimDiff.FileEntry
+---@param file NvimDiff.FileView
+function View:on_scene(entry, file)
   self.panel:fix_width()
-  for _, buf in pairs(self.pair.bufs) do
+  for _, buf in ipairs(file:bufs()) do
     self:map_view(buf)
   end
+  self.layouts[entry] = file.layout
 end
 
 --- Unfold every directory holding `entry`, and mark it current in the panel.
@@ -558,7 +606,7 @@ function View:refresh(changes)
   return ops
 end
 
---- Close the view: its pair, its panel and its tabpage. Idempotent.
+--- Close the view: its diff, its panel and its tabpage. Idempotent.
 function View:close()
   if self.closed then
     return

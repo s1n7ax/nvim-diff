@@ -33,6 +33,10 @@ local M = {}
 --- Windows to open in: `{ old, new }` for side-by-side, `{ win }` for unified. Omitted: a
 --- new tabpage.
 ---@field wins? { old?: integer, new?: integer, win?: integer }
+--- Called with the view once its first scene is up, and again after every flip, when the
+--- new scene's buffers and windows are in place. Buffers are new on every flip, so an owner
+--- that maps its own keys in them (the file panel's next/previous file) does it here.
+---@field on_scene? fun(view: NvimDiff.FileView)
 
 ---@class NvimDiff.FileView
 ---@field layout NvimDiff.Layout
@@ -69,7 +73,33 @@ function M.open(spec)
   else
     self:open_pair(wins.old and wins.new and { old = wins.old, new = wins.new } or nil)
   end
+  self:notify()
   return self
+end
+
+--- Tell the owner a scene is up.
+function View:notify()
+  if self.spec.on_scene then
+    self.spec.on_scene(self)
+  end
+end
+
+--- The scene's buffers: `{ old, new }` side-by-side, `{ buf }` unified.
+---@return integer[]
+function View:bufs()
+  if self.layout == "unified" then
+    return { self.scene.buf }
+  end
+  return { self.scene.bufs.old, self.scene.bufs.new }
+end
+
+--- The scene's windows, left to right.
+---@return integer[]
+function View:wins()
+  if self.layout == "unified" then
+    return { self.scene.win }
+  end
+  return { self.scene.wins.old, self.scene.wins.new }
 end
 
 ---@param win? integer
@@ -187,6 +217,7 @@ function View:set_layout(layout)
     end
     place_pair(p, at.side, bl, at.winline)
   end
+  self:notify()
 end
 
 --- Insert (or replace) rows after display row `block.row`, in whichever layout is showing,
