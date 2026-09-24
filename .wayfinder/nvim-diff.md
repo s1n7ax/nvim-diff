@@ -95,8 +95,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: git layer — revs, merge-base, file lists, blobs, worktrees — [result](#result-implement-git-layer)
 - [x] implement: line diff engine and the hunk data model — [result](#result-implement-line-diff-engine-and-the-hunk-data-model)
 - [ ] implement: side-by-side renderer with scroll sync
-- [ ] implement: context folding — separator row, expand 10, expand all
-- [ ] implement: unified renderer and the layout toggle
+- [ ] implement: context folding — separator row, expand 10, expand all — needs: side-by-side renderer with scroll sync
+- [ ] implement: unified renderer and the layout toggle — needs: side-by-side renderer with scroll sync
 - [ ] implement: file panel — list, stats, navigation, size-threshold deferral
 - [ ] implement: working-tree and branch diff entry points
 - [ ] implement: structural diff as the default view, with the raw-line toggle
