@@ -39,6 +39,28 @@ local M = {}
 ---@class NvimDiff.Config.Log
 ---@field level "trace"|"debug"|"info"|"warn"|"error"|"off"
 
+---@class NvimDiff.Config.Panel
+---@field listing "tree"|"flat" How the file panel groups files; toggled per view.
+---@field width integer Columns.
+
+--- A key in `{lhs}` notation, or `false` for no mapping.
+---@alias NvimDiff.Config.Key string|false
+
+---@class NvimDiff.Config.PanelKeymaps
+--- Open the file under the cursor (on a deferred file already showing its note: load it),
+--- or fold/unfold the directory under it.
+---@field select NvimDiff.Config.Key
+---@field toggle_listing NvimDiff.Config.Key Switch between tree and flat.
+---@field refresh NvimDiff.Config.Key Re-list the files.
+
+---@class NvimDiff.Config.ViewKeymaps
+---@field next_file NvimDiff.Config.Key In the panel and in the diff panes.
+---@field prev_file NvimDiff.Config.Key
+
+---@class NvimDiff.Config.Keymaps
+---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
+---@field view NvimDiff.Config.ViewKeymaps Buffer-local to the file panel and every pane of a view.
+
 ---@class NvimDiff.Config
 ---@field layout "side_by_side"|"unified"
 ---@field layout_keymaps NvimDiff.Config.LayoutKeymaps
@@ -50,6 +72,8 @@ local M = {}
 ---@field github NvimDiff.Config.GitHub
 ---@field highlights table<string, vim.api.keyset.highlight|string> Group name to attributes, or to a group to link to.
 ---@field log NvimDiff.Config.Log
+---@field panel NvimDiff.Config.Panel
+---@field keymaps NvimDiff.Config.Keymaps
 
 ---@type NvimDiff.Config
 local defaults = {
@@ -93,6 +117,23 @@ local defaults = {
 
   highlights = {},
 
+  panel = {
+    listing = "tree",
+    width = 35,
+  },
+
+  keymaps = {
+    panel = {
+      select = "<CR>",
+      toggle_listing = "i",
+      refresh = "R",
+    },
+    view = {
+      next_file = "<Tab>",
+      prev_file = "<S-Tab>",
+    },
+  },
+
   log = {
     level = "warn",
   },
@@ -102,6 +143,8 @@ local defaults = {
 --- (a non-empty key string, or `false` to disable).
 --- A table without a `type` key is a branch, and its values are rules for its children.
 --- `free` marks a branch whose keys are user-chosen; `values` then validates each value.
+local KEY = { type = { "string", "boolean" }, key = true }
+
 local schema = {
   layout = { type = "string", one_of = { "side_by_side", "unified" } },
   layout_keymaps = {
@@ -140,6 +183,23 @@ local schema = {
   },
 
   highlights = { free = true, values = { type = { "table", "string" } } },
+
+  panel = {
+    listing = { type = "string", one_of = { "tree", "flat" } },
+    width = { type = "number", integer = true, min = 1 },
+  },
+
+  keymaps = {
+    panel = {
+      select = KEY,
+      toggle_listing = KEY,
+      refresh = KEY,
+    },
+    view = {
+      next_file = KEY,
+      prev_file = KEY,
+    },
+  },
 
   log = {
     level = { type = "string", one_of = { "trace", "debug", "info", "warn", "error", "off" } },
@@ -191,6 +251,9 @@ local function check_leaf(value, rule, path, errors)
   end
   if rule.integer and value % 1 ~= 0 then
     errors[#errors + 1] = ("`%s`: expected a whole number, got %s"):format(path, tostring(value))
+  end
+  if rule.key and value == true then
+    errors[#errors + 1] = ("`%s`: expected a key or false, got true"):format(path)
   end
   if rule.min and value < rule.min then
     errors[#errors + 1] = ("`%s`: expected at least %d, got %s"):format(path, rule.min, tostring(value))

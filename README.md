@@ -59,6 +59,23 @@ require("nvim-diff").setup({
 
   highlights = {},                      -- group name -> attributes, or -> group to link to
   log = { level = "warn" },
+
+  panel = {
+    listing = "tree",                   -- "tree" | "flat"; toggled per view
+    width = 35,
+  },
+
+  keymaps = {                           -- each a key, or false for none
+    panel = {
+      select = "<CR>",                  -- open the file / fold the directory; again on a deferred file: load it
+      toggle_listing = "i",
+      refresh = "R",
+    },
+    view = {                            -- in the panel and in every diff pane
+      next_file = "<Tab>",
+      prev_file = "<S-Tab>",
+    },
+  },
 })
 ```
 
@@ -85,12 +102,12 @@ lua/nvim-diff/
   config.lua  defaults, deep merge, validation
   health.lua  :checkhealth nvim-diff
   core/       event (the internal bus), log, job (vim.system + cancellable tasks), path
-  ui/         hl (highlight groups and the private namespace); render, panel, tree
+  ui/         hl (highlight groups and the private namespace), tree, panel
   git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
   diff/       hunk, line, inline, structural, entry
-  scene/      buffer, window, pair, unified, fileview, scrollsync, folds; entry, view to come
+  scene/      buffer, window, pair, unified, fileview, scrollsync, folds, entry
   render/     rowmap, sidebyside, unified, fold
-  views/      diff, history, conflict, review
+  views/      diff; history, conflict, review to come
   github/     gh, query, read, write
   review/     session, thread, threadview, sidelist, viewed
 ```
