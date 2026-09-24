@@ -70,7 +70,6 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - ~~Whether Neovim 0.12's `vim.async` covers cancellation…~~ Settled for now: `vim.async` exists only on the 0.13 nightly, so `core/job.lua` is a hand-written shim. Revisit when the minimum moves to 0.13.
 
 - Is the "new" pane the **real, editable file buffer** (LSP attached, edits hit disk), or a read-only rendered copy? This decides whether separators and filler could be real buffer text, whether `gd`/rename/code-actions work inside the diff, and whether editing-in-the-diff is a feature at all. Everything decided so far assumes a read-only rendered copy, which is the safe superset.
-- All fold rows in one window share a single background, because the colour comes from the `Folded` remap. The context separator and the reformat separator therefore differ in text only — unknown whether a `foldtext` chunk's own highlight group can carry a background over that remap.
 - Should the normal fold keys (`zo`/`zc`/`zR`/`zM`) open and close context folds, or only the plugin's expand-10 / expand-all keys? They work but desync the panes unless intercepted, and intercepting them surprises people who use folds reflexively.
 - Is a review tab with its own `:tcd` welcome, or intrusive?
 - Exact corrector behaviour under `smoothscroll`, `splitkeep` and horizontal sync (`scrollopt+=hor`, `sidescrolloff`); whether `WinScrolled` alone catches every scroll or `WinResized`/`TabEnter` are also needed.
@@ -86,6 +85,21 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - `smoothscroll`, `splitkeep` and `scrolloff=0` were not exercised by the scroll-sync tests.
 - Which parsers the structural-diff tests run against: the four a `--clean` Neovim has here (c, lua, markdown, vim), or the user's own runtimepath.
 
+- `views/diff.lua` opens a bare pair, so the layout toggle is not reachable from the file panel yet — covered by the new "diff view holds a fileview" step.
+- Unified has no context folding — its own step now. Needs fold ranges over the unified layout or a fold module shared by both layouts.
+- Replaying blocks after a toggle costs one repaint per block (17.7 ms each at 50K lines). A bulk `set_blocks` or blocks in the open spec would fix it.
+- Treesitter over mixed old/new lines in unified can produce ERROR nodes. The structural-diff step may want per-side parse regions.
+- Should the toggle keep `leftcol`? It resets today.
+- A separate key to expand a between-hunk fold from the other end (GitHub-style up/down)? The API has `dir`; only the default is bound.
+- Should the fold scope use treesitter when a parser is attached? The git rule picks up top-level calls like `call(x, y, z)`.
+- Expand-10 rebuilds every fold: 43 ms with 5,000 folds. Rebuilding only the changed fold would be constant-time.
+- `foldopen` motions such as `l` on a band are only caught if they move the cursor; only search is tested.
+- Re-selecting the file already showing reloads it. Should it just focus the pair?
+- `view:close` does not trap `:tabclose` or the user closing the panel.
+- `measure` reads a big side once to count and again to load — cache the count, or add the long-lived `cat-file --batch`.
+- Should the flat listing also summarise above `panel_entries`? `i` there shows every row today.
+- `<Tab>` is `<C-i>` in most terminals, so the `next_file` mapping hides jumplist-forward in the panel and panes.
+
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
@@ -98,10 +112,12 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: git layer — revs, merge-base, file lists, blobs, worktrees — [result](#result-implement-git-layer)
 - [x] implement: line diff engine and the hunk data model — [result](#result-implement-line-diff-engine-and-the-hunk-data-model)
 - [x] implement: side-by-side renderer with scroll sync — [result](#result-implement-side-by-side-renderer-with-scroll-sync)
-- [ ] implement: context folding — separator row, expand 10, expand all — needs: side-by-side renderer with scroll sync
-- [ ] implement: unified renderer and the layout toggle — needs: side-by-side renderer with scroll sync
-- [ ] implement: file panel — list, stats, navigation, size-threshold deferral
-- [ ] implement: working-tree and branch diff entry points
+- [x] implement: context folding — separator row, expand 10, expand all — [result](#result-implement-context-folding)
+- [x] implement: unified renderer and the layout toggle — [result](#result-implement-unified-renderer-and-the-layout-toggle)
+- [x] implement: file panel — list, stats, navigation, size-threshold deferral — [result](#result-implement-file-panel)
+- [ ] implement: diff view holds a fileview, not a bare pair — layout toggle and folds reach the panel's diffs
+- [ ] implement: context folding in the unified layout
+- [ ] implement: working-tree and branch diff entry points — needs: diff view holds a fileview, not a bare pair
 - [ ] implement: structural diff as the default view, with the raw-line toggle
 - [ ] implement: file history panel — commits for file, folder and repo
 - [ ] implement: range compare and line history
@@ -163,7 +179,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Priority band: line background **150**, structural token **250**, both above treesitter's 100. The default extmark priority (4096) is never relied on.
 - Diff highlight groups set **background only, never foreground**, so treesitter's syntax colours survive inside a changed token.
 - Highlight groups live in a private namespace bound with `nvim_win_set_hl_ns`, with global `default = true` groups as the user's override surface, redefined on `ColorScheme` and on `background` change. A namespace survives `:colorscheme` and `:hi clear`; `winhighlight` survives but its targets do not.
-- Context folding uses **real manual folds** with a custom `foldtext`, window-local `fillchars` `fold:═`, and a `Folded` remap for the loud colour — the colour comes from the remap, not the `foldtext` chunk. Expanding rebuilds the fold (`zE` + re-fold) and restores the view on both windows explicitly. Fold open/close is mirrored across panes and `zo`/`zc`/`za`/`zR`/`zM` are intercepted.
+- Context folding uses **real manual folds** with a custom `foldtext`, window-local `fillchars` `fold:·` (the steel-band requirement's `·`; the `═` in the requirement's example text is illustrative), and a `Folded` remap for the loud colour — the colour comes from the remap, not the `foldtext` chunk. Expanding rebuilds the fold (`zE` + re-fold) and restores the view on both windows explicitly. Fold open/close is mirrored across panes and `zo`/`zc`/`za`/`zR`/`zM` are intercepted.
 - `conceal_lines` is ruled out: measured, it breaks scroll sync outright, and a `virt_lines` separator on a concealed line is not drawn.
 - All extmarks are **persistent**; no `nvim_set_decoration_provider`. Ephemeral marks cannot render `virt_lines`, and a decoration provider measured slower at redraw than persistent marks.
 - Marks are applied eagerly and in full. Rendering is viewport-bounded and flat: 50,000 lines with 10,000 changed cost 68 ms to render and 0.049 ms/frame to scroll.
@@ -215,6 +231,25 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - `statuscolumn` is `%W{…?'':v:lnum-1} ` — a `%{}` result drops a leading space. Number width is shared by both panes, minimum 3.
 - Panes get syntax via `vim.treesitter.start` only; `filetype` is never set, so no ftplugin can touch pane window options. Pane windows set `number` (so `statuscolumn` draws), `signcolumn=no`, `nolist`, `nospell` window-locally.
 - Closing either pane closes the whole pair through a scheduled `WinClosed` handler.
+
+- Folding (`render/fold.lua`, `scene/folds.lua`): both panes share one fold list of display-row ranges, so mirroring is structural. Every change rebuilds all folds, restores the acting pane's view, and resyncs. `rowmap.new(diff, blocks, folds)` maps every row of a fold to its one screen row.
+- Separator text: `··· N unchanged lines ··· <scope>` then `·` to the window edge; reformat: `··· reformatted into N lines — no semantic change` (N = new side's lines). The line-number column turns into band fill on a folded row.
+- Scope uses git's default funcname rule (nearest line at/above the fold end starting with a letter, `_` or `$`, minus lone `end`/`fi`), per pane, capped at 60 chars. No treesitter.
+- Context is 3 lines (git `-U3`), never below 1, so no filler hangs off a folded line. A fold hides at least 2 rows. An identical file folds into one band. Top-of-file folds expand from the bottom, others from the top.
+- A reformat fold always opens whole. A comment thread inside a fold splits it; collapse never re-folds a thread's row. Folds keep an `id` so collapse restores the original range.
+- Fold keys: `zo` = +10 (count multiplies) with cursor kept on the band; `zO`/`zv` whole; `zc`/`zC` re-fold; `za`/`zA` toggle; `zR`/`zM` all; `zx`/`zX` reapply; `zE zd zD zf zF zn zN zi` are no-ops. A fold opened by other means (search) is caught on `CursorMoved` and mirrored. Folding is on by default via `pair.open{fold = {context, step}}`; no config keys yet.
+- A `foldtext` chunk's own highlight group **does** override the `Folded` remap, so the reformat separator can take its own colour.
+- Unified order follows git/GitHub: unchanged once (new side's text), each hunk as all old lines then all new lines. No filler, no trailer; header `── <old> → <new> ──`. Unified buffers are unnamed so they never collide with pair buffer names mid-toggle.
+- Unified statuscolumn shows both numbers and a `-`/`+` sign from buffer-variable lists (`b:nvim_diff_old_nr`, `b:nvim_diff_new_nr`, `b:nvim_diff_sign`) — no Lua per drawn row. Fields are `%N(%{…}%)`, never `%N{}`: an empty `%N{}` takes no width.
+- In unified, a block's `old` rows hang under its old line and `new` rows under its new line, unpadded; missing side falls back to the line that exists. Unified reuses the side-by-side namespaces and priority band, and treesitter lang `new.lang or old.lang` over mixed text.
+- `scene/fileview.lua` owns layout + blocks and replays blocks after each flip. The toggle reuses the cursor's window, keeps the cursor's file line and screen row with each layout's row maths, and on an unchanged line returns to the pane last left. Default key `g<C-x>` (diffview's), config `layout_keymaps.toggle`, `false` disables; `config.layout` picks the initial layout.
+- File panel: `scene/entry.lua` (`FileEntry`, keyed morph — deletes first, then keep/update/insert in new order; update keeps `forced`/`viewed`), `ui/tree.lua` (pure), `ui/panel.lua` (draws only), `views/diff.lua` (state + Lua API; fires `view_opened`/`view_closed`). `views.open` is synchronous for now.
+- The line threshold is exact without fetching every blob: added/deleted use numstat counts, others are sized with one `cat-file --batch-check`, and only sides with more bytes than `defer_lines` are read and counted. `entry.lines` nil means "within limit".
+- For a worktree right side the morph stamp includes size and mtime, since `git diff` gives worktree oids as zeros.
+- Changing files closes the pair and splits fresh windows off the panel. The area beside the panel is a pair or one note window (no selection, binary, deferred, read error). A deferred file loads on a second `<CR>` or `view:load`, and stays loaded.
+- Above `panel_entries` the tree starts with every directory folded, roll-up counts and a notice. Tree order: dirs first, bytewise; flat order is git's. Next/prev wrap and unfold ancestors. Focus stays where the action started.
+- Panel row: `M name +a -d`, ` ← oldpath` on rename, `bin`, `[deferred: N lines]`. Review mode (any `viewed ~= nil`) adds a `✓`/`↻` column and `n/m viewed`; `rechanged` = GitHub's DISMISSED.
+- Config gained `panel = {listing="tree", width=35}`, `keymaps.panel = {select="<CR>", toggle_listing="i", refresh="R"}`, `keymaps.view = {next_file="<Tab>", prev_file="<S-Tab>"}`; a key is a string or `false`. The panel buffer is `nvim-diff://panel/<buf>`, `filetype=nvim-diff-panel`. New groups `NvimDiffPanelOldPath`, `NvimDiffPanelSelected`, `NvimDiffPanelStatus{Added,Modified,Deleted,Conflicted}`.
 
 ## Results
 
@@ -1354,3 +1389,33 @@ Built `render/rowmap.lua` (topline/topfill ↔ display row, trailer, blocks), `r
 Measured: 0/2,000 real-keystroke operations misaligned (10 random diffs, `scrolloff` 0/3/5/8, some with 6–12 blocks; `<C-e/y/d/u/f/b>`, `zt/zb/zz`, `H/L/M`, `G/gg`, `{}`, `j/k`, mouse wheel, `<C-w>w`); 0/227 pane switches scrolled the entered pane; with the corrector detached, 127/150 misaligned (the check works). Render: 7 ms at 2K lines, 16 ms at 10K, 79 ms at 50K (41K marks); `sync` ≈ 0.03 ms per call; `set_block` 0.8 / 3.2 / 17.7 ms.
 
 Not built (separate steps): folding, unified layout, file panel, commands. Decisions are under Implementation notes; new fog under Open questions.
+
+### result: implement: context folding
+
+Merged to `main` in `6328b94` (branch `worktree-agent-a43aae0a4be64726d`, commit `0116f25`). `make check`: 231/231 on the branch (31 new); stylua and luacheck clean.
+
+Built `render/fold.lua` (pure: `compute`, `expand`, `restore`, `reveal`, `label`, `foldtext`), `scene/folds.lua` (real manual folds in both panes, fold-key intercepts), fold-aware `rowmap.new(diff, blocks, folds)`, and pair methods `fold_at`, `expand(side, lnum, n?, dir?)`, `expand_all`, `collapse`, `collapse_all`, `set_folds`. Specs `render_fold_spec`, `scene_folds_spec` (13 child-Neovim screen tests, one proving the check catches a one-pane-only fold).
+
+Measured: 0/720 random operations misaligned with fold keys mixed in (85 changed folds), 6 seeds, `scrolloff` 0/3/8. The band's attribute is uniform across the pane width. A `virt_lines` on any line inside a closed fold is not drawn. A `foldtext` chunk highlight overrides the `Folded` remap (open question closed). Cost at 50K lines / 500 folds: open 42 ms folded (14.7 unfolded), expand-10 11.4 ms, expand-all 0.7 ms, collapse-all 4.2 ms; at 5,000 folds expand-10 is 43 ms.
+
+The agent chose `·` as the band fill, following the steel-band requirement over note 155's `fold:═`; note 155 is updated. Decisions are under Implementation notes.
+
+### result: implement: unified renderer and the layout toggle
+
+Merged to `main` in `af3bf90` (branch `worktree-agent-ae3d6209d39e0e28d`, commit `3b30c85`). `make check`: 221/221 on the branch (21 new); 252/252 after merging on top of folding (one README conflict).
+
+Built `render/unified.lua` (pure layout + painting), `scene/unified.lua` (pane with the pair's `Block` API, `cursor_pos`, `jump`, `place`, `close{keep?}`; fires `diff_buf_ready(buf, {layout="unified", unified})`), `scene/fileview.lua` (`open{diff, old, new, layout?, wins?}` → `toggle`, `set_layout`, `set_block`, `remove_block`, `cursor`, `close`). `Pair:close{keep = win}` and `window.scratch()` added. Config `layout_keymaps.toggle = "g<C-x>"`.
+
+Measured: 240 toggles over 8 random diffs (some with 5 blocks) with random scroll/jump keys between — 0 bad screens, cursor never lost its file line. Toggle cost 4 ms at 2K lines, ~19/14 ms at 10K, ~102/92 ms at 50K; scroll 0.072 ms/frame. Found: an empty `%N{}` statuscolumn item takes no width; `%N(%{…}%)` keeps it.
+
+Not built: folding in unified (new step), `view_opened`/`view_closed` from the fileview (belongs to the view). Decisions are under Implementation notes.
+
+### result: implement: file panel
+
+Merged to `main` in `cb12372` (branch `worktree-agent-a05f6814f17c1831d`, commit `26c3c6b`). `make check`: 231/231 on the branch; **283/283 on `main` after all three merges** (one README conflict).
+
+Built `scene/entry.lua` (`FileEntry`, `list`, keyed `morph` returning the edit script, `measure`), `ui/tree.lua`, `ui/panel.lua`, `views/diff.lua` (`open{repo, left, right, changes?, title?, listing?}` → `select`, `load`, `next_file`, `prev_file`, `toggle_dir`, `toggle_listing`, `set_viewed`, `refresh`, `close`), and `git/blob.lua` `sizes`/`line_count`. Specs `ui_tree`, `scene_entry`, `views_diff` (two child-Neovim screen tests), config tests. The view uses only the pair's public API.
+
+Measured with 3,001 changed files (one 60K lines, correctly deferred): `git diff` listing 222 ms, `measure` 102 ms, refresh 63 ms, flat redraw 23 ms, directory fold 10 ms.
+
+Merge gap: `views/diff.lua` holds a bare pair, so the layout toggle does not reach panel diffs yet — added as its own step. Decisions are under Implementation notes.
