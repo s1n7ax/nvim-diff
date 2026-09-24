@@ -133,7 +133,7 @@ describe("views.diff", function()
   it("opens the selected file in a side-by-side pair right of the panel", function()
     open()
     view:select(find(view, "lua/nvim-diff/scene/a.lua"))
-    local pair = assert(view.pair)
+    local pair = assert(view.file.scene)
     expect.eq(
       { "── a/lua/nvim-diff/scene/a.lua ──", "a", "b", "c" },
       api.nvim_buf_get_lines(pair.bufs.old, 0, -1, false)
@@ -162,8 +162,8 @@ describe("views.diff", function()
     local function sides(p)
       view:select(find(view, p))
       return {
-        api.nvim_buf_get_lines(view.pair.bufs.old, 1, -1, false),
-        api.nvim_buf_get_lines(view.pair.bufs.new, 1, -1, false),
+        api.nvim_buf_get_lines(view.file.scene.bufs.old, 1, -1, false),
+        api.nvim_buf_get_lines(view.file.scene.bufs.new, 1, -1, false),
       }
     end
     -- Filler at the end of a side adds an empty trailer line to both panes.
@@ -191,10 +191,10 @@ describe("views.diff", function()
     view:next_file()
     expect.eq("lua/nvim-diff/scene/a.lua", view.current.path)
     -- From a pane, the cursor follows into the new pair's same side.
-    api.nvim_set_current_win(view.pair.wins.old)
+    api.nvim_set_current_win(view.file.scene.wins.old)
     view:next_file()
     expect.eq("lua/nvim-diff/scene/b.lua", view.current.path)
-    expect.eq(view.pair.wins.old, api.nvim_get_current_win())
+    expect.eq(view.file.scene.wins.old, api.nvim_get_current_win())
     -- The panel cursor follows the current file.
     expect.eq(6, api.nvim_win_get_cursor(view.panel.win)[1])
   end)
@@ -205,19 +205,19 @@ describe("views.diff", function()
     expect.eq(true, big.deferred)
     expect.eq(30, big.lines)
     view:select(big)
-    expect.eq(nil, view.pair)
+    expect.eq(nil, view.file)
     local note = api.nvim_buf_get_lines(view.note_buf, 0, -1, false)
     expect.matches("30 lines, over the 20%-line limit", table.concat(note, "\n"))
     expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", view.note_win } } }, vim.fn.winlayout())
 
     view:load(big)
-    expect.truthy(view.pair)
-    expect.eq(31, api.nvim_buf_line_count(view.pair.bufs.new))
+    expect.truthy(view.file)
+    expect.eq(31, api.nvim_buf_line_count(view.file.scene.bufs.new))
     expect.eq("M big.txt +1 -1", panel_lines(view)[10])
     -- Once asked for, it stays loaded when revisited.
     view:next_file()
     view:prev_file()
-    expect.truthy(view.pair)
+    expect.truthy(view.file)
   end)
 
   it("summarises above the panel threshold: every directory starts folded", function()
@@ -288,7 +288,7 @@ describe("views.diff", function()
     local a = find(view, "lua/nvim-diff/scene/a.lua")
     local readme = find(view, "README.md")
     view:select(a)
-    local pair = view.pair
+    local file = view.file
 
     -- Nothing changed: same entries, same pair.
     local ops = assert(view:refresh())
@@ -296,7 +296,7 @@ describe("views.diff", function()
     for _, op in ipairs(ops) do
       expect.eq("keep", op.op, op.entry.path)
     end
-    expect.truthy(view.pair == pair, "an unchanged current file was reopened")
+    expect.truthy(view.file == file, "an unchanged current file was reopened")
 
     -- Another file changes and one appears: the current diff is left alone.
     r:write("README.md", "hello\nthere\n") -- same +1 -0 stats, new content
@@ -310,14 +310,14 @@ describe("views.diff", function()
     expect.eq("insert", kinds["zzz.txt"])
     expect.eq("keep", kinds["lua/nvim-diff/scene/a.lua"])
     expect.truthy(find(view, "README.md") == readme, "the README entry was rebuilt")
-    expect.truthy(view.pair == pair, "an unchanged current file was reopened")
+    expect.truthy(view.file == file, "an unchanged current file was reopened")
     expect.eq("? zzz.txt", panel_lines(view)[#panel_lines(view)])
 
     -- The current file changes: it reloads.
     r:write("lua/nvim-diff/scene/a.lua", "a\nC\nc\n")
     view:refresh()
-    expect.truthy(view.pair ~= pair, "the changed current file was not reloaded")
-    expect.eq("C", api.nvim_buf_get_lines(view.pair.bufs.new, 2, 3, false)[1])
+    expect.truthy(view.file ~= file, "the changed current file was not reloaded")
+    expect.eq("C", api.nvim_buf_get_lines(view.file.scene.bufs.new, 2, 3, false)[1])
     expect.truthy(view.current == a)
 
     -- The current file goes away: the selection moves to what took its place.
@@ -329,7 +329,7 @@ describe("views.diff", function()
   it("recovers when the user closes a pane: the next file opens beside the panel again", function()
     open()
     view:next_file()
-    local pair = view.pair
+    local pair = view.file.scene
     api.nvim_win_close(pair.wins.old, true)
     vim.wait(200, function()
       return pair.closed
@@ -337,10 +337,8 @@ describe("views.diff", function()
     expect.eq(true, pair.closed)
     view:next_file()
     expect.eq("lua/nvim-diff/scene/b.lua", view.current.path)
-    expect.eq(
-      { "row", { { "leaf", view.panel.win }, { "leaf", view.pair.wins.old }, { "leaf", view.pair.wins.new } } },
-      vim.fn.winlayout()
-    )
+    local wins = view.file.scene.wins
+    expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", wins.old }, { "leaf", wins.new } } }, vim.fn.winlayout())
     expect.eq(35, api.nvim_win_get_width(view.panel.win))
   end)
 
@@ -356,7 +354,7 @@ describe("views.diff", function()
     open()
     local v, panel_buf = view, view.panel.buf
     view:next_file()
-    local bufs = { view.pair.bufs.old, view.pair.bufs.new, view.note_buf }
+    local bufs = { view.file.scene.bufs.old, view.file.scene.bufs.new, view.note_buf }
     expect.eq(tabs + 1, #api.nvim_list_tabpages())
     view:close()
     view = nil
@@ -368,6 +366,67 @@ describe("views.diff", function()
       expect.falsy(api.nvim_buf_is_valid(b), "buffer " .. b .. " survived")
     end
     expect.falsy(api.nvim_buf_is_valid(panel_buf))
+  end)
+
+  it("holds a fileview: the layout flips in place beside the panel, keys follow", function()
+    open()
+    view:select(find(view, "lua/nvim-diff/scene/a.lua"))
+    local file = assert(view.file)
+    expect.eq("side_by_side", file.layout)
+    api.nvim_set_current_win(file.scene.wins.new)
+    file:toggle()
+    expect.eq("unified", file.layout)
+    local win = file.scene.win
+    expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", win } } }, vim.fn.winlayout())
+    expect.eq(35, api.nvim_win_get_width(view.panel.win))
+    expect.eq(
+      "── a/lua/nvim-diff/scene/a.lua → b/lua/nvim-diff/scene/a.lua ──",
+      vim.trim(api.nvim_buf_get_lines(file.scene.buf, 0, 1, false)[1])
+    )
+    -- The view's keys reach the new buffer.
+    expect.truthy(api.nvim_buf_call(file.scene.buf, function()
+      return vim.fn.maparg("<Tab>", "n") ~= ""
+    end))
+
+    -- Stepping from the unified pane keeps the cursor in the diff; the next file opens in
+    -- the configured layout, and going back reopens the flipped one flipped.
+    view:next_file()
+    expect.eq("side_by_side", view.file.layout)
+    expect.eq(view.file.scene.wins.new, api.nvim_get_current_win())
+    view:prev_file()
+    expect.eq("unified", view.file.layout)
+    expect.eq(view.file.scene.win, api.nvim_get_current_win())
+    expect.eq(35, api.nvim_win_get_width(view.panel.win))
+
+    -- And back to side-by-side, split beside the panel.
+    view.file:toggle()
+    local p = view.file.scene
+    expect.eq(
+      { "row", { { "leaf", view.panel.win }, { "leaf", p.wins.old }, { "leaf", p.wins.new } } },
+      vim.fn.winlayout()
+    )
+    expect.eq(35, api.nvim_win_get_width(view.panel.win))
+    expect.truthy(api.nvim_buf_call(p.bufs.old, function()
+      return vim.fn.maparg("<Tab>", "n") ~= ""
+    end))
+  end)
+
+  it("opens files unified when config.layout says so", function()
+    config.setup({ thresholds = { defer_lines = 20 }, layout = "unified" })
+    open()
+    view:next_file()
+    expect.eq("unified", view.file.layout)
+    expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", view.file.scene.win } } }, vim.fn.winlayout())
+    -- The cursor stays in the panel; a closed unified pane recovers like a pair does.
+    expect.eq(view.panel.win, api.nvim_get_current_win())
+    local u = view.file.scene
+    api.nvim_win_close(u.win, true)
+    vim.wait(200, function()
+      return u.closed
+    end)
+    expect.eq(true, u.closed)
+    view:next_file()
+    expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", view.file.scene.win } } }, vim.fn.winlayout())
   end)
 end)
 
@@ -422,10 +481,10 @@ describe("views.diff, driven by real keystrokes", function()
     expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.panel.win"))
 
     -- <Tab> from a pane moves to the next file and keeps the cursor in a pane.
-    child:lua("vim.api.nvim_set_current_win(V.pair.wins.new)")
+    child:lua("vim.api.nvim_set_current_win(V.file.scene.wins.new)")
     child:input("<Tab>")
     expect.matches("│ +1 x +│", screen(2)[2])
-    expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.pair.wins.new"))
+    expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.file.scene.wins.new"))
     child:input("<S-Tab>")
     expect.matches("│ +1 a +│ +1 a", screen(2)[2])
 
@@ -477,5 +536,71 @@ describe("views.diff, driven by real keystrokes", function()
     local s = child:screen(12, 12, 1, 35)[1]
     expect.matches("^%? zzz%.txt", s)
     expect.matches("^8 files", child:screen(2, 2, 1, 35)[1])
+  end)
+
+  it("folds context and flips layout with the diff keys in a panel diff", function()
+    local r = gitrepo.new()
+    local long = {}
+    for i = 1, 40 do
+      long[i] = "line " .. i
+    end
+    r:write("long.txt", table.concat(long, "\n") .. "\n")
+    r:write("small.txt", "s\n")
+    local base = r:commit("base")
+    long[20] = "LINE 20"
+    r:write("long.txt", table.concat(long, "\n") .. "\n")
+    r:write("small.txt", "S\n")
+    child = child_mod.spawn()
+    child:lua(
+      [[
+      local root, base = ...
+      vim.o.showtabline = 0
+      local rev = require("nvim-diff.git.rev")
+      _G.V = require("nvim-diff.views.diff").open({
+        repo = require("nvim-diff.git.repo").discover(root),
+        left = rev.commit(base, "main"),
+        right = rev.worktree(),
+      })
+      V:next_file()
+      vim.api.nvim_set_current_win(V.file.scene.wins.new)
+    ]],
+      r.root,
+      base
+    )
+    local function screen(rows)
+      return vim.tbl_map(function(s)
+        return (s:gsub("%s+$", ""))
+      end, child:screen(1, rows, 1, 80))
+    end
+
+    -- Both panes open folded: the top 16 lines behind one band each.
+    local s = screen(3)
+    expect.matches("│·.- 16 unchanged .-│·.- 16 unchanged", s[2])
+    expect.matches("│ +17 line 17 +│ +17 line 17", s[3])
+    -- zo reveals 10 more in both panes.
+    child:input("2Gzo")
+    s = screen(3)
+    expect.matches("│·.- 6 unchanged .-│·.- 6 unchanged", s[2])
+    expect.matches("│ +7 line 7 +│ +7 line 7", s[3])
+
+    -- g<C-x> flips to unified in the same area; the panel keeps its width.
+    child:input("g<C-x>")
+    expect.matches("── a/long%.txt → b/long%.txt ──", screen(1)[1])
+    expect.eq(2, child:lua("return #vim.api.nvim_tabpage_list_wins(0)"))
+    expect.eq(35, child:lua("return vim.api.nvim_win_get_width(V.panel.win)"))
+    expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.file.scene.win"))
+
+    -- <Tab> from the unified pane: the next file opens side-by-side, the cursor in it.
+    child:input("<Tab>")
+    expect.matches("│ *── a/small%.txt ──.*│ *── b/small%.txt ──", screen(1)[1])
+    expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.file.scene.wins.new"))
+    -- <S-Tab> back: long.txt comes back unified, as it was left.
+    child:input("<S-Tab>")
+    expect.matches("── a/long%.txt → b/long%.txt ──", screen(1)[1])
+    -- And g<C-x> takes it back to two panes, folded afresh: a flip does not keep expands.
+    child:input("g<C-x>")
+    s = screen(2)
+    expect.matches("│ *── a/long%.txt ──.*│ *── b/long%.txt ──", s[1])
+    expect.matches("│·.- 16 unchanged .-│·.- 16 unchanged", s[2])
   end)
 end)
