@@ -30,6 +30,9 @@ called.
 ```lua
 require("nvim-diff").setup({
   layout = "side_by_side",              -- "side_by_side" | "unified"
+  layout_keymaps = {
+    toggle = "g<C-x>",                  -- flip the current file's layout; false disables
+  },
 
   diff = {
     structural = true,                  -- treesitter structural diff is the default view
@@ -85,8 +88,8 @@ lua/nvim-diff/
   ui/         hl (highlight groups and the private namespace); render, panel, tree
   git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
   diff/       hunk, line, inline, structural, entry
-  scene/      buffer, window, pair, scrollsync; layout, entry, view to come
-  render/     rowmap, sidebyside; unified, fold to come
+  scene/      buffer, window, pair, unified, fileview, scrollsync; entry, view to come
+  render/     rowmap, sidebyside, unified; fold to come
   views/      diff, history, conflict, review
   github/     gh, query, read, write
   review/     session, thread, threadview, sidelist, viewed
