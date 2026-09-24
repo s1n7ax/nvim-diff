@@ -84,7 +84,7 @@ lua/nvim-diff/
   core/       event (the internal bus), log; job and path join it with the git layer
   ui/         hl (highlight groups and the private namespace); render, panel, tree
   git/        repo, rev, revparse, files, blob, log, conflict, worktree
-  diff/       hunk, line, structural, entry
+  diff/       hunk, line, inline, structural, entry
   scene/      window, buffer, layout, entry, view
   render/     sidebyside, unified, fold
   views/      diff, history, conflict, review
