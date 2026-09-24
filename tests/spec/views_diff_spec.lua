@@ -161,6 +161,11 @@ describe("views.diff", function()
     open()
     local function sides(p)
       view:select(find(view, p))
+      -- A file on one side only opens unified; flip it to read the two sides apart.
+      local status = view.current.change.status
+      local one_sided = status == "A" or status == "D" or status == "?"
+      expect.eq(one_sided and "unified" or "side_by_side", view.file.layout, p)
+      view.file:set_layout("side_by_side")
       return {
         api.nvim_buf_get_lines(view.file.scene.bufs.old, 1, -1, false),
         api.nvim_buf_get_lines(view.file.scene.bufs.new, 1, -1, false),
@@ -190,13 +195,19 @@ describe("views.diff", function()
     expect.eq("untracked.txt", view.current.path)
     view:next_file()
     expect.eq("lua/nvim-diff/scene/a.lua", view.current.path)
-    -- From a pane, the cursor follows into the new pair's same side.
+    -- From a pane, the cursor follows into the next diff: the new pair's same side, or
+    -- the one pane of a file that exists on one side only (b.lua is deleted).
     api.nvim_set_current_win(view.file.scene.wins.old)
     view:next_file()
     expect.eq("lua/nvim-diff/scene/b.lua", view.current.path)
-    expect.eq(view.file.scene.wins.old, api.nvim_get_current_win())
+    expect.eq(view.file.scene.win, api.nvim_get_current_win())
     -- The panel cursor follows the current file.
     expect.eq(6, api.nvim_win_get_cursor(view.panel.win)[1])
+    view:select(find(view, "lua/renamed.lua"))
+    api.nvim_set_current_win(view.file.scene.wins.old)
+    view:next_file()
+    expect.eq("README.md", view.current.path)
+    expect.eq(view.file.scene.wins.old, api.nvim_get_current_win())
   end)
 
   it("shows a deferred file as a note, and loads it only when asked", function()
@@ -335,8 +346,7 @@ describe("views.diff", function()
       return pair.closed
     end)
     expect.eq(true, pair.closed)
-    view:next_file()
-    expect.eq("lua/nvim-diff/scene/b.lua", view.current.path)
+    view:select(find(view, "README.md"))
     local wins = view.file.scene.wins
     expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", wins.old }, { "leaf", wins.new } } }, vim.fn.winlayout())
     expect.eq(35, api.nvim_win_get_width(view.panel.win))
@@ -388,12 +398,12 @@ describe("views.diff", function()
       return vim.fn.maparg("<Tab>", "n") ~= ""
     end))
 
-    -- Stepping from the unified pane keeps the cursor in the diff; the next file opens in
-    -- the configured layout, and going back reopens the flipped one flipped.
-    view:next_file()
+    -- Changing files from the unified pane keeps the cursor in the diff; the next file
+    -- opens in the configured layout, and going back reopens the flipped one flipped.
+    view:select(find(view, "README.md"))
     expect.eq("side_by_side", view.file.layout)
     expect.eq(view.file.scene.wins.new, api.nvim_get_current_win())
-    view:prev_file()
+    view:select(find(view, "lua/nvim-diff/scene/a.lua"))
     expect.eq("unified", view.file.layout)
     expect.eq(view.file.scene.win, api.nvim_get_current_win())
     expect.eq(35, api.nvim_win_get_width(view.panel.win))
@@ -480,11 +490,12 @@ describe("views.diff, driven by real keystrokes", function()
     expect.matches("│ +2 b +│ +2 B", s[3])
     expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.panel.win"))
 
-    -- <Tab> from a pane moves to the next file and keeps the cursor in a pane.
+    -- <Tab> from a pane moves to the next file and keeps the cursor in a pane: b.lua is
+    -- deleted, so it opens as one unified pane.
     child:lua("vim.api.nvim_set_current_win(V.file.scene.wins.new)")
     child:input("<Tab>")
-    expect.matches("│ +1 x +│", screen(2)[2])
-    expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.file.scene.wins.new"))
+    expect.matches("│ +1 +%- x$", screen(2)[2])
+    expect.eq(true, child:lua("return vim.api.nvim_get_current_win() == V.file.scene.win"))
     child:input("<S-Tab>")
     expect.matches("│ +1 a +│ +1 a", screen(2)[2])
 

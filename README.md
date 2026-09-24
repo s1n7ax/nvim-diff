@@ -25,6 +25,24 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 `setup()` is optional — every module falls back to the defaults when it has not been
 called.
 
+## Usage
+
+```
+:NvimDiffOpen                     HEAD against the worktree, untracked files included
+:NvimDiffOpen --cached            HEAD against the index (--staged is the same)
+:NvimDiffOpen main                main against the worktree
+:NvimDiffOpen main...feature      what a PR from feature into main shows (from the merge-base)
+:NvimDiffOpen main..feature       main against feature, tip to tip
+:NvimDiffOpen main feature        as main...feature (revs.merge_base = false: as main..feature)
+:NvimDiffOpen main -- lua/ a.txt  only these paths, relative to the cwd
+:NvimDiffClose                    close the diff view in this tabpage
+```
+
+`--imply-local` shows the files on disk when the right side is `HEAD`'s commit. In a branch
+diff, `gm` flips between merge-base and tip to tip. A diff against the worktree or the index
+re-lists its files when you come back to its tabpage. From Lua:
+`require("nvim-diff").open({ range = "main...feature", paths = { "lua/" } })`.
+
 ## Configuration
 
 ```lua
@@ -74,6 +92,7 @@ require("nvim-diff").setup({
     view = {                            -- in the panel and in every diff pane
       next_file = "<Tab>",
       prev_file = "<S-Tab>",
+      toggle_range = "gm",              -- flip a branch diff: merge-base (a...b) <-> tip to tip (a..b)
     },
   },
 })
@@ -101,6 +120,7 @@ lua/nvim-diff/
   init.lua    setup(), public API, lazy submodule access
   config.lua  defaults, deep merge, validation
   health.lua  :checkhealth nvim-diff
+  commands/   diff (:NvimDiffOpen, :NvimDiffClose)
   core/       event (the internal bus), log, job (vim.system + cancellable tasks), path
   ui/         hl (highlight groups and the private namespace), tree, panel
   git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
