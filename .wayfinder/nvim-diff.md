@@ -100,6 +100,9 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Should the flat listing also summarise above `panel_entries`? `i` there shows every row today.
 - `<Tab>` is `<C-i>` in most terminals, so the `next_file` mapping hides jumplist-forward in the panel and panes.
 
+- Should one layout flip apply to every file in the view (diffview's behaviour) rather than only the current file? Today `<Tab>`-ing through a PR in unified means flipping each file.
+- Should a search or motion into a closed fold leave the cursor on the match? Both layouts jump to the fold's first line today.
+
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
@@ -115,8 +118,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: context folding — separator row, expand 10, expand all — [result](#result-implement-context-folding)
 - [x] implement: unified renderer and the layout toggle — [result](#result-implement-unified-renderer-and-the-layout-toggle)
 - [x] implement: file panel — list, stats, navigation, size-threshold deferral — [result](#result-implement-file-panel)
-- [ ] implement: diff view holds a fileview, not a bare pair — layout toggle and folds reach the panel's diffs
-- [ ] implement: context folding in the unified layout
+- [x] implement: diff view holds a fileview, not a bare pair — layout toggle and folds reach the panel's diffs — [result](#result-implement-diff-view-holds-a-fileview)
+- [x] implement: context folding in the unified layout — [result](#result-implement-context-folding-in-the-unified-layout)
 - [ ] implement: working-tree and branch diff entry points — needs: diff view holds a fileview, not a bare pair
 - [ ] implement: structural diff as the default view, with the raw-line toggle
 - [ ] implement: file history panel — commits for file, folder and repo
@@ -250,6 +253,12 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Above `panel_entries` the tree starts with every directory folded, roll-up counts and a notice. Tree order: dirs first, bytewise; flat order is git's. Next/prev wrap and unfold ancestors. Focus stays where the action started.
 - Panel row: `M name +a -d`, ` ← oldpath` on rename, `bin`, `[deferred: N lines]`. Review mode (any `viewed ~= nil`) adds a `✓`/`↻` column and `n/m viewed`; `rechanged` = GitHub's DISMISSED.
 - Config gained `panel = {listing="tree", width=35}`, `keymaps.panel = {select="<CR>", toggle_listing="i", refresh="R"}`, `keymaps.view = {next_file="<Tab>", prev_file="<S-Tab>"}`; a key is a string or `false`. The panel buffer is `nvim-diff://panel/<buf>`, `filetype=nvim-diff-panel`. New groups `NvimDiffPanelOldPath`, `NvimDiffPanelSelected`, `NvimDiffPanelStatus{Added,Modified,Deleted,Conflicted}`.
+- `views/diff.lua` holds a `scene/fileview.lua` fileview (`view.file`), not a pair. The fileview reports each new scene through one `on_scene(view)` callback (not the event bus — the three-name set stays closed) and exposes `bufs()`/`wins()`; the view re-maps `<Tab>`/`<S-Tab>` and restores the panel width there, since every flip makes new buffers.
+- Layout memory is **per file**, per view: a file opens in `config.layout` until flipped, and reselecting it reopens it in the layout it was left in (weak table keyed by entry; nothing on `FileEntry`, nothing persisted). A unified pane counts as the side of its cursor line (`new` on unchanged lines) for "keep the cursor in the same kind of window".
+- Unified folds the **same display-row fold list** as the pair, one band per fold; a reformat fold covers the hunk's old and new lines together. On by default; `fold = false` turns it off; the fileview forwards `fold` to both layouts. The unified band's scope comes from the new file.
+- Fold state carries across the toggle through a `folds` field in both open specs; collapse targets are recomputed from the diff, so `zc` still restores originals. Reselecting a file (e.g. `<Tab>` away and back) starts folds fresh.
+- On a band the toggle keeps the side last used in side-by-side, falling back to the other side if the fold has no lines there. A cursor inside a closed fold counts as the fold's first line in both layouts. The toggle measures the cursor's screen row with each layout's row maths, not `winline()` — `winline()` ignores `topfill` above a closed fold at the view top and skips comment rows directly above a closed fold.
+- `scene/folds.lua` is shared by both layouts (key handling works on any scene with the fold methods). A comment row hanging inside a closed unified fold is never counted.
 
 ## Results
 
@@ -1419,3 +1428,21 @@ Built `scene/entry.lua` (`FileEntry`, `list`, keyed `morph` returning the edit s
 Measured with 3,001 changed files (one 60K lines, correctly deferred): `git diff` listing 222 ms, `measure` 102 ms, refresh 63 ms, flat redraw 23 ms, directory fold 10 ms.
 
 Merge gap: `views/diff.lua` holds a bare pair, so the layout toggle does not reach panel diffs yet — added as its own step. Decisions are under Implementation notes.
+
+### result: implement: diff view holds a fileview
+
+Merged to `main` in `9535f66` (branch `worktree-agent-ad32b4bbb837dce47`, commit `7a9a604`). `make check`: 286/286 on the branch; **298/298 on `main` after both merges** (one conflict in `scene/fileview.lua`, both sides kept).
+
+`views/diff.lua`'s `pair` became `file`, a fileview; `diff_side(win)`/`diff_win(side)` cover both layouts for cursor, focus-on-file-change and clearing. `scene/fileview.lua` gained `on_scene`, `bufs()`, `wins()`. New specs: flip in place beside the panel (layout, width, keys in new buffers, stepping from unified), `config.layout = "unified"` plus recovering after closing a unified pane, and a child-Neovim keystroke test (fold band in both panes, `zo`, `g<C-x>`, `<Tab>`/`<S-Tab>` across layouts).
+
+Found: folding already reached panel diffs (pairs fold by default); the real gaps were the toggle and next/prev keys vanishing after a flip. In a Lua pattern `·+` repeats only the last byte of `·`; tests use `.-`. Decisions are under Implementation notes; the per-file-vs-whole-view flip is an open question.
+
+### result: implement: context folding in the unified layout
+
+Merged to `main` in `2c0aa1a` (branch `worktree-agent-a364721b2a3fbb2bd`, commit `03c15fb`). `make check`: 295/295 on the branch (12 new).
+
+`render/unified.lua` folds the pair's fold list into contiguous buffer-line runs, band fill over the number/sign column, fold-aware cursor row maths. `scene/unified.lua` gained expand / expand-all / collapse / collapse-all, the fold keys, comment blocks splitting folds, and `winline()`. `scene/folds.lua` made layout-agnostic; the pair gained one method. `scene/fileview.lua` takes `fold` and carries folds across the toggle. New spec `scene_unified_folds_spec` (screen vs model for bands, every fold key, search into a fold, reformat collapse, comment split, folding off, toggle both ways, random run).
+
+Measured: 600 random ops over 6 seeds mixing scroll, fold keys and toggles — 0 bad unified screens, 0/34 toggles changed folds; pair still 0/720 misaligned. At 50K lines / 501 folds: open unified folded 59 ms (47 unfolded), expand-10 3.3 ms, collapse-all 6.4 ms. Found: `winline()` is wrong next to closed folds (see notes); search into a fold already moved the cursor to the fold's first line in the pair, and unified now matches. Two old unified tests pass `fold = false`.
+
+After merging, a stale test comment in `views_diff_spec` claimed a flip drops expands — it was the reselect; fixed in `6bdb619`.
