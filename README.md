@@ -85,8 +85,8 @@ lua/nvim-diff/
   ui/         hl (highlight groups and the private namespace); render, panel, tree
   git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
   diff/       hunk, line, inline, structural, entry
-  scene/      buffer, window, pair, scrollsync; layout, entry, view to come
-  render/     rowmap, sidebyside; unified, fold to come
+  scene/      buffer, window, pair, scrollsync, folds; layout, entry, view to come
+  render/     rowmap, sidebyside, fold; unified to come
   views/      diff, history, conflict, review
   github/     gh, query, read, write
   review/     session, thread, threadview, sidelist, viewed

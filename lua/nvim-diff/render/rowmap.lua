@@ -1,9 +1,11 @@
 --- The view-row map of a two-pane diff: where every buffer line and virtual line of each
---- pane sits on screen, measured in rows from the top of the (unfolded) pane.
+--- pane sits on screen, measured in rows from the top of the pane.
 ---
 --- Both panes have the same view rows, which is what alignment *means*: view row `v` holds
---- the header (`v = 0`), a line of the file, a filler row, or a row of an inserted block
---- (a comment thread and the blank padding opposite it), on each side. The scroll corrector
+--- the header (`v = 0`), a line of the file, a filler row, a row of an inserted block
+--- (a comment thread and the blank padding opposite it), or a separator row standing for a
+--- whole fold (`render/fold.lua`), on each side. Every display row inside a fold has the
+--- fold's view row, so view rows ascend with display rows but not strictly. The scroll corrector
 --- reads one pane's `topline`/`topfill`, turns it into a view row, and asks where the other
 --- pane must put its top to show the same view row.
 ---
@@ -14,6 +16,8 @@
 --- cannot be expressed, and the other pane would scroll further than this one.
 ---
 --- Pure data: no windows, no buffers.
+
+local fold = require("nvim-diff.render.fold")
 
 local M = {}
 
@@ -43,6 +47,8 @@ end
 ---@field diff NvimDiff.Diff
 ---@field trailer boolean Whether both buffers end with the extra trailer line.
 ---@field blocks NvimDiff.Block[] Sorted by `row`, stable.
+---@field folds NvimDiff.Fold[] Sorted, disjoint; no block sits after a row inside one.
+---@field private hidden integer[] `hidden[i]`: rows `folds[1..i]` take out of the view.
 ---@field private block_rows integer[] `block_rows[i]`: rows of `blocks[i]`, i.e. the taller side.
 ---@field private cum integer[] `cum[i]`: rows of `blocks[1..i]`.
 local RowMap = {}
@@ -68,8 +74,9 @@ end
 
 ---@param diff NvimDiff.Diff
 ---@param blocks? NvimDiff.Block[] Any order; sorted here (stably, by `row`).
+---@param folds? NvimDiff.Fold[] Closed folds, sorted and disjoint.
 ---@return NvimDiff.RowMap
-function M.new(diff, blocks)
+function M.new(diff, blocks, folds)
   local sorted = {}
   for i, b in ipairs(blocks or {}) do
     assert(b.row >= 0 and b.row <= diff.rows, "nvim-diff: block row out of range")
@@ -89,12 +96,25 @@ function M.new(diff, blocks)
     total = total + heights[i]
     cum[i] = total
   end
+  folds = folds or {}
+  local hidden, h = {}, 0
+  for i, f in ipairs(folds) do
+    assert(f.first >= 1 and f.first <= f.last and f.last <= diff.rows, "nvim-diff: fold out of range")
+    assert(i == 1 or folds[i - 1].last < f.first, "nvim-diff: folds overlap or are out of order")
+    h = h + f.last - f.first
+    hidden[i] = h
+  end
+  for _, b in ipairs(list) do
+    assert(not fold.find(folds, b.row), "nvim-diff: block inside a fold")
+  end
   return setmetatable({
     diff = diff,
     trailer = M.needs_trailer(diff),
     blocks = list,
     block_rows = heights,
     cum = cum,
+    folds = folds,
+    hidden = hidden,
   }, RowMap)
 end
 
@@ -115,18 +135,45 @@ function RowMap:blocks_before(d)
   return found > 0 and self.cum[found] or 0
 end
 
---- View row of display row `d` (`rows + 1` stands for the trailer).
+--- Display rows folds take out of the view before display row `d`: all but one row of
+--- each fold above it, and the rows of a fold holding `d` above `d`.
+---@param d integer
+---@return integer
+function RowMap:folded_before(d)
+  local folds = self.folds
+  local lo, hi, found = 1, #folds, 0
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    if folds[mid].first <= d then
+      found = mid
+      lo = mid + 1
+    else
+      hi = mid - 1
+    end
+  end
+  if found == 0 then
+    return 0
+  end
+  local f = folds[found]
+  if d <= f.last then
+    return (self.hidden[found - 1] or 0) + d - f.first
+  end
+  return self.hidden[found]
+end
+
+--- View row of display row `d` (`rows + 1` stands for the trailer). Every row of a fold
+--- maps to the fold's one row.
 ---@param d integer
 ---@return integer
 function RowMap:row_view(d)
-  return d + self:blocks_before(d)
+  return d + self:blocks_before(d) - self:folded_before(d)
 end
 
 --- Total view rows in each pane, header and trailer included, blocks after the last row
---- included.
+--- included, each fold counted as one row.
 ---@return integer
 function RowMap:height()
-  return 1 + self.diff.rows + (self.trailer and 1 or 0) + (self.cum[#self.cum] or 0)
+  return 1 + self.diff.rows + (self.trailer and 1 or 0) + (self.cum[#self.cum] or 0) - (self.hidden[#self.hidden] or 0)
 end
 
 --- Buffer line of the file's line `lnum` (either side): the header shifts everything by one.
@@ -216,7 +263,8 @@ function RowMap:view_top(side, v)
     return 1, 0
   end
   local rows = self.diff.rows
-  -- Smallest display row whose view row is >= v; view rows ascend strictly with d.
+  -- Smallest display row whose view row is >= v; view rows ascend with d (strictly
+  -- outside folds), so inside a fold this lands on its first row.
   local lo, hi, d = 1, rows + 1, nil
   while lo <= hi do
     local mid = math.floor((lo + hi) / 2)
