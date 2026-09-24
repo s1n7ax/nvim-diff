@@ -81,9 +81,9 @@ lua/nvim-diff/
   init.lua    setup(), public API, lazy submodule access
   config.lua  defaults, deep merge, validation
   health.lua  :checkhealth nvim-diff
-  core/       event (the internal bus), log; job and path join it with the git layer
+  core/       event (the internal bus), log, job (vim.system + cancellable tasks), path
   ui/         hl (highlight groups and the private namespace); render, panel, tree
-  git/        repo, rev, revparse, files, blob, log, conflict, worktree
+  git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
   diff/       hunk, line, structural, entry
   scene/      window, buffer, layout, entry, view
   render/     sidebyside, unified, fold
