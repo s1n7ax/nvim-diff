@@ -84,7 +84,7 @@ lua/nvim-diff/
   core/       event (the internal bus), log, job (vim.system + cancellable tasks), path
   ui/         hl (highlight groups and the private namespace); render, panel, tree
   git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
-  diff/       hunk, line, structural, entry
+  diff/       hunk, line, inline, structural, entry
   scene/      window, buffer, layout, entry, view
   render/     sidebyside, unified, fold
   views/      diff, history, conflict, review
