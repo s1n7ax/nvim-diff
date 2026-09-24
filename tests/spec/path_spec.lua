@@ -1,0 +1,47 @@
+local t = require("tests.harness")
+local describe, it, expect = t.describe, t.it, t.expect
+
+local path = require("nvim-diff.core.path")
+
+describe("path", function()
+  it("normalizes to an absolute path with no trailing slash", function()
+    expect.eq("/a/c", path.normalize("/a/b/../c/"))
+    expect.eq("/", path.normalize("/"))
+    expect.eq(vim.fs.normalize(vim.uv.cwd()) .. "/x", path.normalize("x"))
+    expect.eq("/base/x", path.normalize("x", "/base"))
+    expect.eq("/abs", path.normalize("/abs", "/base"))
+  end)
+
+  it("joins fragments without doubling separators", function()
+    expect.eq("/a/b/c", path.join("/a/", "/b/", "c"))
+    expect.eq("/a", path.join("/", "a"))
+    expect.eq("a/b", path.join("a", "", "b"))
+  end)
+
+  it("computes relative paths only for descendants", function()
+    expect.eq("b/c", path.relative("/a/b/c", "/a"))
+    expect.eq(".", path.relative("/a", "/a/"))
+    expect.eq(nil, path.relative("/ab/c", "/a"))
+    expect.truthy(path.is_under("/a/b", "/a"))
+    expect.falsy(path.is_under("/ab", "/a"))
+    expect.eq("x", path.relative("/x", "/"))
+  end)
+
+  it("converts to git paths without expanding anything", function()
+    expect.eq("a/b", path.to_git("./a//b/"))
+    expect.eq("~/x", path.to_git("~/x"))
+    expect.eq("/root/a/b", path.from_git("/root", "./a/b"))
+  end)
+
+  it("splits git paths into name and parent", function()
+    expect.eq("c.lua", path.name("a/b/c.lua"))
+    expect.eq("a/b", path.parent("a/b/c.lua"))
+    expect.eq("", path.parent("top.lua"))
+  end)
+
+  it("finds the directory of a file that does not exist yet", function()
+    local dir = vim.fs.normalize(vim.uv.cwd())
+    expect.eq(dir, path.dir_of(dir))
+    expect.eq(dir, path.dir_of(dir .. "/not-written-yet.txt"))
+  end)
+end)

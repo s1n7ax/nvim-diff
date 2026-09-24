@@ -184,12 +184,39 @@ local function check_treesitter()
   end
 end
 
---- Paths of PR worktrees left behind by a crash or `:qa!`.
+--- The lock reason a PR worktree carries while a review has it open. The pid names the
+--- Neovim that owns it, so a second Neovim's startup prune can tell a live review from a
+--- crashed one.
+M.WORKTREE_LOCK_REASON = "nvim-diff pid %d"
+
+--- Whether a worktree lock reason names a Neovim that is still running.
+---@param reason string?
+---@return boolean
+function M.worktree_owner_alive(reason)
+  local pid = tonumber((reason or ""):match("^nvim%-diff pid (%d+)$"))
+  if not pid then
+    return false
+  end
+  if pid == vim.fn.getpid() then
+    return true
+  end
+  -- Signal 0 checks for existence without delivering anything.
+  return vim.uv.kill(pid, 0) == 0
+end
+
+--- Paths of PR worktrees left behind by a crash or `:qa!`: every `nvim-diff/pr-*`
+--- worktree that is unlocked, or locked by a Neovim that is no longer running.
+---@param opts? { cwd?: string } Repository to look in; the cwd when omitted.
 ---@return string[] paths
 ---@return string? err
-function M.orphan_worktrees()
+function M.orphan_worktrees(opts)
+  opts = opts or {}
   local config = require("nvim-diff.config").get()
-  local cmd = { config.git.bin, "--no-optional-locks", "worktree", "list", "--porcelain" }
+  local cmd = { config.git.bin, "--no-optional-locks", "-c", "core.quotePath=false", "worktree", "list", "--porcelain" }
+  if opts.cwd then
+    table.insert(cmd, 2, "-C")
+    table.insert(cmd, 3, opts.cwd)
+  end
   local result = run(cmd, config.git.timeout_ms)
   if not result then
     return {}, "git is unavailable"
@@ -198,11 +225,26 @@ function M.orphan_worktrees()
     return {}, "not inside a git repository"
   end
 
+  return M.parse_orphans(result.stdout or "")
+end
+
+--- The orphan matcher on its own, over `git worktree list --porcelain` output, so
+--- `git/worktree.lua` can fetch the list asynchronously and still share this code.
+---@param porcelain string
+---@return string[] paths
+function M.parse_orphans(porcelain)
   local paths = {}
-  for line in (result.stdout or ""):gmatch("[^\n]+") do
-    local path = line:match("^worktree%s+(.+)$")
+  -- Records are separated by a blank line; `locked` is optional and may carry a reason.
+  for record in (porcelain .. "\n\n"):gmatch("(.-)\n\n") do
+    local path = record:match("^worktree ([^\n]+)")
     if path and path:match("nvim%-diff[/\\]pr%-%w+$") then
-      paths[#paths + 1] = path
+      -- Unlocked, or locked by a Neovim that has gone. A lock anyone else placed is theirs.
+      local locked = record:match("\nlocked") ~= nil
+      local reason = record:match("\nlocked ([^\n]*)")
+      local ours = reason ~= nil and reason:match("^nvim%-diff pid %d+$") ~= nil
+      if not locked or (ours and not M.worktree_owner_alive(reason)) then
+        paths[#paths + 1] = path
+      end
     end
   end
   return paths
