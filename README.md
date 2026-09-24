@@ -85,8 +85,8 @@ lua/nvim-diff/
   ui/         hl (highlight groups and the private namespace); render, panel, tree
   git/        cmd, error, repo, rev, revparse, files, blob, worktree; log, conflict to come
   diff/       hunk, line, inline, structural, entry
-  scene/      window, buffer, layout, entry, view
-  render/     sidebyside, unified, fold
+  scene/      buffer, window, pair, scrollsync; layout, entry, view to come
+  render/     rowmap, sidebyside; unified, fold to come
   views/      diff, history, conflict, review
   github/     gh, query, read, write
   review/     session, thread, threadview, sidelist, viewed
@@ -103,6 +103,12 @@ make health      # :checkhealth nvim-diff with nothing else loaded
 
 Tests need nothing but `nvim` on `$PATH`; `make lint` and `make fmt` need `luacheck` and
 `stylua`.
+
+Scrolling is tested in a second Neovim driven over RPC (`tests/child.lua`): real keys go
+in through `nvim_input` and the screen comes back as text through `screenstring()`.
+Colour is tested through extmarks instead. Keep test screens at or below 80x24 — a
+headless Neovim with no UI attached segfaults on redraw after `lines` or `columns` is
+raised.
 
 ## Licence
 
