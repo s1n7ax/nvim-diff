@@ -597,7 +597,7 @@ describe("views.diff, driven by real keystrokes", function()
     -- <S-Tab> back: long.txt comes back unified, as it was left.
     child:input("<S-Tab>")
     expect.matches("── a/long%.txt → b/long%.txt ──", screen(1)[1])
-    -- And g<C-x> takes it back to two panes, folded afresh: a flip does not keep expands.
+    -- And g<C-x> takes it back to two panes. The zo expand is gone: <S-Tab> reopened the file.
     child:input("g<C-x>")
     s = screen(2)
     expect.matches("│ *── a/long%.txt ──.*│ *── b/long%.txt ──", s[1])
