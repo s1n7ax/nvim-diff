@@ -61,7 +61,9 @@ end
 ---@return string[] old
 ---@return string[] new
 local function sides(view)
-  local scene = assert(view.file).scene
+  -- A file on one side only (the root commit's) opens unified; flip it to read the two sides apart.
+  assert(view.file):set_layout("side_by_side")
+  local scene = view.file.scene
   return api.nvim_buf_get_lines(scene.bufs.old, 0, -1, false), api.nvim_buf_get_lines(scene.bufs.new, 0, -1, false)
 end
 

@@ -122,6 +122,7 @@ function M.open(opts)
     rev_spec = rev_spec,
     start = start,
     layouts = setmetatable({}, { __mode = "k" }),
+    modes = setmetatable({}, { __mode = "k" }),
     closed = false,
     redraw_at = 0,
     redraw_pending = false,
