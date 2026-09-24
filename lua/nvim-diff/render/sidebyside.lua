@@ -14,6 +14,7 @@
 --- All marks are persistent and placed eagerly; no decoration provider (ephemeral marks
 --- cannot draw `virt_lines`).
 
+local fold = require("nvim-diff.render.fold")
 local rowmap = require("nvim-diff.render.rowmap")
 
 local api = vim.api
@@ -59,11 +60,25 @@ end
 ---
 --- Alignment comes from the item's minimum width (`%3{}`), not from `printf` padding:
 --- measured, a `%{}` result loses a leading space, which shifted the digits a column.
+---
+--- On a closed fold the column is part of the separator band instead — the fill in the
+--- separator's colour — so the band runs from column 1 to the window edge.
 ---@param count integer Lines in this side's file.
 ---@param width integer Digits.
 ---@return string
 function M.statuscolumn(count, width)
-  return ("%%#NonText#%%%d{v:virtnum<0||v:lnum==1||v:lnum>%d?'':v:lnum-1}%%#Normal# "):format(width, count + 1)
+  local folded = "v:virtnum==0&&foldclosed(v:lnum)>0"
+  return table.concat({
+    ("%%{%%%s?'%%#NvimDiffContextSeparator#':'%%#NonText#'%%}"):format(folded),
+    ("%%%d{v:virtnum<0||v:lnum==1||v:lnum>%d?'':%s?repeat('%s',%d):v:lnum-1}"):format(
+      width,
+      count + 1,
+      folded,
+      fold.FILL,
+      width
+    ),
+    ("%%{%%%s?'%s':'%%#Normal# '%%}"):format(folded, fold.FILL),
+  })
 end
 
 --- Number column width shared by both panes.
@@ -116,9 +131,28 @@ local function paint_lines(buf, diff, side)
   end
 end
 
+--- The separator of a reformat fold on a side with no lines in it, drawn as one virtual row
+--- in place of the filler: the same band a folded side shows, to the screen edge.
+---@param diff NvimDiff.Diff
+---@param f NvimDiff.Fold
+---@return NvimDiff.VirtLine
+function M.separator_line(diff, f)
+  -- `virt_lines_leftcol` draws over the number column too: fill it as a folded row's
+  -- `statuscolumn` would, so the text starts where the other pane's does.
+  local lead = fold.FILL:rep(M.number_width(diff) + 1)
+  local text = fold.label(diff, f) .. " "
+  local fill = math.max(0, M.filler_width() - vim.fn.strdisplaywidth(lead .. text))
+  return {
+    { lead, "NvimDiffContextSeparator" },
+    { text, fold.group(f) },
+    { fold.FILL:rep(fill), "NvimDiffContextSeparator" },
+  }
+end
+
 --- The virtual rows of one side, grouped by anchor: `{ anchor = <0-based buffer row>,
 --- lines = VirtLine[] }`, ascending. Filler blocks are cut where a block sits inside them,
---- so display order holds within an anchor.
+--- so display order holds within an anchor. Filler inside a closed reformat fold is not
+--- drawn: a side with lines there folds them, a side without shows one separator row.
 ---@param map NvimDiff.RowMap
 ---@param side NvimDiff.Side
 ---@return { anchor: integer, lines: NvimDiff.VirtLine[] }[]
@@ -145,6 +179,16 @@ function M.virt_rows(map, side)
   end
 
   for _, f in ipairs(map.diff.fillers[side]) do
+    -- Filler never straddles a hunk boundary, so its first row says whether it is folded.
+    local fi = fold.find(map.folds, f.row)
+    if fi then
+      local fd = map.folds[fi]
+      if not fold.side_lines(map.diff, fd, side) then
+        flush_blocks(f.row)
+        entries[#entries + 1] = { anchor = f.after, lines = { M.separator_line(map.diff, fd) } }
+      end
+      goto continue
+    end
     local d = f.row
     local last = f.row + f.count - 1
     while d <= last do
@@ -161,6 +205,7 @@ function M.virt_rows(map, side)
       entries[#entries + 1] = { anchor = f.after, lines = lines }
       d = stop + 1
     end
+    ::continue::
   end
   flush_blocks(math.huge)
 
