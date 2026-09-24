@@ -45,6 +45,9 @@ local SIDES = { "old", "new" }
 --- Context folding: `false` to show every line; otherwise `context` rows kept next to each
 --- hunk (default 3, at least 1) and `step` rows revealed per expand (default 10).
 ---@field fold? false|{ context?: integer, step?: integer }
+--- The folds to open with instead of the computed ones, e.g. another scene's current folds
+--- (the layout toggle carries them over). Ignored when `fold` is false.
+---@field folds? NvimDiff.Fold[]
 
 ---@class NvimDiff.Pair
 ---@field diff NvimDiff.Diff
@@ -84,7 +87,8 @@ function M.open(spec)
   local diff = spec.diff
   local fold_opts = spec.fold == nil and {} or spec.fold
   local base = fold_opts and fold.compute(diff, fold_opts) or {}
-  local map = rowmap.new(diff, nil, base)
+  local folds = fold_opts and spec.folds and vim.deepcopy(spec.folds) or base
+  local map = rowmap.new(diff, nil, folds)
   local self = setmetatable({
     diff = diff,
     map = map,
@@ -94,7 +98,7 @@ function M.open(spec)
     block_order = {},
     closed = false,
     lines = { old = spec.old.lines, new = spec.new.lines },
-    folds = base,
+    folds = folds,
     fold_base = base,
     fold_step = fold_opts and fold_opts.step or fold.STEP,
     scopes = {},
@@ -153,7 +157,7 @@ function M.open(spec)
       end)
     end,
   })
-  folds_scene.attach(self, self.augroup)
+  folds_scene.attach(self, { self.bufs.old, self.bufs.new }, self.augroup)
   api.nvim_create_autocmd("VimResized", {
     group = self.augroup,
     callback = function()
@@ -266,6 +270,17 @@ end
 ---@return integer?
 function Pair:row_of(side, lnum)
   return self.diff:row_of(side, lnum)
+end
+
+--- The side and file line under the cursor of the current window, when it is a pane.
+---@return NvimDiff.Side?
+---@return integer?
+function Pair:fold_cursor()
+  local side = self:side_of(api.nvim_get_current_win())
+  if not side then
+    return nil, nil
+  end
+  return side, self:cursor_line(side)
 end
 
 --- The closed fold holding the file's line `lnum` of `side`, and its index in `folds`.

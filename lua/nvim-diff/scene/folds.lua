@@ -1,5 +1,8 @@
---- Context folds in pane windows: turns a pair's fold list (`render/fold.lua`) into real
---- manual folds in each pane, and binds the fold keys to the pair's fold actions.
+--- Context folds in pane windows: turns a scene's fold list (`render/fold.lua`) into real
+--- manual folds in each of its panes, and binds the fold keys to the scene's fold actions.
+--- A scene is a side-by-side pair (`scene/pair.lua`) or a unified pane
+--- (`scene/unified.lua`); both carry the same fold list and the same fold methods
+--- (`NvimDiff.FoldScene`), so the keys behave the same in either layout.
 ---
 --- Folds are rebuilt, never edited: `zE`, then one `:fold` per fold. Both panes are always
 --- rebuilt together from the one list, which is what keeps them mirrored. A rebuild resets
@@ -46,35 +49,71 @@ function M.setup_window(win)
   set("fillchars", table.concat(fc, ","))
 end
 
+--- One closed fold of a window: buffer lines `first..last` and the separator it shows.
+---@class NvimDiff.FoldLines
+---@field first integer
+---@field last integer
+---@field text string
+---@field group string
+
+--- Replace every fold of `win` (showing `buf`) with `list`, and register the separator
+--- texts `foldtext` shows. Moves the view: callers restore it.
+---@param win integer
+---@param buf integer
+---@param list NvimDiff.FoldLines[]
+function M.build(win, buf, list)
+  local texts = {}
+  for _, l in ipairs(list) do
+    texts[l.first] = { l.text, l.group }
+  end
+  fold.texts[buf] = texts
+  api.nvim_win_call(win, function()
+    vim.cmd("silent! normal! zE")
+    for _, l in ipairs(list) do
+      vim.cmd(("%d,%dfold"):format(l.first, l.last))
+    end
+  end)
+end
+
+--- The separator text of fold `f`. A context fold names its scope from `lines` (one
+--- side's file) at file line `last`; `scopes[key]` caches that file's scope-line index,
+--- built on first use.
+---@param diff NvimDiff.Diff
+---@param f NvimDiff.Fold
+---@param lines string[]
+---@param last integer
+---@param scopes table
+---@param key any
+---@return string
+function M.label(diff, f, lines, last, scopes, key)
+  local scope
+  if f.kind == "context" then
+    scopes[key] = scopes[key] or fold.scope_index(lines)
+    scope = fold.scope_at(lines, scopes[key], last)
+  end
+  return fold.label(diff, f, scope)
+end
+
 --- Replace every fold in `side`'s pane with the pair's current folds, and register the
 --- separator texts `foldtext` shows. Moves the view: callers restore it.
 ---@param pair NvimDiff.Pair
 ---@param side NvimDiff.Side
 function M.apply(pair, side)
   local diff = pair.diff
-  local lines = pair.lines[side]
-  local texts = {}
-  local cmds = {}
+  local list = {}
   for _, f in ipairs(pair.folds) do
     local a, b = fold.side_lines(diff, f, side)
-    if a then
-      local scope
-      if f.kind == "context" then
-        pair.scopes[side] = pair.scopes[side] or fold.scope_index(lines)
-        scope = fold.scope_at(lines, pair.scopes[side], b)
-      end
+    if a and b then
       -- Buffer line = file line + 1: the header is line 1.
-      texts[a + 1] = { fold.label(diff, f, scope), fold.group(f) }
-      cmds[#cmds + 1] = ("%d,%dfold"):format(a + 1, b + 1)
+      list[#list + 1] = {
+        first = a + 1,
+        last = b + 1,
+        text = M.label(diff, f, pair.lines[side], b, pair.scopes, side),
+        group = fold.group(f),
+      }
     end
   end
-  fold.texts[pair.bufs[side]] = texts
-  api.nvim_win_call(pair.wins[side], function()
-    vim.cmd("silent! normal! zE")
-    for _, c in ipairs(cmds) do
-      vim.cmd(c)
-    end
-  end)
+  M.build(pair.wins[side], pair.bufs[side], list)
 end
 
 --- Forget a buffer's separator texts.
@@ -83,25 +122,28 @@ function M.forget(buf)
   fold.texts[buf] = nil
 end
 
---- The side and file line under the cursor of the current window, when it is a pane.
----@param pair NvimDiff.Pair
----@return NvimDiff.Side?
----@return integer?
-local function here(pair)
-  local side = pair:side_of(api.nvim_get_current_win())
-  if not side then
-    return nil, nil
-  end
-  return side, pair:cursor_line(side)
-end
+--- What the fold keys need from a scene.
+---@class NvimDiff.FoldScene
+---@field folds NvimDiff.Fold[]
+---@field fold_step integer
+--- The side and file line under the cursor of the current window, when it is one of the
+--- scene's.
+---@field fold_cursor fun(self): NvimDiff.Side?, integer?
+---@field fold_at fun(self, side: NvimDiff.Side, lnum: integer): NvimDiff.Fold?, integer?
+---@field expand fun(self, side: NvimDiff.Side, lnum: integer, n?: integer, dir?: NvimDiff.FoldDir): boolean
+---@field expand_all fun(self)
+---@field collapse fun(self, side: NvimDiff.Side, lnum: integer): boolean
+---@field collapse_all fun(self)
+---@field set_folds fun(self, list: NvimDiff.Fold[])
 
---- Bind the fold keys in both panes, and catch folds opened behind the pair's back.
----@param pair NvimDiff.Pair
+--- Bind the fold keys in the scene's buffers, and catch folds opened behind its back.
+---@param scene NvimDiff.FoldScene
+---@param bufs integer[]
 ---@param augroup integer
-function M.attach(pair, augroup)
+function M.attach(scene, bufs, augroup)
   local function act(fn)
     return function()
-      local side, lnum = here(pair)
+      local side, lnum = scene:fold_cursor()
       if side then
         fn(side, lnum)
       end
@@ -109,24 +151,24 @@ function M.attach(pair, augroup)
   end
   local expand_step = act(function(side, lnum)
     if lnum then
-      pair:expand(side, lnum, pair.fold_step * vim.v.count1)
+      scene:expand(side, lnum, scene.fold_step * vim.v.count1)
     end
   end)
   local expand_whole = act(function(side, lnum)
     if lnum then
-      pair:expand(side, lnum)
+      scene:expand(side, lnum)
     end
   end)
   local toggle = act(function(side, lnum)
-    if lnum and pair:fold_at(side, lnum) then
-      pair:expand(side, lnum)
+    if lnum and scene:fold_at(side, lnum) then
+      scene:expand(side, lnum)
     elseif lnum then
-      pair:collapse(side, lnum)
+      scene:collapse(side, lnum)
     end
   end)
   local collapse = act(function(side, lnum)
     if lnum then
-      pair:collapse(side, lnum)
+      scene:collapse(side, lnum)
     end
   end)
 
@@ -139,18 +181,17 @@ function M.attach(pair, augroup)
     zc = collapse,
     zC = collapse,
     zR = function()
-      pair:expand_all()
+      scene:expand_all()
     end,
     zM = function()
-      pair:collapse_all()
+      scene:collapse_all()
     end,
     zx = function()
-      pair:set_folds(pair.folds)
+      scene:set_folds(scene.folds)
     end,
   }
   maps.zX = maps.zx
-  for _, side in ipairs({ "old", "new" }) do
-    local buf = pair.bufs[side]
+  for _, buf in ipairs(bufs) do
     for lhs, rhs in pairs(maps) do
       vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, desc = "nvim-diff: context folds" })
     end
@@ -162,9 +203,9 @@ function M.attach(pair, augroup)
       group = augroup,
       buffer = buf,
       callback = function()
-        local s, lnum = here(pair)
-        if s and lnum and pair:fold_at(s, lnum) and vim.fn.foldclosed(lnum + 1) == -1 then
-          pair:expand(s, lnum)
+        local s, lnum = scene:fold_cursor()
+        if s and lnum and scene:fold_at(s, lnum) and vim.fn.foldclosed(".") == -1 then
+          scene:expand(s, lnum)
         end
       end,
     })

@@ -2,6 +2,7 @@ local t = require("tests.harness")
 local describe, it, before_each, after_each, expect = t.describe, t.it, t.before_each, t.after_each, t.expect
 
 local diffgen = require("tests.diffgen")
+local fold = require("nvim-diff.render.fold")
 local line = require("nvim-diff.diff.line")
 local render = require("nvim-diff.render.unified")
 local sidebyside = require("nvim-diff.render.sidebyside")
@@ -237,7 +238,7 @@ describe("render.unified", function()
   it("keeps every line's rows in place as blocks come and go", function()
     for seed = 1, 10 do
       local old, new = diffgen.files(seed)
-      local u = open(old, new)
+      local u = open(old, new, { fold = false })
       local blocks = {}
       for i = 1, 5 do
         local rows = {}
@@ -262,11 +263,12 @@ describe("render.unified", function()
     end
   end)
 
-  it("computes a top that puts any line on any screen row, virtual rows included", function()
-    local checked = 0
-    for seed = 1, 10 do
+  it("computes a top that puts any line on any screen row, virtual rows and folds included", function()
+    local checked, in_fold = 0, 0
+    for seed = 1, 20 do
       local old, new = diffgen.files(seed, 60)
-      local u = open(old, new)
+      -- Odd seeds unfolded; even seeds folded, with smaller context so more of it folds.
+      local u = open(old, new, { fold = seed % 2 == 0 and { context = 1 } or false })
       for i = 1, 6 do
         local rows = {}
         for k = 1, math.random(1, 4) do
@@ -276,22 +278,74 @@ describe("render.unified", function()
       end
       local count = api.nvim_buf_line_count(u.buf)
       local height = api.nvim_win_get_height(u.win)
+      local width = sidebyside.number_width(u.diff)
       for _ = 1, 30 do
         local bl = math.random(1, count)
         local winline = math.random(1, height)
         u:place(bl, winline)
         local view = api.nvim_win_call(u.win, vim.fn.winsaveview)
         expect.eq(bl, view.lnum)
-        local above = api.nvim_win_call(u.win, vim.fn.winline) - 1
-        -- Neovim's own count of the rows between the top of the view and the cursor.
-        if view.topline > 1 or view.topfill > 0 or render.line_view(u.virt, bl) >= winline - 1 then
-          expect.eq(winline - 1, above, ("seed %d bl %d"):format(seed, bl))
+        -- Unless the view is pinned at the top of the pane, screen row `winline` must show
+        -- line `bl`: its fold's band, or its own numbers. Read off the screen, since
+        -- `winline()` miscounts next to a closed fold.
+        if view.topline > 1 or view.topfill > 0 or render.line_view(u.virt, bl, u.ranges) >= winline - 1 then
+          local row = screen(u.win, 2 * width + 1)[winline]
+          local what = ("seed %d bl %d winline %d: %q"):format(seed, bl, winline, row)
+          if render.range_at(u.ranges, bl) then
+            expect.truthy(vim.startswith(row, "···"), what)
+            in_fold = in_fold + 1
+          else
+            local x = u.layout.lines[bl - 1]
+            local o = x and x.old and tostring(x.old) or ""
+            local n = x and x.new and tostring(x.new) or ""
+            if bl == 1 then
+              expect.matches("^%s+$", row)
+            else
+              expect.eq(("%" .. width .. "s %" .. width .. "s"):format(o, n), row, what)
+            end
+          end
+          -- The pane's own count of the cursor's screen row agrees with the screen.
+          expect.eq(winline, u:winline(), what)
           checked = checked + 1
         end
       end
       close()
     end
-    expect.truthy(checked > 100, "too few positions checked")
+    expect.truthy(checked > 200, "too few positions checked")
+    expect.truthy(in_fold > 20, "too few positions inside folds checked")
+  end)
+
+  it("covers each fold with one run of buffer lines, reformatted hunks whole", function()
+    for seed = 1, 40 do
+      local old, new = diffgen.files(seed)
+      local d = line.diff(old, new)
+      for i, h in ipairs(d.hunks) do
+        h.formatting_only = i % 2 == 0
+      end
+      local l = render.layout(d)
+      local prev = 1
+      for _, f in ipairs(fold.compute(d, { context = 1 })) do
+        local a, b = render.fold_lines(l, f)
+        expect.truthy(a > prev, ("seed %d: folds overlap or touch the header"):format(seed))
+        prev = b
+        -- Exactly the lines of the fold's rows, both sides.
+        local want = 0
+        for row = f.first, f.last do
+          local o, n = d:line_at(row)
+          if f.kind == "context" then
+            want = want + 1 -- unchanged: one line
+          else
+            want = want + (o and 1 or 0) + (n and 1 or 0)
+          end
+        end
+        expect.eq(want, b - a + 1, ("seed %d fold %d"):format(seed, f.id))
+        for bl = a, b do
+          local x = l.lines[bl - 1]
+          local row = x.old and d:row_of("old", x.old) or d:row_of("new", x.new)
+          expect.truthy(row >= f.first and row <= f.last, ("seed %d: line %d outside its fold"):format(seed, bl))
+        end
+      end
+    end
   end)
 
   it("maps the cursor to a side and a file line", function()
