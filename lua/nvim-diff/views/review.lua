@@ -36,6 +36,7 @@ local pr_mod = require("nvim-diff.github.pr")
 local repo_mod = require("nvim-diff.git.repo")
 local rev = require("nvim-diff.git.rev")
 local revparse = require("nvim-diff.git.revparse")
+local threads_mod = require("nvim-diff.github.threads")
 local viewed_mod = require("nvim-diff.github.viewed")
 local views = require("nvim-diff.views.diff")
 local worktree = require("nvim-diff.git.worktree")
@@ -146,6 +147,12 @@ function M.open(opts)
     fail(("cannot read PR #%d's viewed files: %s"):format(number, msg(err)))
   end
 
+  local threads
+  threads, err = threads_mod.fetch(pr.target, number)
+  if not threads then
+    fail(("cannot read PR #%d's comment threads: %s"):format(number, msg(err)))
+  end
+
   local wt_path
   wt_path, err = worktree.add(repo, number, head)
   if not wt_path then
@@ -187,6 +194,7 @@ function M.open(opts)
     entry.viewed = states[entry.path] or "unviewed"
   end
   view:render()
+  view:set_threads(threads)
   self:trap()
   self:map_keys(view.panel.buf)
   self:map_keys(view.note_buf)

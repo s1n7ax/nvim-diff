@@ -63,9 +63,58 @@ local function stub(fixture, opts)
       },
     },
   })
+  local threads = vim.json.encode({
+    data = {
+      repository = {
+        pullRequest = {
+          reviewThreads = {
+            pageInfo = { hasNextPage = false, endCursor = vim.NIL },
+            nodes = {
+              {
+                id = "PRRT_1",
+                path = "a.txt",
+                line = 1,
+                startLine = vim.NIL,
+                originalLine = 1,
+                originalStartLine = vim.NIL,
+                diffSide = "RIGHT",
+                startDiffSide = vim.NIL,
+                isResolved = false,
+                isOutdated = false,
+                isCollapsed = false,
+                subjectType = "LINE",
+                viewerCanReply = true,
+                viewerCanResolve = true,
+                viewerCanUnresolve = false,
+                resolvedBy = vim.NIL,
+                comments = {
+                  pageInfo = { hasNextPage = false, endCursor = vim.NIL },
+                  nodes = {
+                    {
+                      id = "PRRC_1",
+                      fullDatabaseId = "101",
+                      author = { login = "alice" },
+                      body = "why?",
+                      outdated = false,
+                      createdAt = "2026-09-01T12:00:00Z",
+                      url = "https://github.com/octocat/hello-world/pull/7#discussion_r1",
+                      viewerDidAuthor = false,
+                      replyTo = vim.NIL,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
   local ok_body = '{"data":{"x":{"clientMutationId":null}}}'
   local refused = '{"data":null,"errors":[{"message":"refused"}]}'
   return ghstub.new(table.concat({
+    "  *reviewThreads*)",
+    reply(threads),
     "  *markFileAsViewed*)",
     reply(opts.fail_mark and refused or ok_body),
     "  *viewerViewedState*)",
@@ -202,6 +251,13 @@ describe("views review", function()
     expect.truthy(text:find("↻", 1, true), "the re-changed file carries its mark")
     expect.eq(find(review, "b.txt"), review.view.current)
     expect.eq(review.view.panel.win, api.nvim_get_current_win(), "focus stays in the panel")
+  end)
+
+  it("hands the PR's comment threads to the view", function()
+    local _, repo = setup()
+    local review = review_mod.open({ number = 7, repo = repo })
+    expect.eq(1, #review.view.threads)
+    expect.eq("a.txt", review.view.threads[1].path)
   end)
 
   it("marks a file viewed on GitHub and jumps to the next unviewed file", function()
