@@ -34,6 +34,10 @@
 --- A view given a `range` can flip it between merge-base (`a...b`) and tip-to-tip (`a..b`)
 --- with `keymaps.view.toggle_range`. A view whose right side is the worktree or the index
 --- re-lists its files when its tabpage is entered and when Neovim regains focus.
+---
+--- A PR review hands the view its comment threads with `set_threads`: each file's diff then
+--- shows its threads (`review/threadview.lua`), and `keymaps.threads.list` opens the side
+--- list of outdated and file-level ones (`review/sidelist.lua`).
 
 local blob = require("nvim-diff.git.blob")
 local config = require("nvim-diff.config")
@@ -95,6 +99,10 @@ local by_tab = {}
 ---@field note_buf integer
 ---@field note_win? integer
 ---@field closed boolean
+---@field threads? NvimDiff.GitHub.Thread[] Review threads, from `set_threads`.
+---@field thread_state? NvimDiff.ThreadState Expanded threads and the resolved mode, across files.
+---@field thread_view? NvimDiff.ThreadView The threads on the diff showing.
+---@field thread_list? NvimDiff.SideList
 local View = {}
 View.__index = View
 
@@ -600,6 +608,7 @@ function View:show_diff(entry)
       self:on_scene(entry, file)
     end,
   })
+  self:attach_threads(entry)
 end
 
 --- Open the merge conflict view for a conflicted (`U`) entry, in its own tabpage. Every
@@ -829,6 +838,9 @@ function View:close()
     event.emit_in({ win = self.panel.win, buf = self.panel.buf }, event.events.VIEW_CLOSED, self)
   end
   self.closed = true
+  if self.thread_list then
+    self.thread_list:close()
+  end
   self:clear_area()
   if api.nvim_tabpage_is_valid(self.tab) and #api.nvim_list_tabpages() > 1 then
     local tabnr = api.nvim_tabpage_get_number(self.tab)
@@ -844,6 +856,73 @@ function View:close()
   if api.nvim_buf_is_valid(self.note_buf) then
     pcall(api.nvim_buf_delete, self.note_buf, { force = true })
   end
+end
+
+-- Review threads ---------------------------------------------------------------------------
+
+--- Show a PR's review threads: on each file's diff as it opens (the one showing now at
+--- once), and in the side list. Replaces any threads set before; `{}` clears them.
+---@param list NvimDiff.GitHub.Thread[]
+function View:set_threads(list)
+  self.threads = list
+  self.thread_state = self.thread_state or require("nvim-diff.review.threadview").new_state()
+  if self.thread_view then
+    self.thread_view:detach()
+    self.thread_view = nil
+  end
+  if self.current and self.file and not self.file:is_closed() then
+    self:attach_threads(self.current)
+  end
+  if self.thread_list and self.thread_list:is_open() then
+    self.thread_list:set(self:thread_items())
+  end
+end
+
+--- Put the threads of `entry` on the diff just opened for it.
+---@param entry NvimDiff.FileEntry
+function View:attach_threads(entry)
+  if not self.threads or not self.file then
+    return
+  end
+  local threadview = require("nvim-diff.review.threadview")
+  self.thread_view = threadview.attach(self.file, threadview.for_path(self.threads, entry.path), {
+    state = self.thread_state,
+    on_list = function()
+      self:toggle_thread_list()
+    end,
+  })
+  if self.thread_list and self.thread_list:is_open() then
+    self.thread_list:set(self:thread_items())
+  end
+end
+
+--- What the side list shows: every outdated and file-level thread of the PR, then the
+--- showing file's threads whose line is not in its diff.
+---@return NvimDiff.SideListItem[]
+function View:thread_items()
+  local items = require("nvim-diff.review.sidelist").items(self.threads or {})
+  if self.thread_view and not self.thread_view.detached then
+    for _, loose in ipairs(self.thread_view:unanchored()) do
+      if loose.place == "off_file" then
+        items[#items + 1] = loose
+      end
+    end
+  end
+  return items
+end
+
+--- Open the side list right of the diff, or close it.
+function View:toggle_thread_list()
+  if self.thread_list and self.thread_list:is_open() then
+    self.thread_list:close()
+    self.thread_list = nil
+    return
+  end
+  local wins = self.file and not self.file:is_closed() and self.file:wins() or { self.note_win }
+  self.thread_list = require("nvim-diff.review.sidelist").open({
+    items = self:thread_items(),
+    win = wins[#wins],
+  })
 end
 
 --- The view class, for views that build on this one (`views/history.lua`).
