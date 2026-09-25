@@ -104,6 +104,13 @@ local M = {}
 ---@field toggle_resolved NvimDiff.Config.Key Flip resolved threads between dimmed and hidden.
 ---@field list NvimDiff.Config.Key Open or close the side list of outdated and file-level comments.
 
+--- Buffer-local to the review verdict split (`:NvimDiffVerdict`).
+---@class NvimDiff.Config.VerdictKeymaps
+--- Submit the verdict and summary to GitHub. Normal and insert mode.
+---@field post NvimDiff.Config.Key
+--- Close the split; asks first when a summary was typed. Normal mode.
+---@field cancel NvimDiff.Config.Key
+
 ---@class NvimDiff.Config.Threads
 --- What a resolved thread looks like until toggled: drawn dimmed with a ✓, or not at all.
 ---@field resolved "dim"|"hide"
@@ -115,6 +122,7 @@ local M = {}
 ---@field history NvimDiff.Config.HistoryKeymaps Buffer-local to the history panel.
 ---@field conflict NvimDiff.Config.ConflictKeymaps
 ---@field threads NvimDiff.Config.ThreadKeymaps
+---@field verdict NvimDiff.Config.VerdictKeymaps
 
 ---@class NvimDiff.Config
 ---@field layout "side_by_side"|"unified"
@@ -228,6 +236,10 @@ local defaults = {
       toggle_resolved = "gR",
       list = "gC",
     },
+    verdict = {
+      post = "<C-s>",
+      cancel = "q",
+    },
   },
 
   log = {
@@ -330,6 +342,10 @@ local schema = {
       prev = KEY,
       toggle_resolved = KEY,
       list = KEY,
+    },
+    verdict = {
+      post = KEY,
+      cancel = KEY,
     },
   },
 
