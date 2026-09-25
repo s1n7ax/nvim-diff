@@ -1,10 +1,14 @@
 --- A merge conflict view: ours | base | theirs across the top, the editable result below.
 ---
---- This is the Lua API a command will be built on; it adds no command itself.
+--- `:NvimDiffConflict [path]` opens it for a file (default: the current buffer's), and the
+--- file panel (`views/diff.lua`) opens it for a `U` entry instead of the usual two-pane
+--- diff. `next_file`/`prev_file` step to the next/previous conflicted file in place —
+--- same tab, same window layout, fresh panes and result buffer.
 ---
 ---     local view = require("nvim-diff.views.conflict").open({ path = "lua/foo.lua" })
 ---     view:next_conflict()
 ---     view:take("theirs")
+---     view:next_file()
 ---
 --- The three top panes are read-only index stages (2 ours, 1 base, 3 theirs), aligned on
 --- shared rows by `diff/merge.lua` and kept aligned by the scroll corrector. Ours and theirs
@@ -22,6 +26,7 @@ local buffer = require("nvim-diff.scene.buffer")
 local config = require("nvim-diff.config")
 local conflict = require("nvim-diff.git.conflict")
 local event = require("nvim-diff.core.event")
+local files_mod = require("nvim-diff.git.files")
 local hl = require("nvim-diff.ui.hl")
 local log = require("nvim-diff.core.log")
 local merge_mod = require("nvim-diff.diff.merge")
@@ -47,11 +52,15 @@ local STAGE = { base = 1, ours = 2, theirs = 3 }
 --- The conflicted file, absolute or relative to the cwd. Defaults to the current buffer's.
 ---@field path? string
 ---@field repo? NvimDiff.Git.Repo Discovered from the path when omitted.
+--- The conflicted files `next_file`/`prev_file` step through, in order. Defaults to every
+--- `U` path in the repository (`git/files.lua` `status`), listed fresh at open.
+---@field files? string[]
 
 ---@class NvimDiff.ConflictView
 ---@field repo NvimDiff.Git.Repo
 ---@field git_path string
 ---@field file string Absolute path of the work tree file.
+---@field files string[] The conflicted files `next_file`/`prev_file` step through.
 ---@field lines table<NvimDiff.MergeSide, string[]>
 ---@field merge NvimDiff.Merge
 ---@field map NvimDiff.ThreeWayMap
@@ -132,12 +141,13 @@ local function headers(repo, git_path, present)
   return out
 end
 
---- Open the view in a new tabpage. Raises when the file is not conflicted or cannot be read.
----@param opts? NvimDiff.ConflictViewOpts
----@return NvimDiff.ConflictView
-function M.open(opts)
-  opts = opts or {}
-  hl.setup()
+--- Resolve `opts.path`/`opts.repo` to a file, its repository and its git path. Raises when
+--- there is no file, or it is not inside the repository.
+---@param opts NvimDiff.ConflictViewOpts
+---@return string file
+---@return NvimDiff.Git.Repo repo
+---@return string git_path
+local function resolve_file(opts)
   local file = opts.path or api.nvim_buf_get_name(0)
   if file == "" then
     error("nvim-diff: no file to resolve", 0)
@@ -155,25 +165,89 @@ function M.open(opts)
   if not git_path or git_path == "." or git_path:sub(1, 3) == "../" then
     error(("nvim-diff: %s is not inside %s"):format(file, repo.toplevel), 0)
   end
+  return file, repo, git_path
+end
 
+--- Read and align the three stages of `git_path`. Raises when it is not conflicted, a
+--- stage cannot be read, or a stage is binary. Kept separate from `View:load` so a step to
+--- another file fails before this view's current windows and buffers are touched.
+---@param repo NvimDiff.Git.Repo
+---@param git_path string
+---@return table<NvimDiff.MergeSide, string[]> lines
+---@return table<NvimDiff.MergeSide, boolean> present
+---@return NvimDiff.Merge merge
+---@return NvimDiff.ThreeWayMap map
+local function prepare(repo, git_path)
   local lines, present = read_stages(repo, git_path)
   local merge = merge_mod.align(lines.ours, lines.base, lines.theirs)
   local map = threeway.map(merge)
+  return lines, present, merge, map
+end
+
+--- Open the view in a new tabpage. Raises when the file is not conflicted or cannot be read.
+---@param opts? NvimDiff.ConflictViewOpts
+---@return NvimDiff.ConflictView
+function M.open(opts)
+  opts = opts or {}
+  hl.setup()
+  local file, repo, git_path = resolve_file(opts)
+
+  local conflicted_files = opts.files
+  if not conflicted_files then
+    local status, ferr = files_mod.status(repo)
+    if not status then
+      error("nvim-diff: " .. ferr.message, 0)
+    end
+    conflicted_files = status.conflicted
+  end
+
+  local lines, present, merge, map = prepare(repo, git_path)
+
   local self = setmetatable({
     repo = repo,
-    git_path = git_path,
-    file = file,
-    lines = lines,
-    merge = merge,
-    map = map,
+    files = conflicted_files,
     bufs = {},
     wins = {},
     closed = false,
     mapped = {},
   }, View)
 
+  vim.cmd("tabnew")
+  self.tab = api.nvim_get_current_tabpage()
+  local placeholder = api.nvim_get_current_buf()
+  self.wins.ours = api.nvim_get_current_win()
+  self.wins.result = api.nvim_open_win(placeholder, false, { split = "below", win = self.wins.ours })
+  self.wins.base = api.nvim_open_win(placeholder, false, { split = "right", win = self.wins.ours })
+  self.wins.theirs = api.nvim_open_win(placeholder, false, { split = "right", win = self.wins.base })
+
+  self:load(git_path, file, lines, present, merge, map, placeholder)
+
+  event.emit_in({ win = self.wins.result, buf = self.result_buf }, event.events.VIEW_OPENED, self)
+  return self
+end
+
+--- Build the three stage panes and hook up the result buffer for `git_path`, in this
+--- view's existing windows: `M.open` (freshly split windows, `placeholder` the tabnew's
+--- scratch buffer) and `step_file` (the same windows, a different file, no `placeholder`)
+--- share it. Replaces `self`'s buffers, keymaps and scroll sync in place — never swaps
+--- `self` for a new table — so a caller's reference to the view survives a file step. The
+--- outgoing result buffer (on a step) keeps its conflict markers and keymaps cleaned up,
+--- the same as `close()` would.
+---@param git_path string
+---@param file string
+---@param lines table<NvimDiff.MergeSide, string[]>
+---@param present table<NvimDiff.MergeSide, boolean>
+---@param merge NvimDiff.Merge
+---@param map NvimDiff.ThreeWayMap
+---@param placeholder? integer The `tabnew` scratch buffer, first open only.
+function View:load(git_path, file, lines, present, merge, map, placeholder)
+  local repo = self.repo
+  local old_bufs, old_result_buf, old_mapped = self.bufs, self.result_buf, self.mapped
+  self.git_path, self.file, self.lines, self.merge, self.map = git_path, file, lines, merge, map
+
   local header = headers(repo, git_path, present)
   local lang = lang_for(git_path)
+  self.bufs = {}
   for _, side in ipairs(SIDES) do
     local name = ("nvim-diff://%s/%s/%s"):format(repo.gitdir, rev.id(rev.index(STAGE[side])), git_path)
     self.bufs[side] = buffer.create({
@@ -185,14 +259,6 @@ function M.open(opts)
     })
   end
 
-  vim.cmd("tabnew")
-  self.tab = api.nvim_get_current_tabpage()
-  local placeholder = api.nvim_get_current_buf()
-  self.wins.ours = api.nvim_get_current_win()
-  self.wins.result = api.nvim_open_win(placeholder, false, { split = "below", win = self.wins.ours })
-  self.wins.base = api.nvim_open_win(placeholder, false, { split = "right", win = self.wins.ours })
-  self.wins.theirs = api.nvim_open_win(placeholder, false, { split = "right", win = self.wins.base })
-
   local width = threeway.number_width(merge)
   for _, side in ipairs(SIDES) do
     window.pane(self.wins[side], self.bufs[side], {
@@ -200,23 +266,44 @@ function M.open(opts)
     })
     api.nvim_win_set_cursor(self.wins[side], { 1, 0 })
   end
+  for _, side in ipairs(SIDES) do
+    if old_bufs[side] and api.nvim_buf_is_valid(old_bufs[side]) then
+      pcall(api.nvim_buf_delete, old_bufs[side], { force = true })
+    end
+  end
+
   api.nvim_win_call(self.wins.result, function()
     vim.cmd.edit(vim.fn.fnameescape(file))
   end)
   self.result_buf = api.nvim_win_get_buf(self.wins.result)
-  if api.nvim_buf_is_valid(placeholder) and placeholder ~= self.result_buf then
+  if placeholder and api.nvim_buf_is_valid(placeholder) and placeholder ~= self.result_buf then
     pcall(api.nvim_buf_delete, placeholder, { force = true })
   end
-  api.nvim_win_call(self.wins.ours, function()
-    vim.cmd("wincmd =")
-  end)
+  if placeholder then
+    api.nvim_win_call(self.wins.ours, function()
+      vim.cmd("wincmd =")
+    end)
+  end
+  if old_result_buf and old_result_buf ~= self.result_buf and api.nvim_buf_is_valid(old_result_buf) then
+    api.nvim_buf_clear_namespace(old_result_buf, M.ns, 0, -1)
+    for _, lhs in ipairs(old_mapped) do
+      pcall(vim.keymap.del, "n", lhs, { buffer = old_result_buf })
+    end
+  end
 
   self.filler_width = sidebyside.filler_width()
   for _, side in ipairs(SIDES) do
     threeway.paint(self.bufs[side], map, side)
   end
+  if self.sync then
+    self.sync:detach()
+  end
   self.sync = scrollsync.attach({ self:sync_pane("ours"), self:sync_pane("base"), self:sync_pane("theirs") })
 
+  if self.augroup then
+    pcall(api.nvim_del_augroup_by_id, self.augroup)
+  end
+  self.mapped = {}
   self:attach()
   for _, buf in ipairs({ self.bufs.ours, self.bufs.base, self.bufs.theirs, self.result_buf }) do
     self:map_keys(buf)
@@ -228,10 +315,8 @@ function M.open(opts)
   if regions[1] then
     api.nvim_win_set_cursor(self.wins.result, { regions[1].first, 0 })
   end
+  self.followed = nil
   self:follow()
-
-  event.emit_in({ win = self.wins.result, buf = self.result_buf }, event.events.VIEW_OPENED, self)
-  return self
 end
 
 --- The corrector's view of one top pane.
@@ -302,10 +387,12 @@ function View:attach()
   })
 end
 
---- Map the conflict keys in `buf`.
+--- Map the conflict keys, plus `keymaps.view.next_file`/`prev_file` for stepping across
+--- conflicted files, in `buf`.
 ---@param buf integer
 function View:map_keys(buf)
   local keys = config.get().keymaps.conflict
+  local view_keys = config.get().keymaps.view
   local function map(lhs, fn, desc)
     if type(lhs) == "string" then
       vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, desc = "nvim-diff: " .. desc })
@@ -325,6 +412,12 @@ function View:map_keys(buf)
   map(keys.prev_conflict, function()
     self:prev_conflict()
   end, "previous conflict")
+  map(view_keys.next_file, function()
+    self:next_file()
+  end, "next conflicted file")
+  map(view_keys.prev_file, function()
+    self:prev_file()
+  end, "previous conflicted file")
 end
 
 ---@return string[]
@@ -507,6 +600,48 @@ function View:prev_conflict()
   return self:step(-1)
 end
 
+--- Move to the conflicted file `delta` away in `self.files`, wrapping, rebuilding this
+--- view's panes in place (`load`) rather than closing and reopening — a caller's reference
+--- to the view stays valid across the step. Warns and returns false when `self.files` holds
+--- only this file (or does not list it at all); errors resolving the target (no longer
+--- conflicted, made binary since `self.files` was built) are reported and leave the view on
+--- its current file.
+---@param delta 1|-1
+---@return boolean moved
+function View:step_file(delta)
+  local list = self.files
+  local index
+  for i, p in ipairs(list) do
+    if p == self.git_path then
+      index = i
+      break
+    end
+  end
+  if not index or #list <= 1 then
+    log.info("no other conflicted files")
+    return false
+  end
+  local target = list[(index - 1 + delta) % #list + 1]
+  local file = path.from_git(self.repo.toplevel, target)
+  local ok, lines, present, merge, map = pcall(prepare, self.repo, target)
+  if not ok then
+    log.error("cannot open the conflict view for %s: %s", target, tostring(lines):gsub("^nvim%-diff: ", ""))
+    return false
+  end
+  self:load(target, file, lines, present, merge, map)
+  return true
+end
+
+---@return boolean
+function View:next_file()
+  return self:step_file(1)
+end
+
+---@return boolean
+function View:prev_file()
+  return self:step_file(-1)
+end
+
 --- Close the view: the three stage panes and their buffers, and the result window. The
 --- result buffer stays loaded, with whatever edits it has. Idempotent.
 function View:close()
@@ -542,6 +677,20 @@ function View:close()
     if api.nvim_buf_is_valid(self.bufs[side]) then
       pcall(api.nvim_buf_delete, self.bufs[side], { force = true })
     end
+  end
+end
+
+--- `:NvimDiffConflict [path]`: open the conflict view for `path` (default: the current
+--- buffer's file). Errors — no file, not conflicted, binary — are reported, not raised.
+---@param arg? string
+function M.command(arg)
+  local target
+  if arg and arg ~= "" then
+    target = path.normalize(vim.fn.expand(arg))
+  end
+  local ok, err = pcall(M.open, { path = target })
+  if not ok then
+    vim.notify(tostring(err), vim.log.levels.ERROR)
   end
 end
 

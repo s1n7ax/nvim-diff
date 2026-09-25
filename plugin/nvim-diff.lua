@@ -31,3 +31,11 @@ end, {
   complete = "file",
   desc = "nvim-diff: commit history of a file or directory (% = current file), or of the repository",
 })
+
+vim.api.nvim_create_user_command("NvimDiffConflict", function(args)
+  require("nvim-diff.views.conflict").command(args.args)
+end, {
+  nargs = "?",
+  complete = "file",
+  desc = "nvim-diff: resolve a merge conflict in a three-way layout (default: the current file)",
+})

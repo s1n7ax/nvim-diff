@@ -59,7 +59,9 @@ local M = {}
 ---@field refresh NvimDiff.Config.Key Re-list the files.
 
 ---@class NvimDiff.Config.ViewKeymaps
----@field next_file NvimDiff.Config.Key In the panel and in the diff panes.
+--- In the panel and in the diff panes; also in a conflict view's four windows, where it
+--- steps across just the conflicted files rather than every entry.
+---@field next_file NvimDiff.Config.Key
 ---@field prev_file NvimDiff.Config.Key
 --- Flip a branch diff between merge-base (`a...b`) and tip-to-tip (`a..b`).
 ---@field toggle_range NvimDiff.Config.Key

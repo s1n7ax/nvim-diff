@@ -27,12 +27,17 @@
 --- A file that exists on one side only (added, deleted, untracked) opens unified, since
 --- side-by-side would be one pane of text beside one pane of filler; the toggle still flips it.
 ---
+--- Selecting a conflicted (`U`) entry opens `views/conflict.lua`'s three-way layout in its
+--- own tabpage instead, leaving a note in the area; the other `U` entries in this view's
+--- list become that view's `next_file`/`prev_file` order.
+---
 --- A view given a `range` can flip it between merge-base (`a...b`) and tip-to-tip (`a..b`)
 --- with `keymaps.view.toggle_range`. A view whose right side is the worktree or the index
 --- re-lists its files when its tabpage is entered and when Neovim regains focus.
 
 local blob = require("nvim-diff.git.blob")
 local config = require("nvim-diff.config")
+local conflict_view = require("nvim-diff.views.conflict")
 local entry_mod = require("nvim-diff.scene.entry")
 local event = require("nvim-diff.core.event")
 local files = require("nvim-diff.git.files")
@@ -406,7 +411,8 @@ end
 
 --- Show `entry` in the area. A deferred entry shows a note unless `force` (or it was
 --- forced before); asking for the entry whose deferred note is already showing counts as
---- asking to load it.
+--- asking to load it. A conflicted (`U`) entry opens the merge conflict view in its own
+--- tabpage instead, and the cursor is left there.
 ---@param entry? NvimDiff.FileEntry Nil clears the selection.
 ---@param opts? { force?: boolean }
 function View:select(entry, opts)
@@ -427,6 +433,10 @@ function View:select(entry, opts)
   self:reveal(entry)
   if not entry then
     self:show_note({ "", "  Select a file in the panel." })
+  elseif entry.change.status == "U" then
+    self:show_note({ "", "  " .. entry.path, "", "  Resolving this conflict in a separate tab." })
+    self:open_conflict(entry)
+    return
   elseif entry.change.binary then
     self:show_note({ "", "  " .. entry.path, "", "  Binary file; not shown." })
   elseif entry.deferred and not entry.forced then
@@ -550,6 +560,27 @@ function View:show_diff(entry)
       self:on_scene(entry, file)
     end,
   })
+end
+
+--- Open the merge conflict view for a conflicted (`U`) entry, in its own tabpage. Every
+--- other `U` entry in this view's list becomes that view's `next_file`/`prev_file` order,
+--- in panel order rather than `git/files.lua`'s.
+---@param entry NvimDiff.FileEntry
+function View:open_conflict(entry)
+  local conflicted = {}
+  for _, e in ipairs(self.list.entries) do
+    if e.change.status == "U" then
+      conflicted[#conflicted + 1] = e.path
+    end
+  end
+  local ok, err = pcall(conflict_view.open, {
+    repo = self.repo,
+    path = path.from_git(self.repo.toplevel, entry.path),
+    files = conflicted,
+  })
+  if not ok then
+    log.error("cannot open the conflict view for %s: %s", entry.path, tostring(err):gsub("^nvim%-diff: ", ""))
+  end
 end
 
 --- A diff's scene is up — first open or after a flip: map the view keys in its new buffers,

@@ -63,6 +63,30 @@ local function find(view, p)
   error("no entry " .. p)
 end
 
+--- A repository stopped in a merge with two conflicted files, `a.txt` and `m.txt`, plus a
+--- clean `z.txt` that only ours touched.
+---@return Test.Repo repo
+---@return string base
+local function conflict_fixture()
+  local r = gitrepo.new()
+  r:write("a.txt", "a1\na2\n")
+  r:write("m.txt", "m1\nm2\n")
+  r:write("z.txt", "z\n")
+  local base = r:commit("base")
+  r:git({ "checkout", "-q", "-b", "feature" })
+  r:write("a.txt", "a1\na2-theirs\n")
+  r:write("m.txt", "m1\nm2-theirs\n")
+  r:commit("theirs")
+  r:git({ "checkout", "-q", "main" })
+  r:write("a.txt", "a1\na2-ours\n")
+  r:write("m.txt", "m1\nm2-ours\n")
+  r:write("z.txt", "z-ours\n")
+  r:commit("ours")
+  local res = vim.system({ "git", "merge", "-q", "feature" }, { cwd = r.root }):wait()
+  assert(res.code ~= 0, "the merge should conflict")
+  return r, base
+end
+
 describe("views.diff", function()
   ---@type NvimDiff.DiffView?
   local view
@@ -437,6 +461,46 @@ describe("views.diff", function()
     expect.eq(true, u.closed)
     view:next_file()
     expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", view.file.scene.win } } }, vim.fn.winlayout())
+  end)
+
+  it("opens a conflicted (U) entry as the conflict view instead of a diff pair", function()
+    -- Conflicted paths surface as `U` only through the index: `git diff <commit>` (no
+    -- `--cached`, the default `:NvimDiffOpen`) never consults the unmerged stages and
+    -- reports a plain `M`, so this needs the `--cached`/`--staged` pair (HEAD vs index).
+    local cr, cbase = conflict_fixture()
+    local repo = assert(repo_mod.discover(cr.root))
+    view = views.open({ repo = repo, left = rev.commit(cbase, "main"), right = rev.index() })
+    local a, m = find(view, "a.txt"), find(view, "m.txt")
+    expect.eq("U", a.change.status)
+    expect.eq("U", m.change.status)
+
+    local tabs = #api.nvim_list_tabpages()
+    local opened = {}
+    local off = event.on(event.events.VIEW_OPENED, function(v)
+      opened[#opened + 1] = v
+    end)
+    view:select(a)
+    off()
+
+    expect.eq(tabs + 1, #api.nvim_list_tabpages())
+    expect.eq(1, #opened)
+    local cview = opened[1]
+    expect.eq("a.txt", cview.git_path)
+    -- Only the U entries, in this view's (panel) order.
+    expect.eq({ "a.txt", "m.txt" }, cview.files)
+    expect.truthy(cview:next_file())
+    expect.eq("m.txt", cview.git_path)
+    cview:close()
+
+    -- Back in the diff view's own tab, the area holds a note, not a diff.
+    api.nvim_set_current_tabpage(view.tab)
+    expect.truthy(view.note_win)
+    expect.eq(nil, view.file)
+    expect.eq(a, view.current)
+
+    -- The conflict view's result buffers (a.txt, then m.txt) stay loaded by design; wipe
+    -- them so the fixture's directory (removed in after_each) leaves nothing dangling.
+    vim.cmd("silent! %bwipeout!")
   end)
 end)
 
