@@ -281,81 +281,16 @@ end
 
 -- The separator text -------------------------------------------------------------------
 
---- Longest scope text shown, in characters.
-M.SCOPE_MAX = 60
-
---- Whether a line can name the scope that follows it — git's default `funcname` rule (a
---- line starting with a letter, `_` or `$`), minus lone words such as `end`, `else` or
---- `fi`, which close scopes rather than open them.
----@param text string
----@return boolean
-function M.is_scope_line(text)
-  if not text:find("^[%a_$]") then
-    return false
-  end
-  return not text:find("^[%w_$]+%s*[;,]?%s*$")
-end
-
---- Sorted line numbers of every scope line of a file. Built once per side, so naming the
---- scope of any fold is a binary search.
----@param lines string[]
----@return integer[]
-function M.scope_index(lines)
-  local out = {}
-  for i, text in ipairs(lines) do
-    if M.is_scope_line(text) then
-      out[#out + 1] = i
-    end
-  end
-  return out
-end
-
---- The enclosing scope of line `lnum`, cheaply: the nearest scope line at or above it, the
---- same line git puts after `@@` for a hunk starting below it. Nil when there is none.
----@param lines string[]
----@param index integer[] From `scope_index(lines)`.
----@param lnum integer
----@return string?
-function M.scope_at(lines, index, lnum)
-  local lo, hi, found = 1, #index, nil
-  while lo <= hi do
-    local mid = math.floor((lo + hi) / 2)
-    if index[mid] <= lnum then
-      found = index[mid]
-      lo = mid + 1
-    else
-      hi = mid - 1
-    end
-  end
-  if not found then
-    return nil
-  end
-  local text = lines[found]:gsub("%s*{?%s*$", "")
-  if vim.fn.strchars(text) > M.SCOPE_MAX then
-    text = vim.fn.strcharpart(text, 0, M.SCOPE_MAX - 1) .. "…"
-  end
-  return text
-end
-
---- The separator's text, up to where the fill takes over.
+--- The text of a reformat separator drawn as a virtual row, on a side with no lines in the
+--- hunk. A closed fold shows the user's own `foldtext` instead.
 ---
----     128 unchanged lines — impl Server
 ---     reformatted into 5 lines — no semantic change
 ---@param diff NvimDiff.Diff
 ---@param fold NvimDiff.Fold
----@param scope? string
 ---@return string
-function M.label(diff, fold, scope)
-  if fold.kind == "reformat" then
-    local n = diff.hunks[fold.hunk].new_count
-    return ("reformatted into %d line%s — no semantic change"):format(n, n == 1 and "" or "s")
-  end
-  local n = fold.last - fold.first + 1
-  local text = ("%d unchanged line%s"):format(n, n == 1 and "" or "s")
-  if scope and scope ~= "" then
-    text = text .. " — " .. scope
-  end
-  return text
+function M.label(diff, fold)
+  local n = diff.hunks[fold.hunk].new_count
+  return ("reformatted into %d line%s — no semantic change"):format(n, n == 1 and "" or "s")
 end
 
 --- Highlight group of a separator's text.
@@ -364,24 +299,5 @@ end
 function M.group(fold)
   return fold.kind == "reformat" and "NvimDiffReformatSeparator" or "NvimDiffContextSeparator"
 end
-
---- Separator text per buffer, keyed by the fold's first buffer line: what `foldtext` shows.
----@type table<integer, table<integer, [string, string]>>
-M.texts = {}
-
---- `foldtext` of every pane: the text registered for this buffer's fold. The row's
---- background comes from the window's `Folded` remap; the chunk's group can override it
---- (measured: a chunk group with a background does win over the remap).
----@return [string, string][]|string
-function M.foldtext()
-  local t = M.texts[vim.api.nvim_get_current_buf()]
-  local entry = t and t[vim.v.foldstart]
-  if not entry then
-    return M.FILL:rep(3)
-  end
-  return { { entry[1] .. " ", entry[2] } }
-end
-
-M.FOLDTEXT = "v:lua.require'nvim-diff.render.fold'.foldtext()"
 
 return M

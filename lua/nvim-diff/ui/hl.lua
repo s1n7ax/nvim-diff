@@ -9,7 +9,7 @@
 ---     a colorscheme that already defines `NvimDiffAddLine` keeps it. They do not survive
 ---     `:colorscheme`, hence the autocommand.
 ---   * a private namespace, bound to plugin windows with `nvim_win_set_hl_ns`, holding the
----     remaps that must not leak into other windows (`Folded` is the separator band).
+---     remaps that must not leak into other windows. `Folded` is deliberately not remapped.
 ---     A namespace survives both `:colorscheme` and `:hi clear`, and falls back to the
 ---     global namespace for every group it does not define.
 ---
@@ -37,12 +37,9 @@ M.groups = {
   NvimDiffDelToken = { dark = { bg = "#7a2129" }, light = { bg = "#f0aeb5" } },
   NvimDiffAddToken = { dark = { bg = "#2f6f2f" }, light = { bg = "#a6e8b5" } },
 
-  -- The steel band: pale text on dark blue, filled to the window edge. Loud enough to be a
-  -- landmark, calmer than amber.
-  NvimDiffContextSeparator = {
-    dark = { fg = "#c9d8e8", bg = "#1c3a5e", bold = true },
-    light = { fg = "#f2f6fa", bg = "#2f5f93", bold = true },
-  },
+  -- The folded-context band: the colorscheme's own `Folded`, so it looks like a fold anywhere
+  -- else.
+  NvimDiffContextSeparator = { dark = { link = "Folded" }, light = { link = "Folded" } },
   -- A collapsed reformat reads as the same kind of landmark.
   NvimDiffReformatSeparator = {
     dark = { link = "NvimDiffContextSeparator" },
@@ -62,6 +59,11 @@ M.groups = {
   -- Comment threads, rendered as virtual lines under the commented row: a bubble whose
   -- border carries the thread's state as a coloured badge.
   NvimDiffThreadBorder = { dark = { fg = "#5f87d7" }, light = { fg = "#3060b0" } },
+  -- The border of the threads on the cursor's line, lit so it reads as belonging to it.
+  NvimDiffThreadBorderActive = {
+    dark = { fg = "#ffd75f", bold = true },
+    light = { fg = "#c25e00", bold = true },
+  },
   NvimDiffThreadAuthor = { dark = { fg = "#8fb8ef", bold = true }, light = { fg = "#1f4f95", bold = true } },
   NvimDiffThreadBadgeUnresolved = {
     dark = { fg = "#1d1d1d", bg = "#e0a458", bold = true },
@@ -140,9 +142,7 @@ M.groups = {
 
 --- Namespace-local remaps. These exist only inside plugin windows.
 ---@type table<string, string>
-local REMAPS = {
-  Folded = "NvimDiffContextSeparator",
-}
+local REMAPS = {}
 
 local augroup = nil
 

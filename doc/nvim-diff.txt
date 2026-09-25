@@ -215,9 +215,9 @@ one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
 file that is not; `<leader><BS>` clears the mark.
 
-Comment threads show as a one-line summary under the commented line (author,
-first line, replies, resolved state). `<CR>` expands a thread in place, under
-the line, with every reply. Resolved threads are dimmed with a `✓`
+Comment threads show under the commented line: unresolved ones expanded, with
+every reply, resolved ones as a one-line summary (author, first line, replies,
+resolved state). `<CR>` expands or collapses a thread in place. Resolved threads are dimmed with a `✓`
 (|nvim-diff-config.threads.resolved|). Outdated threads, threads outside the
 shown diff and file-level comments go to a side list (`gC`).
 
@@ -610,7 +610,8 @@ it; |nvim-diff-config.highlights| overrides any of them. They are redefined on
 |ColorScheme| and when 'background' changes, with separate dark and light
 colors. Diff groups set a background only, so syntax colors show through.
 
-Inside plugin windows, |hl-Folded| is linked to `NvimDiffContextSeparator`.
+`NvimDiffContextSeparator` links to |hl-Folded|, so folds look as they do in
+any other window.
 
 Diff panes ~
   *NvimDiffDelLine*            changed line, old pane
@@ -624,6 +625,7 @@ Diff panes ~
 
 Comment threads and the comment split ~
   *NvimDiffThreadBorder*       a thread bubble's border
+  *NvimDiffThreadBorderActive* the border of the threads on the cursor's line
   *NvimDiffThreadBadgeUnresolved* the UNRESOLVED badge
   *NvimDiffThreadBadgeResolved* the RESOLVED badge
                                    *NvimDiffThreadAuthor*       comment author

@@ -1,5 +1,6 @@
 --- Comment threads on one file's diff: each anchored thread drawn under its line as
---- virtual lines, collapsed to one line until expanded in place. Never a float.
+--- virtual lines, expanded in place when unresolved and collapsed to one line when
+--- resolved, until toggled. Never a float.
 ---
 --- Built on the fileview's block API (`scene/fileview.lua` `set_block`), so everything the
 --- block machinery guarantees holds here for free, in both layouts and across the toggle:
@@ -40,7 +41,9 @@ local M = {}
 local BLOCK = "nvim-diff.threads:"
 
 ---@class NvimDiff.ThreadState
----@field expanded table<string, boolean> Thread id to expanded.
+--- Thread id to expanded, for threads toggled by hand. A thread not in it is expanded
+--- when unresolved (see `ThreadView:is_expanded`).
+---@field expanded table<string, boolean>
 ---@field resolved "dim"|"hide"
 --- Threads resolved during this review: drawn dimmed even while resolved ones are hidden,
 --- so a resolve can be seen and undone. Cleared when the resolved mode changes.
@@ -62,6 +65,9 @@ local BLOCK = "nvim-diff.threads:"
 ---@field private opts NvimDiff.ThreadViewOpts
 ---@field private rows table<integer, NvimDiff.GitHub.Thread[]> Display row to its threads, in list order.
 ---@field private row_of_thread table<string, integer>
+---@field private span table<string, integer[]> Thread id to the display rows `{ first, last }` of its lines.
+---@field private active table<string, boolean> Threads on the cursor's line, drawn lit.
+---@field private augroup integer
 ---@field private loose { thread: NvimDiff.GitHub.Thread, place: NvimDiff.ThreadPlace }[]
 ---@field private placed table<integer, boolean> Rows that currently hold a block.
 ---@field private width integer Display cells threads were last laid out for.
@@ -71,7 +77,7 @@ local BLOCK = "nvim-diff.threads:"
 local ThreadView = {}
 ThreadView.__index = ThreadView
 
---- A fresh state table: nothing expanded, resolved threads as the config says.
+--- A fresh state table: nothing toggled, resolved threads as the config says.
 ---@return NvimDiff.ThreadState
 function M.new_state()
   return { expanded = {}, resolved = config.get().threads.resolved, kept = {} }
@@ -105,12 +111,16 @@ function M.attach(file, threads, opts)
     opts = opts,
     rows = {},
     row_of_thread = {},
+    span = {},
+    active = {},
     loose = {},
     placed = {},
     width = 0,
     mapped = {},
     detached = false,
   }, ThreadView)
+  M.seq = (M.seq or 0) + 1
+  self.augroup = api.nvim_create_augroup("nvim-diff.threads." .. M.seq, { clear = true })
   self.unwatch = file:watch_scene(function()
     self:on_scene()
   end)
@@ -136,7 +146,7 @@ end
 ---@param threads NvimDiff.GitHub.Thread[]
 function ThreadView:set_threads(threads)
   self.threads = threads
-  self.rows, self.row_of_thread, self.loose = {}, {}, {}
+  self.rows, self.row_of_thread, self.span, self.loose = {}, {}, {}, {}
   local diff = self.file:diff()
   for _, t in ipairs(threads) do
     local row, place = thread_mod.anchor(t, diff)
@@ -144,11 +154,54 @@ function ThreadView:set_threads(threads)
       self.rows[row] = self.rows[row] or {}
       table.insert(self.rows[row], t)
       self.row_of_thread[t.id] = row
+      local first = t.start_line and t.start_line >= 1 and t.start_line < t.line and t.start_line
+      self.span[t.id] = { first and diff:row_of(t.side or "new", first) or row, row }
     else
       self.loose[#self.loose + 1] = { thread = t, place = place }
     end
   end
+  self.active = self:lit()
   self:render()
+end
+
+--- The threads whose lines hold the cursor: on either side, since in side-by-side the old
+--- pane's line faces the new pane's thread.
+---@return table<string, boolean>
+function ThreadView:lit()
+  local out = {}
+  local ok, row = pcall(self.cursor_row, self)
+  if not ok or not row then
+    return out
+  end
+  for id, span in pairs(self.span) do
+    if row >= span[1] and row <= span[2] then
+      out[id] = true
+    end
+  end
+  return out
+end
+
+--- The cursor moved: relight the rows whose threads it came onto or left.
+function ThreadView:on_cursor()
+  if self.detached or self.file:is_closed() then
+    return
+  end
+  local now = self:lit()
+  local rows = {}
+  for id in pairs(now) do
+    if not self.active[id] then
+      rows[self.row_of_thread[id]] = true
+    end
+  end
+  for id in pairs(self.active) do
+    if not now[id] and self.row_of_thread[id] then
+      rows[self.row_of_thread[id]] = true
+    end
+  end
+  self.active = now
+  for row in pairs(rows) do
+    self:render_row(row)
+  end
 end
 
 --- Whether `t` is drawn at all.
@@ -156,6 +209,17 @@ end
 ---@return boolean
 function ThreadView:visible(t)
   return not (t.resolved and self.state.resolved == "hide" and not (self.state.kept and self.state.kept[t.id]))
+end
+
+--- Whether `t` shows expanded: as last toggled, else when it is unresolved.
+---@param t NvimDiff.GitHub.Thread
+---@return boolean
+function ThreadView:is_expanded(t)
+  local e = self.state.expanded[t.id]
+  if e == nil then
+    return not t.resolved
+  end
+  return e
 end
 
 --- The block for display row `row`, or nil when none of its threads shows.
@@ -168,10 +232,11 @@ function ThreadView:block(row)
     if self:visible(t) then
       local side = t.side or "new"
       local lines = block[side] or {}
-      if self.state.expanded[t.id] then
-        vim.list_extend(lines, thread_mod.expanded_lines(t, { width = self.width }))
+      local o = { width = self.width, tail = true, active = self.active[t.id] }
+      if self:is_expanded(t) then
+        vim.list_extend(lines, thread_mod.expanded_lines(t, o))
       else
-        lines[#lines + 1] = thread_mod.collapsed_line(t, { width = self.width })
+        lines[#lines + 1] = thread_mod.collapsed_line(t, o)
       end
       block[side] = lines
       any = true
@@ -247,9 +312,9 @@ function ThreadView:toggle(id, expanded)
     return false
   end
   if expanded == nil then
-    expanded = not self.state.expanded[id]
+    expanded = not self:is_expanded(t)
   end
-  self.state.expanded[id] = expanded or nil
+  self.state.expanded[id] = expanded
   self:render_row(row)
   return true
 end
@@ -272,7 +337,7 @@ function ThreadView:expand_all(expanded)
   expanded = expanded ~= false
   for _, list in pairs(self.rows) do
     for _, t in ipairs(list) do
-      self.state.expanded[t.id] = expanded or nil
+      self.state.expanded[t.id] = expanded
     end
   end
   self:render()
@@ -311,10 +376,10 @@ function ThreadView:toggle_at_cursor()
   end
   local all = true
   for _, t in ipairs(list) do
-    all = all and self.state.expanded[t.id] == true
+    all = all and self:is_expanded(t)
   end
   for _, t in ipairs(list) do
-    self.state.expanded[t.id] = not all or nil
+    self.state.expanded[t.id] = not all
   end
   self:render_row(self:cursor_row() --[[@as integer]])
   return true
@@ -400,8 +465,19 @@ function ThreadView:unanchored()
   return self.loose
 end
 
---- Map the thread keys in the scene's buffers, once per buffer.
+--- Map the thread keys in the scene's buffers, once per buffer, and watch their cursor.
 function ThreadView:map_keys()
+  for _, buf in ipairs(self.file:bufs()) do
+    if #api.nvim_get_autocmds({ group = self.augroup, buffer = buf }) == 0 then
+      api.nvim_create_autocmd({ "CursorMoved", "BufEnter" }, {
+        group = self.augroup,
+        buffer = buf,
+        callback = function()
+          self:on_cursor()
+        end,
+      })
+    end
+  end
   if self.opts.keys == false then
     return
   end
@@ -454,6 +530,7 @@ function ThreadView:detach()
   self.placed = {}
   self.detached = true
   self.unwatch()
+  pcall(api.nvim_del_augroup_by_id, self.augroup)
   for _, m in ipairs(self.mapped) do
     if api.nvim_buf_is_valid(m.buf) then
       pcall(vim.keymap.del, "n", m.lhs, { buffer = m.buf })

@@ -29,9 +29,9 @@ local api = vim.api
 
 local M = {}
 
---- Window options a folding pane needs on top of `scene/window.lua`'s. `fillchars` is left
---- alone: past the separator's text the row is filled with the user's `fold:` character,
---- as any native fold is.
+--- Window options a folding pane needs on top of `scene/window.lua`'s. `foldtext` and
+--- `fillchars` are left alone: a closed fold reads as the user's own folds do, whether
+--- Neovim or a fold plugin draws it.
 ---@param win integer
 function M.setup_window(win)
   local function set(name, value)
@@ -39,27 +39,17 @@ function M.setup_window(win)
   end
   set("foldenable", true)
   set("foldlevel", 0)
-  set("foldtext", fold.FOLDTEXT)
 end
 
---- One closed fold of a window: buffer lines `first..last` and the separator it shows.
+--- One closed fold of a window: buffer lines `first..last`.
 ---@class NvimDiff.FoldLines
 ---@field first integer
 ---@field last integer
----@field text string
----@field group string
 
---- Replace every fold of `win` (showing `buf`) with `list`, and register the separator
---- texts `foldtext` shows. Moves the view: callers restore it.
+--- Replace every fold of `win` with `list`. Moves the view: callers restore it.
 ---@param win integer
----@param buf integer
 ---@param list NvimDiff.FoldLines[]
-function M.build(win, buf, list)
-  local texts = {}
-  for _, l in ipairs(list) do
-    texts[l.first] = { l.text, l.group }
-  end
-  fold.texts[buf] = texts
+function M.build(win, list)
   api.nvim_win_call(win, function()
     vim.cmd("silent! normal! zE")
     for _, l in ipairs(list) do
@@ -68,27 +58,8 @@ function M.build(win, buf, list)
   end)
 end
 
---- The separator text of fold `f`. A context fold names its scope from `lines` (one
---- side's file) at file line `last`; `scopes[key]` caches that file's scope-line index,
---- built on first use.
----@param diff NvimDiff.Diff
----@param f NvimDiff.Fold
----@param lines string[]
----@param last integer
----@param scopes table
----@param key any
----@return string
-function M.label(diff, f, lines, last, scopes, key)
-  local scope
-  if f.kind == "context" then
-    scopes[key] = scopes[key] or fold.scope_index(lines)
-    scope = fold.scope_at(lines, scopes[key], last)
-  end
-  return fold.label(diff, f, scope)
-end
-
---- Replace every fold in `side`'s pane with the pair's current folds, and register the
---- separator texts `foldtext` shows. Moves the view: callers restore it.
+--- Replace every fold in `side`'s pane with the pair's current folds. Moves the view:
+--- callers restore it.
 ---@param pair NvimDiff.Pair
 ---@param side NvimDiff.Side
 function M.apply(pair, side)
@@ -98,21 +69,10 @@ function M.apply(pair, side)
     local a, b = fold.side_lines(diff, f, side)
     if a and b then
       -- Buffer line = file line + 1: the header is line 1.
-      list[#list + 1] = {
-        first = a + 1,
-        last = b + 1,
-        text = M.label(diff, f, pair.lines[side], b, pair.scopes, side),
-        group = fold.group(f),
-      }
+      list[#list + 1] = { first = a + 1, last = b + 1 }
     end
   end
-  M.build(pair.wins[side], pair.bufs[side], list)
-end
-
---- Forget a buffer's separator texts.
----@param buf integer
-function M.forget(buf)
-  fold.texts[buf] = nil
+  M.build(pair.wins[side], list)
 end
 
 --- What the fold keys need from a scene.
