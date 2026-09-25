@@ -66,6 +66,11 @@ M.groups = {
   NvimDiffThreadMeta = { dark = { link = "Comment" }, light = { link = "Comment" } },
   NvimDiffThreadResolved = { dark = { link = "Comment" }, light = { link = "Comment" } },
 
+  -- The comment split: its header (a winbar), its key hints, and a failed post's error.
+  NvimDiffCommentHeader = { dark = { link = "NvimDiffHeader" }, light = { link = "NvimDiffHeader" } },
+  NvimDiffCommentHint = { dark = { link = "Comment" }, light = { link = "Comment" } },
+  NvimDiffCommentError = { dark = { link = "ErrorMsg" }, light = { link = "ErrorMsg" } },
+
   -- The file panel.
   NvimDiffPanelTitle = { dark = { link = "Title" }, light = { link = "Title" } },
   NvimDiffPanelDir = { dark = { link = "Directory" }, light = { link = "Directory" } },

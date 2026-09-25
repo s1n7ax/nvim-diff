@@ -107,6 +107,9 @@ end
 ---@field value string|number|boolean
 
 ---@class NvimDiff.GitHub.RequestOpts
+--- HTTP method, sent as `--method`. Omitted: `gh`'s own default — GET, or POST as soon as
+--- any field is sent. A write always names its method rather than lean on that.
+---@field method? "GET"|"POST"|"PATCH"|"PUT"|"DELETE"
 ---@field headers? string[] Extra `key: value` headers.
 ---@field vars? NvimDiff.GitHub.Var[] `-f`/`-F` fields, sent as `gh api` request parameters.
 ---@field timeout_ms? integer
@@ -165,6 +168,9 @@ end
 function M.request(host, endpoint, opts)
   opts = opts or {}
   local args = { "api", "--hostname", host, "-i" }
+  if opts.method then
+    vim.list_extend(args, { "--method", opts.method })
+  end
   for _, header in ipairs(opts.headers or {}) do
     vim.list_extend(args, { "-H", header })
   end
