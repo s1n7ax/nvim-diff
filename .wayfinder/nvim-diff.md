@@ -128,7 +128,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Threads in the side list (outdated, file-level) can be edited and deleted there, but not replied to or resolved. Should the side list get the reply and resolve keys?
 - Should a suggestion take the lines from the PR worktree buffer when the user has edited the file locally? Today it takes the head blob as diffed.
 - File-level comments use REST `subject_type=file`; older GHES may lack it. No feature detection — the API error shows.
-- Live `gh` output for a `204 No Content` DELETE was never seen; `classify` accepts an empty 2xx body on the stub's word.
+- A 422 for a line outside the diff shows GitHub's raw text (`Validation Failed: could not be resolved`), and a deleted comment shows `gh api returned HTTP 404`. Rewrite these into plain messages?
 - `gm` and `gL` are also mapped in the panels and note buffers; `gm` in the history panel only warns. Should they be mapped there at all?
 - Closing a whole view (`:NvimDiffClose`, review end) leaves its cached commit buffers for the LRU cap, so `:ls!` can show up to 64 hidden `nvim-diff://` buffers. Clear them on close instead?
 - Should `:checkhealth nvim-diff` report the buffer cache size (`buffer.kept()` exists, not wired)? Should returning to a cached file also skip the git read?
@@ -166,7 +166,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting — [result](#result-implement-resolve-reply-and-resolve-unresolve)
 - [x] implement: README, docs, and health check polish — [result](#result-implement-readme-docs-and-health-check-polish)
 - [x] implement: LRU cap on non-local diff buffers — `buffers.lru_size` is accepted but nothing reads it — [result](#result-implement-lru-cap-on-non-local-diff-buffers)
-- [ ] task: one live run of every GitHub write path (comment, reply, range, file-level, edit, delete, suggestion, resolve, unresolve, verdict) against a real throwaway PR — so far only the `gh` stub has seen them
+- [x] task: one live run of every GitHub write path (comment, reply, range, file-level, edit, delete, suggestion, resolve, unresolve, verdict) against a real throwaway PR — so far only the `gh` stub has seen them — [result](#result-task-one-live-run-of-every-github-write-path)
 
 ## Implementation notes
 
@@ -1652,3 +1652,20 @@ Found, not fixed: `buffers.lru_size` does nothing — there is no buffer LRU, co
 Merged to `main` in `891da46` (branch `feat/buffer-lru`, commit `8155896`). `make check` on the branch: 630/630 (10 new, `scene_buffer_spec.lua` plus two in `views_diff_spec.lua`).
 
 Found: there was no leak — every pane buffer was already wiped when its view moved on or closed, so nothing existed for `lru_size` to cap. The step became a reuse cache for committed-blob buffers (`nvim-diff://<gitdir>/<rev>/<path>`), bounded by `lru_size`: returning to a file gets the same buffer back with its parse kept. Side-by-side, unified and conflict views now `release` on close; the diff view marks committed sides `keep`. Docs and README updated; the "not implemented yet" limitation removed. Decisions are under Implementation notes; follow-ups under Open questions.
+
+### result: task: one live run of every GitHub write path
+
+Ran on 2026-09-25 against a private throwaway repo, `s1n7ax/nvim-diff-live-test` PR #1, with real `gh` (github.com), by driving the `github/*` modules from a headless Neovim task. The compose split UI was not driven; it stays covered by the stub tests.
+
+All 22 checks passed:
+
+- `pr.fetch`; line comment on the new side; line comment on the old side (`LEFT`, line 20); range comment 18–20; suggestion comment (the ```` ```suggestion ```` body came back unchanged); file-level comment (`subject_type=file` works on github.com).
+- `threads.fetch` found all 5 threads; reply lands with `in_reply_to` set to the first comment; edit returns the new body.
+- **Delete: the live `204 No Content` is read as success.** This closes the open question about the stub. Deleting the same comment again gives `not_found` (404).
+- Resolve, unresolve, and reply-then-resolve all return GitHub's thread state (`resolved_by = s1n7ax`).
+- Viewed mark and unmark; `viewed.fetch` shows `a.txt = viewed` after the mark.
+- Verdict `COMMENT` gives `COMMENTED` plus the review URL. `APPROVE` and `REQUEST_CHANGES` on your own PR give 422 with GitHub's text (`Can not approve your own pull request`). That is the expected error path. A real approve needs a second account, so it was not run.
+- A line outside the diff gives 422 `api_error: Validation Failed: could not be resolved`. It works, but the message is raw. Added to Open questions.
+
+Decisions made without the user: I tested at the module layer, not by pressing keys. I added the viewed mark and unmark, which were not in the step's list. The throwaway repo is **not deleted yet**, because the `gh` token lacks the `delete_repo` scope. Delete it with `gh auth refresh -h github.com -s delete_repo && gh repo delete s1n7ax/nvim-diff-live-test --yes`.
+
