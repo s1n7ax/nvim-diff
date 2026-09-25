@@ -39,6 +39,13 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Resolved threads are dimmed or hidden by default so a busy PR stays readable.
 - Inline comments post to GitHub immediately, one at a time, as standalone comments — not queued into a pending review batch.
 - Resolving a thread has two keys: one resolves straight away, one takes a reply first and then resolves. Either way the thread stays on screen dimmed with a ✓, and can be unresolved.
+- A new inline comment or a reply is typed in a bottom split buffer under the diff — a real buffer (multi-line markdown, spell, undo) with a header naming the file:line or the thread being answered; a key posts, another cancels. The diff panes stay read-only.
+- A new file-level comment is posted from a key on a file panel row, through the same split, and shows in the side list afterwards.
+- New inline comments can go on either pane — the old side too, so a deleted line can be asked about, as on GitHub.
+- A comment can cover a range of lines: visual-select, then comment, like GitHub's multi-line comments.
+- Typed text is never lost by accident: a failed post leaves the split open with the text and the error; cancelling with non-empty text asks before discarding. Nothing is written to disk.
+- The user can edit and delete their own posted comments from the plugin: edit reuses the bottom split, delete asks for confirmation.
+- A key in the comment split inserts a GitHub ```` ```suggestion ```` block pre-filled with the commented lines' current text.
 - A separate explicit command submits the review verdict — Approve / Request changes / Comment plus an optional summary body — posted as a review with no inline comments attached, since those went up already. It is never triggered automatically.
 - The plugin keeps no local state. Reopening a PR refetches viewed marks and threads from GitHub, which is the only source of truth; nothing about cursor position, layout or expanded threads is remembered across sessions.
 
@@ -54,7 +61,6 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
 - Injected languages (a Lua fence in markdown, a script tag in HTML, Vue SFCs) need the token list spliced together from one tree per language by byte offset. Not in the first structural step: the root tree is flattened alone — a later step or never?
-- How the user writes a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer. (Now a `grill:` step on the map.)
 - Opening the same PR in two Neovim instances: `worktree.add` replaces the worktree even when the other instance holds its lock, so the second open takes the review away from the first. Refuse, share, or take over?
 - What a "moved code" change should look like. Neither the token-stream design nor difftastic detects a moved block; it reads as a delete plus an add. (The per-language degradation half of this question is answered: it degrades, on three measured triggers.)
 - `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async, cancellable run.
@@ -63,7 +69,6 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Nothing is refetched while a review is open, so another reviewer's new comment stays invisible until the PR is reopened — probably a manual refresh keymap rather than polling.
 - Whether to feature-detect GHES capabilities by introspecting the schema at startup, or just let the API error surface.
 - Should a file with many expanded threads **auto-switch to unified layout** when the mirrored padding gets large, or stay side-by-side however ugly it looks? Alignment holds either way; this is taste.
-- Can new inline comments be posted on the **LEFT** pane at all, or is commenting right-side-only? Supporting LEFT roughly doubles the anchoring and padding cases.
 - When the PR worktree cannot be created — fork not fetched, disk full, stale lock — should the review refuse to open, or open read-only from `git show` blobs with no LSP?
 - How `virt_lines` interact with `foldmethod=diff` fold boundaries, whether `virt_lines_above` anchors the context separator better, and whether a native diff filler region can hold virtual lines at all. (Research, not a requirement — belongs to the rendering-primitives step.)
 - Whether `nvim_win_set_hl_ns` or `winhl` survives a colorscheme reload better and composes correctly with treesitter highlight priorities.
@@ -143,11 +148,12 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: GitHub client — gh auth, Enterprise hosts, PR fetch — [result](#result-implement-github-client)
 - [x] implement: PR review mode — worktree checkout, viewed marks, jump to next unviewed — [result](#result-implement-pr-review-mode)
 - [x] implement: reading comment threads — collapsed virtual line, expand in place, side list — [result](#result-implement-reading-comment-threads)
-- [ ] grill: how the user writes a comment or a reply — inside the expanded virtual lines, or a separate prompt buffer
-- [ ] implement: writing inline comments and replies — needs: grill: how the user writes a comment or a reply
+- [x] grill: how the user writes a comment or a reply — inside the expanded virtual lines, or a separate prompt buffer — [result](#result-grill-how-the-user-writes-a-comment-or-a-reply)
+- [ ] implement: comment split and posting — new line and range comments on either pane, replies, failed-post and cancel handling
 - [ ] implement: review verdict command
-- [ ] implement: resolve, reply-and-resolve, unresolve — needs: writing inline comments and replies
-- [ ] implement: README, docs, and health check polish — needs: resolve, reply-and-resolve, unresolve
+- [ ] implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel — needs: comment split and posting
+- [ ] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting
+- [ ] implement: README, docs, and health check polish — needs: resolve, reply-and-resolve, unresolve; edit and delete own comments, suggestion pre-fill, file-level comments from the panel
 
 ## Implementation notes
 
@@ -1551,3 +1557,17 @@ Merged to `main` in `7ce2b67` (branch `worktree-agent-a52ad181ee0369dfc`, commit
 Built `github/threads.lua` (`fetch(target, number)` — review threads with every comment, author, resolved/outdated state, path, line, side; `LEFT`/`RIGHT` → `old`/`new`; threads and comments paged 100 at a time with cursor variables, since `--paginate` with `-i` glues header blocks together; verified live against `cli/cli#10513`, 84 threads), `review/thread.lua` (pure: `anchor` returns a row or `outdated`/`file`/`off_file`; `collapsed_line` `▌ ▸ alice  why 9090?  · 1 reply · unresolved`; `expanded_lines` wraps each comment under author and date), `review/threadview.lua` (`attach(fileview, threads)` → controller with toggle/expand/collapse/jump/resolved-mode/detach), `review/sidelist.lua` (read-only right split, grouped by path, `q` closes). All threads on one row are one fileview block, so the opposite pane gets blank padding, never `┈` filler; folds split around threads; both layouts and the toggle work. Shared-file changes: `scene/fileview.lua` `View:watch_scene(fn)` (a second scene listener, so the thread controller can remap after a layout flip), `views/diff.lua` `set_threads`/`attach_threads`/`thread_items`/`toggle_thread_list`.
 
 Found: the earlier block machinery (padding, fold splitting, row maps, replay after toggle) already did the hard parts. The collapsed line overflows 40-column panes, so the first comment keeps ≥16 cells and the reply/state text is cut (`· 1 reply · unresolv…`). Every `set_block` repaints the whole file, so N commented rows cost N repaints on open — a bulk `set_blocks` belongs with the existing replay-cost question.
+
+### result: grill: how the user writes a comment or a reply
+
+Six answers, all recorded under Requirements → Reviewing a PR:
+
+- Writing happens in a **bottom split buffer** under the diff (real buffer: multi-line markdown, spell, undo; header names file:line or the thread). Diff panes stay read-only. Rejected: a float under the line (covers the diff) and typing inside the expanded virtual lines (virt_lines cannot be edited; real lines in the read-only pane would break scroll sync).
+- New comments on **either pane** — the old side too (closes the LEFT-pane open question).
+- **Range comments** via visual selection.
+- Text is never lost: failed post keeps the split open with the error; cancel with text asks first; nothing on disk.
+- **Edit and delete** own comments (edit reuses the split, delete confirms).
+- A key inserts a pre-filled ```` ```suggestion ```` block.
+- **File-level comments** from a key on a file panel row, shown in the side list.
+
+Map change: the scope grew past one context, so "writing inline comments and replies" is split into "comment split and posting" and "edit and delete own comments, suggestion pre-fill, file-level comments from the panel". Resolve now needs only the first. The verdict command was always unblocked.
