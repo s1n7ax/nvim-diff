@@ -18,6 +18,7 @@ local M = {}
 ---@field stdin? string
 ---@field log? boolean Add `-c gc.auto=0`.
 ---@field ok_codes? integer[] Exit statuses that count as success besides 0.
+---@field timeout_ms? integer Overrides `git.timeout_ms`, for a network call such as a fetch.
 
 ---@param args string[]
 ---@param opts NvimDiff.Git.CmdOpts
@@ -46,7 +47,7 @@ function M.run(cwd, args, opts)
     cwd = cwd,
     stdin = opts.stdin,
     env = { GIT_TERMINAL_PROMPT = "0" },
-    timeout_ms = require("nvim-diff.config").get().git.timeout_ms,
+    timeout_ms = opts.timeout_ms or require("nvim-diff.config").get().git.timeout_ms,
   })
   local extra = { cmd = job.describe(argv), stderr = res.stderr }
   if not res.spawned then
