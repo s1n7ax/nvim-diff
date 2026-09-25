@@ -237,6 +237,46 @@ function View:map_view(buf)
   map(keys.toggle_range, function()
     self:toggle_range()
   end, "flip between merge-base (a...b) and tip-to-tip (a..b)")
+  map(keys.line_history, function()
+    self:line_history()
+  end, "history of the line under the cursor (git log -L)")
+end
+
+--- Open the history of the line under the cursor (`git log -L`), from whichever side of
+--- the diff the cursor is on. Needs a committed revision on that side — the worktree and
+--- the index have no `-L` history of their own.
+---@return NvimDiff.HistoryView?
+function View:line_history()
+  if not self.file or self.file:is_closed() then
+    log.warn("no diff showing")
+    return nil
+  end
+  local entry = self.current
+  if not entry then
+    return nil
+  end
+  local at = self.file:cursor()
+  if not at.lnum then
+    log.warn("place the cursor on a file line to see its history")
+    return nil
+  end
+  local left, right = self:sides(entry)
+  local rev, git_path
+  if at.side == "old" then
+    rev, git_path = left, entry.oldpath or entry.path
+  else
+    rev, git_path = right, entry.path
+  end
+  if rev.type ~= "commit" then
+    log.warn("line history needs a committed revision, not the %s", rev.type)
+    return nil
+  end
+  return require("nvim-diff.views.history").open_line({
+    repo = self.repo,
+    path = git_path,
+    line = at.lnum,
+    rev = rev.oid,
+  })
 end
 
 --- Re-list the files when the view's tabpage is entered or Neovim regains focus, for a

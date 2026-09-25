@@ -39,3 +39,10 @@ end, {
   complete = "file",
   desc = "nvim-diff: resolve a merge conflict in a three-way layout (default: the current file)",
 })
+
+vim.api.nvim_create_user_command("NvimDiffLineHistory", function()
+  require("nvim-diff.views.history").command_line()
+end, {
+  nargs = 0,
+  desc = "nvim-diff: history of the line under the cursor in the current buffer (git log -L)",
+})
