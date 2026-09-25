@@ -29,8 +29,9 @@ local api = vim.api
 
 local M = {}
 
---- Window options a folding pane needs on top of `scene/window.lua`'s. `fillchars` is
---- merged into the window's value, so the user's other fill characters survive.
+--- Window options a folding pane needs on top of `scene/window.lua`'s. `fillchars` is left
+--- alone: past the separator's text the row is filled with the user's `fold:` character,
+--- as any native fold is.
 ---@param win integer
 function M.setup_window(win)
   local function set(name, value)
@@ -39,14 +40,6 @@ function M.setup_window(win)
   set("foldenable", true)
   set("foldlevel", 0)
   set("foldtext", fold.FOLDTEXT)
-  local fc = {}
-  for item in vim.gsplit(api.nvim_get_option_value("fillchars", { win = win }), ",", { plain = true }) do
-    if item ~= "" and not item:find("^fold:") then
-      fc[#fc + 1] = item
-    end
-  end
-  fc[#fc + 1] = "fold:" .. fold.FILL
-  set("fillchars", table.concat(fc, ","))
 end
 
 --- One closed fold of a window: buffer lines `first..last` and the separator it shows.

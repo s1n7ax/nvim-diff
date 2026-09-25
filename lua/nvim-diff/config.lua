@@ -112,11 +112,11 @@ local M = {}
 --- Unresolve the resolved thread on the cursor's line.
 ---@field unresolve NvimDiff.Config.Key
 
---- Buffer-local to the review verdict split (`:NvimDiffVerdict`), in normal and insert mode.
+--- Buffer-local to the review verdict split (`:NvimDiffVerdict`).
 ---@class NvimDiff.Config.VerdictKeymaps
---- Submit the verdict and summary to GitHub.
+--- Submit the verdict and summary to GitHub, in normal and insert mode.
 ---@field post NvimDiff.Config.Key
---- Close the split; asks first when a summary was typed.
+--- Close the split, in normal mode only; asks first when a summary was typed.
 ---@field cancel NvimDiff.Config.Key
 
 ---@class NvimDiff.Config.Threads
@@ -124,8 +124,8 @@ local M = {}
 ---@field resolved "dim"|"hide"
 
 --- `add`, `reply`, `edit` and `delete` are buffer-local to the diff panes of a PR review;
---- `submit`, `cancel` and `suggest` to the comment split, in normal and insert mode. `:w` in
---- the split posts too.
+--- `submit`, `cancel` and `suggest` to the comment split — `cancel` in normal mode only, the
+--- other two in insert mode too. `:w` in the split posts too.
 ---@class NvimDiff.Config.CommentKeymaps
 --- New comment on the cursor's line of the pane it is in (old or new); in visual mode, on
 --- the selected lines; in the file panel, a file-level comment on the file under the cursor.
@@ -137,7 +137,7 @@ local M = {}
 --- Delete your comment in the thread on the cursor's line, after asking (also in the side list).
 ---@field delete NvimDiff.Config.Key
 ---@field submit NvimDiff.Config.Key Post what the split holds.
---- Close the split; asks first when it holds text.
+--- Close the split, in normal mode only; asks first when it holds text.
 ---@field cancel NvimDiff.Config.Key
 --- Insert a ```` ```suggestion ```` block holding the commented lines as they are.
 ---@field suggest NvimDiff.Config.Key
@@ -146,6 +146,9 @@ local M = {}
 ---@field height integer Rows of the comment split.
 
 ---@class NvimDiff.Config.Keymaps
+--- In every buffer of every view and in the comment split: a menu of the keys that work
+--- there, each runnable from the menu.
+---@field help NvimDiff.Config.Key
 ---@field review NvimDiff.Config.ReviewKeymaps
 ---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
 ---@field view NvimDiff.Config.ViewKeymaps Buffer-local to the file panel and every pane of a view.
@@ -235,6 +238,8 @@ local defaults = {
   },
 
   keymaps = {
+    -- lazygit's key menu.
+    help = "?",
     panel = {
       select = "<CR>",
       toggle_listing = "i",
@@ -277,12 +282,12 @@ local defaults = {
       unresolve = "<leader>cu",
     },
     -- `<C-s>` may freeze a terminal with flow control on (`stty -ixon` frees it); `:w`
-    -- posts as well.
+    -- posts as well. `q` cancels from normal mode, where it cannot be hit while typing.
     comment = {
       add = "<leader>cc",
       reply = "<leader>cr",
       submit = "<C-s>",
-      cancel = "<C-c>",
+      cancel = "q",
       edit = "<leader>ce",
       delete = "<leader>cd",
       -- `<C-g>` is insert mode's own prefix for small commands; `s` is free there.
@@ -291,7 +296,7 @@ local defaults = {
     -- The same editor split as a comment, so the same keys.
     verdict = {
       post = "<C-s>",
-      cancel = "<C-c>",
+      cancel = "q",
     },
   },
 
@@ -365,6 +370,7 @@ local schema = {
   },
 
   keymaps = {
+    help = KEY,
     panel = {
       select = KEY,
       toggle_listing = KEY,

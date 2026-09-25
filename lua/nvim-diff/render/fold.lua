@@ -44,8 +44,10 @@ M.STEP = 10
 --- leave one reveals it too.
 M.MIN_ROWS = 2
 
---- Fill of the separator row, from column 1 to the window edge.
-M.FILL = "·"
+--- Fill of the separator row's own columns (number column, virtual separator rows). Blank:
+--- the band is its highlight, and past the text the window's `fillchars` `fold:` item
+--- fills the row, as for any native fold.
+M.FILL = " "
 
 ---@class NvimDiff.FoldOpts
 ---@field context? integer Default `M.CONTEXT`; values below 1 are raised to 1, so the row
@@ -337,22 +339,21 @@ end
 
 --- The separator's text, up to where the fill takes over.
 ---
----     ··· 128 unchanged lines ··· impl Server ·····················
----     ··· reformatted into 5 lines — no semantic change ···········
+---     128 unchanged lines — impl Server
+---     reformatted into 5 lines — no semantic change
 ---@param diff NvimDiff.Diff
 ---@param fold NvimDiff.Fold
 ---@param scope? string
 ---@return string
 function M.label(diff, fold, scope)
-  local dots = M.FILL:rep(3)
   if fold.kind == "reformat" then
     local n = diff.hunks[fold.hunk].new_count
-    return ("%s reformatted into %d line%s — no semantic change"):format(dots, n, n == 1 and "" or "s")
+    return ("reformatted into %d line%s — no semantic change"):format(n, n == 1 and "" or "s")
   end
   local n = fold.last - fold.first + 1
-  local text = ("%s %d unchanged line%s"):format(dots, n, n == 1 and "" or "s")
+  local text = ("%d unchanged line%s"):format(n, n == 1 and "" or "s")
   if scope and scope ~= "" then
-    text = text .. " " .. dots .. " " .. scope
+    text = text .. " — " .. scope
   end
   return text
 end

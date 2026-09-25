@@ -59,9 +59,18 @@ M.groups = {
     light = { fg = "#4a5262", bg = "#e6e9ee", bold = true },
   },
 
-  -- Comment threads, rendered as virtual lines under the commented row.
-  NvimDiffThreadBar = { dark = { fg = "#5f87d7" }, light = { fg = "#3060b0" } },
-  NvimDiffThreadAuthor = { dark = { bold = true }, light = { bold = true } },
+  -- Comment threads, rendered as virtual lines under the commented row: a bubble whose
+  -- border carries the thread's state as a coloured badge.
+  NvimDiffThreadBorder = { dark = { fg = "#5f87d7" }, light = { fg = "#3060b0" } },
+  NvimDiffThreadAuthor = { dark = { fg = "#8fb8ef", bold = true }, light = { fg = "#1f4f95", bold = true } },
+  NvimDiffThreadBadgeUnresolved = {
+    dark = { fg = "#1d1d1d", bg = "#e0a458", bold = true },
+    light = { fg = "#ffffff", bg = "#b8641b", bold = true },
+  },
+  NvimDiffThreadBadgeResolved = {
+    dark = { fg = "#1d1d1d", bg = "#79c07c", bold = true },
+    light = { fg = "#ffffff", bg = "#2e7d32", bold = true },
+  },
   NvimDiffThreadBody = { dark = { link = "Normal" }, light = { link = "Normal" } },
   NvimDiffThreadMeta = { dark = { link = "Comment" }, light = { link = "Comment" } },
   NvimDiffThreadResolved = { dark = { link = "Comment" }, light = { link = "Comment" } },
@@ -70,6 +79,13 @@ M.groups = {
   NvimDiffCommentHeader = { dark = { link = "NvimDiffHeader" }, light = { link = "NvimDiffHeader" } },
   NvimDiffCommentHint = { dark = { link = "Comment" }, light = { link = "Comment" } },
   NvimDiffCommentError = { dark = { link = "ErrorMsg" }, light = { link = "ErrorMsg" } },
+  -- The spinner and "posting…" in that header while a post is on its way.
+  NvimDiffCommentPosting = { dark = { link = "DiagnosticInfo" }, light = { link = "DiagnosticInfo" } },
+
+  -- The key menu (`?`): each key, and the float's border and title.
+  NvimDiffHelpKey = { dark = { link = "Special" }, light = { link = "Special" } },
+  NvimDiffHelpBorder = { dark = { link = "FloatBorder" }, light = { link = "FloatBorder" } },
+  NvimDiffHelpTitle = { dark = { link = "Title" }, light = { link = "Title" } },
 
   -- The file panel.
   NvimDiffPanelTitle = { dark = { link = "Title" }, light = { link = "Title" } },

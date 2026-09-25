@@ -46,6 +46,7 @@ local entry_mod = require("nvim-diff.scene.entry")
 local event = require("nvim-diff.core.event")
 local files = require("nvim-diff.git.files")
 local fileview = require("nvim-diff.scene.fileview")
+local help = require("nvim-diff.ui.help")
 local line_diff = require("nvim-diff.diff.line")
 local log = require("nvim-diff.core.log")
 local panel_mod = require("nvim-diff.ui.panel")
@@ -250,6 +251,7 @@ function View:map_view(buf)
   map(keys.line_history, function()
     self:line_history()
   end, "history of the line under the cursor (git log -L)")
+  help.attach(buf)
 end
 
 --- Open the history of the line under the cursor (`git log -L`), from whichever side of

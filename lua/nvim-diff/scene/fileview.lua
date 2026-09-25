@@ -27,6 +27,7 @@
 
 local config = require("nvim-diff.config")
 local fold = require("nvim-diff.render.fold")
+local help = require("nvim-diff.ui.help")
 local log = require("nvim-diff.core.log")
 local pair = require("nvim-diff.scene.pair")
 local structural = require("nvim-diff.diff.structural")
@@ -221,6 +222,7 @@ function View:after_open(bufs)
   end
   local keys = config.get().layout_keymaps
   for _, buf in ipairs(bufs) do
+    help.attach(buf)
     if type(keys.toggle) == "string" then
       vim.keymap.set("n", keys.toggle, function()
         self:toggle()

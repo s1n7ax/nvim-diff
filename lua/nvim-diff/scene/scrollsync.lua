@@ -21,6 +21,11 @@ local api = vim.api
 
 local M = {}
 
+--- Scroll keys mapped to themselves in every pane buffer, shadowing global remaps. Smooth
+--- scrolling plugins animate these with `WinScrolled` in `eventignore`, so the corrector
+--- never hears of the scroll and the other panes stay behind.
+M.SCROLL_KEYS = { "<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>", "zt", "zz", "zb", "z<CR>", "z.", "z-" }
+
 ---@class NvimDiff.SyncPane
 ---@field win integer
 --- View row at the top of the pane for a `winsaveview()` top; nil if the line is unknown.
@@ -250,6 +255,10 @@ function M.attach(panes)
     end,
   })
   for _, p in ipairs(panes) do
+    local buf = api.nvim_win_get_buf(p.win)
+    for _, lhs in ipairs(M.SCROLL_KEYS) do
+      vim.keymap.set({ "n", "x" }, lhs, lhs, { buffer = buf, desc = "nvim-diff: native scroll, kept in sync" })
+    end
     api.nvim_create_autocmd("CursorMoved", {
       group = self.augroup,
       buffer = api.nvim_win_get_buf(p.win),

@@ -21,7 +21,8 @@ local fold = require("nvim-diff.render.fold")
 
 local M = {}
 
----@alias NvimDiff.VirtLine [string, string|string[]?][] One virtual line: a list of chunks.
+---@alias NvimDiff.VirtChunk [string, string|string[]?] Text and its highlight group(s).
+---@alias NvimDiff.VirtLine NvimDiff.VirtChunk[] One virtual line: a list of chunks.
 
 --- Extra rows inserted into both panes after one display row: content on one side, the
 --- other side padded with blank rows to the same height. Comment threads are built on it.

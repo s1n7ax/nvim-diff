@@ -114,8 +114,8 @@ describe("review.threadview", function()
     local p = v.scene --[[@as NvimDiff.Pair]]
     local new = virt(p.bufs.new)
     expect.eq(1, #new)
-    -- A 40-column pane: the meta gives way before the excerpt.
-    expect.matches("^2:▌ ▸ alice  why A%?  · 1 reply · unreso…$", new[1])
+    -- A 40-column pane: the meta gives way before the excerpt and the badge.
+    expect.eq("2:╶▸ alice  why A?           UNRESOLVED ", new[1])
     expect.eq({ "2:" }, virt(p.bufs.old), "blank padding opposite, never ┈")
     aligned(v)
   end)
@@ -129,13 +129,15 @@ describe("review.threadview", function()
     api.nvim_win_set_cursor(p.wins.old, { 3, 0 })
     expect.truthy(tv:toggle_at_cursor())
     expect.eq({
-      "2:▌ ▾ L2 · 2 comments · unresolved",
-      "2:▌ alice  2026-09-01",
-      "2:▌   why A?",
-      "2:▌ bob  2026-09-02",
-      "2:▌   because",
+      "2:╭─▾ L2 · 2 comments ──  UNRESOLVED  ─╮",
+      "2:│ alice  2026-09-01                  │",
+      "2:│   why A?                           │",
+      "2:├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤",
+      "2:│ bob  2026-09-02                    │",
+      "2:│   because                          │",
+      "2:╰────────────────────────────────────╯",
     }, virt(p.bufs.new))
-    expect.eq({ "2:", "2:", "2:", "2:", "2:" }, virt(p.bufs.old))
+    expect.eq({ "2:", "2:", "2:", "2:", "2:", "2:", "2:" }, virt(p.bufs.old))
     aligned(v)
     expect.truthy(tv.state.expanded.A)
     expect.truthy(tv:toggle_at_cursor())
@@ -153,10 +155,10 @@ describe("review.threadview", function()
     expect.matches("why B", virt(p.bufs.old)[1])
     expect.eq("2:", virt(p.bufs.old)[2])
     tv:expand("B")
-    -- Old: B expanded (5 rows); new: A and C collapsed (2 rows) and 3 blank.
-    expect.eq(5, #virt(p.bufs.old))
-    expect.eq(5, #virt(p.bufs.new))
-    expect.eq("2:", virt(p.bufs.new)[5])
+    -- Old: B expanded (7 rows); new: A and C collapsed (2 rows) and 5 blank.
+    expect.eq(7, #virt(p.bufs.old))
+    expect.eq(7, #virt(p.bufs.new))
+    expect.eq("2:", virt(p.bufs.new)[7])
     aligned(v)
   end)
 
@@ -164,7 +166,7 @@ describe("review.threadview", function()
     local v = open()
     local tv = threadview.attach(v, { T("A", { resolved = true }) })
     local p = v.scene --[[@as NvimDiff.Pair]]
-    expect.matches("▌ ▸ ✓ alice .*· ✓ re…$", virt(p.bufs.new)[1])
+    expect.matches("^2:╶▸ ✓ alice  why A%? +✓ RESOLVED $", virt(p.bufs.new)[1])
     expect.eq("hide", tv:toggle_resolved())
     expect.eq({}, virt(p.bufs.new))
     expect.eq({}, virt(p.bufs.old))
@@ -206,17 +208,17 @@ describe("review.threadview", function()
     local u = v.scene --[[@as NvimDiff.Unified]]
     local lines = virt(u.buf)
     -- A under the new line 2 (after the deleted old line 2), B under the old line 28.
-    expect.eq(6, #lines)
-    expect.matches("^3:▌ ▾ L2", lines[1])
-    expect.matches("^%d+:▌ ▸ alice  why B%?", lines[6])
+    expect.eq(8, #lines)
+    expect.matches("^3:╭─▾ L2", lines[1])
+    expect.matches("^%d+:╶▸ alice  why B%?", lines[8])
     local mapped = false
     for _, m in ipairs(api.nvim_buf_get_keymap(u.buf, "n")) do
       mapped = mapped or m.lhs == "]t"
     end
     expect.truthy(mapped, "]t mapped in the unified buffer")
     v:toggle()
-    -- A expanded (5 rows), and the blank row facing B.
-    expect.eq(6, #virt(v.scene.bufs.new))
+    -- A expanded (7 rows), and the blank row facing B.
+    expect.eq(8, #virt(v.scene.bufs.new))
     aligned(v)
   end)
 
@@ -350,31 +352,42 @@ describe("review.threadview", function()
       { "── a/f ──", "── b/f ──" },
       { "1 a", "1 a" },
       { "2 b", "2 B" },
-      { "", "▌ ▸ alice  why?  · 1 reply · unresolv…" },
+      { "", "╶▸ alice  why?             UNRESOLVED" },
       { "3 c", "3 c" },
     }, halves(screen))
     child:input("<CR>")
     expect.eq({
       { "2 b", "2 B" },
-      { "", "▌ ▾ L2 · 2 comments · unresolved" },
-      { "", "▌ alice  2026-09-01" },
-      { "", "▌   why?" },
-      { "", "▌ bob  2026-09-02" },
-      { "", "▌   why not" },
+      { "", "╭─▾ L2 · 2 comments ──  UNRESOLVED  ─╮" },
+      { "", "│ alice  2026-09-01                  │" },
+      { "", "│   why?                             │" },
+      {
+        "",
+        "├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤",
+      },
+      { "", "│ bob  2026-09-02                    │" },
+      { "", "│   why not                          │" },
+      {
+        "",
+        "╰────────────────────────────────────╯",
+      },
       { "3 c", "3 c" },
-    }, halves(child:screen(4, 10, 1, 80)))
+    }, halves(child:screen(4, 12, 1, 80)))
     child:input("g<C-x>")
-    local rows = vim.tbl_map(vim.trim, child:screen(2, 10, 1, 40))
+    local rows = vim.tbl_map(vim.trim, child:screen(2, 12, 1, 40))
     expect.eq({
       "── a/f → b/f ──",
       "1   1   a",
       "2     - b",
       "2 + B",
-      "▌ ▾ L2 · 2 comments · unresolved",
-      "▌ alice  2026-09-01",
-      "▌   why?",
-      "▌ bob  2026-09-02",
-      "▌   why not",
+      -- The unified pane is 80 wide; the first 40 columns show.
+      "╭─▾ L2 · 2 comments ────────────────────",
+      "│ alice  2026-09-01",
+      "│   why?",
+      "├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",
+      "│ bob  2026-09-02",
+      "│   why not",
+      "╰───────────────────────────────────────",
     }, rows)
   end)
 end)

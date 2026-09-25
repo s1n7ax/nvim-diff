@@ -240,8 +240,10 @@ THE COMMENT SPLIT                                          *nvim-diff-compose*
 
 A real buffer under the diff, with a header naming the file and line or the
 thread being answered. Write markdown in it, then `<C-s>` or |:w| to post;
-`<C-c>` cancels, asking first when text would be lost. A failed post leaves
-the split open with your text and the error. Nothing is written to disk.
+the header spins while the post is on its way. `q` in normal mode cancels,
+asking first when text would be lost; no insert-mode key cancels, so `<C-c>`
+and `<Esc>` only leave insert mode. A failed post leaves the split open with
+your text and the error. Nothing is written to disk.
 
 `<C-g>s` (normal and insert mode) inserts a GitHub suggestion block, a
 "```suggestion" fence holding the commented lines as the PR has them. It works
@@ -252,7 +254,7 @@ Closing the split with |:q| keeps the draft; `<leader>cc` brings it back.
 There is one draft per review.
 
 The verdict split of |:NvimDiffVerdict| is the same split: `<C-s>` posts,
-`<C-c>` cancels, and |:w| does not post.
+`q` cancels, and |:w| does not post.
 
 `<C-s>` can freeze a terminal with flow control on; `stty -ixon` frees it, or
 use |:w|.
@@ -262,6 +264,12 @@ use |:w|.
 
 Every key is buffer-local and can be changed or disabled (set to `false`)
 under `keymaps` or `layout_keymaps`, see |nvim-diff-config|. The defaults:
+
+KEY MENU (everywhere)                                    *nvim-diff-keys-help*
+
+  `?`                a menu of every key that works in the buffer the cursor
+                   is in, with what it does; `<CR>` on one runs it, `q`
+                   closes the menu
 
 FILE PANEL (diff view and PR review)                    *nvim-diff-keys-panel*
 
@@ -345,15 +353,21 @@ COMMENT SPLIT                                         *nvim-diff-keys-compose*
 Normal and insert mode:
 
   `<C-s>`            post (|:w| also posts)
-  `<C-c>`            cancel
   `<C-g>s`           insert a suggestion block
+
+Normal mode:
+
+  `q`                cancel
 
 VERDICT SPLIT                                         *nvim-diff-keys-verdict*
 
 Normal and insert mode:
 
   `<C-s>`            submit the verdict
-  `<C-c>`            cancel
+
+Normal mode:
+
+  `q`                cancel
 
 CONFLICT VIEW (all four windows)                     *nvim-diff-keys-conflict*
 
@@ -494,6 +508,10 @@ KEYMAPS                                             *nvim-diff-config.keymaps*
 Each key is a string in |key-notation|, or `false` for no mapping. Where each
 one works is in |nvim-diff-keys|.
 
+                                             *nvim-diff-config.keymaps.help*
+keymaps.help                           (default: `"?"`)
+    The key menu, in every buffer of every view and in the comment split.
+
                                        *nvim-diff-config.keymaps.panel.select*
 keymaps.panel.select                   (default: `"<CR>"`)
                                *nvim-diff-config.keymaps.panel.toggle_listing*
@@ -573,7 +591,7 @@ keymaps.comment.delete                 (default: `"<leader>cd"`)
                                      *nvim-diff-config.keymaps.comment.submit*
 keymaps.comment.submit                 (default: `"<C-s>"`)
                                      *nvim-diff-config.keymaps.comment.cancel*
-keymaps.comment.cancel                 (default: `"<C-c>"`)
+keymaps.comment.cancel                 (default: `"q"`)
                                     *nvim-diff-config.keymaps.comment.suggest*
 keymaps.comment.suggest                (default: `"<C-g>s"`)
     The comment split, normal and insert mode.
@@ -581,7 +599,7 @@ keymaps.comment.suggest                (default: `"<C-g>s"`)
                                        *nvim-diff-config.keymaps.verdict.post*
 keymaps.verdict.post                   (default: `"<C-s>"`)
                                      *nvim-diff-config.keymaps.verdict.cancel*
-keymaps.verdict.cancel                 (default: `"<C-c>"`)
+keymaps.verdict.cancel                 (default: `"q"`)
     The verdict split, normal and insert mode.
 
 ==============================================================================
@@ -605,7 +623,9 @@ Diff panes ~
              *NvimDiffHeader*             the header line at the top of a pane
 
 Comment threads and the comment split ~
-  *NvimDiffThreadBar*          the bar before a thread's lines
+  *NvimDiffThreadBorder*       a thread bubble's border
+  *NvimDiffThreadBadgeUnresolved* the UNRESOLVED badge
+  *NvimDiffThreadBadgeResolved* the RESOLVED badge
                                    *NvimDiffThreadAuthor*       comment author
                                      *NvimDiffThreadBody*         comment text
   *NvimDiffThreadMeta*         dates, reply counts
@@ -613,6 +633,12 @@ Comment threads and the comment split ~
   *NvimDiffCommentHeader*      the comment split's header
                      *NvimDiffCommentHint*        the key hints in that header
   *NvimDiffCommentError*       a failed post's error
+  *NvimDiffCommentPosting*     the spinner while a post is on its way
+
+Key menu ~
+  *NvimDiffHelpKey*            a key
+  *NvimDiffHelpBorder*         the menu's border
+  *NvimDiffHelpTitle*          the menu's title
 
 File panel ~
                                     *NvimDiffPanelTitle*         the title row
