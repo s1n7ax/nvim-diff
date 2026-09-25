@@ -130,6 +130,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - File-level comments use REST `subject_type=file`; older GHES may lack it. No feature detection — the API error shows.
 - Live `gh` output for a `204 No Content` DELETE was never seen; `classify` accepts an empty 2xx body on the stub's word.
 - `gm` and `gL` are also mapped in the panels and note buffers; `gm` in the history panel only warns. Should they be mapped there at all?
+- Closing a whole view (`:NvimDiffClose`, review end) leaves its cached commit buffers for the LRU cap, so `:ls!` can show up to 64 hidden `nvim-diff://` buffers. Clear them on close instead?
+- Should `:checkhealth nvim-diff` report the buffer cache size (`buffer.kept()` exists, not wired)? Should returning to a cached file also skip the git read?
 
 ## Map
 
@@ -163,7 +165,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel — needs: comment split and posting — [result](#result-implement-edit-and-delete-own-comments-suggestion-pre-fill-file-level-comments-from-the-panel)
 - [x] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting — [result](#result-implement-resolve-reply-and-resolve-unresolve)
 - [x] implement: README, docs, and health check polish — [result](#result-implement-readme-docs-and-health-check-polish)
-- [ ] implement: LRU cap on non-local diff buffers — `buffers.lru_size` is accepted but nothing reads it
+- [x] implement: LRU cap on non-local diff buffers — `buffers.lru_size` is accepted but nothing reads it — [result](#result-implement-lru-cap-on-non-local-diff-buffers)
 - [ ] task: one live run of every GitHub write path (comment, reply, range, file-level, edit, delete, suggestion, resolve, unresolve, verdict) against a real throwaway PR — so far only the `gh` stub has seen them
 
 ## Implementation notes
@@ -328,7 +330,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Merging the edit/delete + resolve wave: one conflict, the `views/review.lua` header doc comment, resolved by keeping both paragraphs. No glue code needed. `make check`: 600/600.
 
 - Docs are checked against the code by `tests/spec/doc_spec.lua` (run by `make check`): `:helptags` builds with no duplicates, lines ≤ 78 columns, every `|link|` resolves, every command, option (with its printed default), default key and highlight group is documented in both help and README, and the README's `setup({...})` block equals `config.get_defaults()`. Help option tags are `nvim-diff-config.<dotted.path>` followed by `(default: …)`.
-- `buffers.lru_size` is documented as "reserved: accepted, no effect yet" until the LRU step lands. The README's module-layout section was dropped rather than kept in sync.
+- The README's module-layout section was dropped rather than kept in sync.
+- Buffer LRU (`scene/buffer.lua` `keep`/`release`/`evict`/`kept`): there was no leak to cap — pane buffers were already wiped when their view moved on — so `lru_size` bounds a reuse cache instead. Only named buffers of a file at a commit are kept; work-tree, index, conflict-stage and unified buffers never are. A released buffer is hidden and scrubbed (all extmarks in every namespace, all buffer-local keymaps); reuse rewrites only changed lines, so the treesitter parse survives. Oldest-used evicted first, only on release, and never a buffer a window shows or a view still holds — so the count can exceed the cap while more than `lru_size` are on screen. `lru_size = 0` keeps nothing (old behaviour); minimum lowered from 1 to 0. Closing a view keeps its cached buffers for the cap to bound.
 - Health: `gh` lists each host with its login and warns per host whose token is rejected; the "no authenticated host" warning appears only when `gh` knows no host. It also checks the host `:NvimDiffPR` would use here (`github.host` → `$GH_HOST` → `origin` remote), info-only outside a repo or without `origin`. git < 2.31 warns (merges list no files in history), checked by version number, not the `git/log.lua` probe.
 
 ## Results
@@ -1643,3 +1646,9 @@ Merged to `main` in `21e732a` (branch `worktree-agent-af41f39e95d37d92f`, commit
 Rewrote `README.md` (commands table, keys grouped by where they work, full `setup()` defaults, highlight groups, PR review section, limitations) and `doc/nvim-diff.txt` (a tag for every command, option, highlight group and key section). Health check gained per-host `gh` auth, the repo's own PR host incl. GHES, and the git 2.31 merge-history warning. Docs are now tested against the code.
 
 Found, not fixed: `buffers.lru_size` does nothing — there is no buffer LRU, contrary to the implementation note (now its own step). The notes' highlight-group list missed `NvimDiffComment*`, `NvimDiffConflict*` and `NvimDiffHistory*`; the docs follow the code. `:NvimDiffClose` does not close history views (open question, listed as a limitation). `gm`/`gL` are also mapped in panels and note buffers.
+
+### result: implement: LRU cap on non-local diff buffers
+
+Merged to `main` in `891da46` (branch `feat/buffer-lru`, commit `8155896`). `make check` on the branch: 630/630 (10 new, `scene_buffer_spec.lua` plus two in `views_diff_spec.lua`).
+
+Found: there was no leak — every pane buffer was already wiped when its view moved on or closed, so nothing existed for `lru_size` to cap. The step became a reuse cache for committed-blob buffers (`nvim-diff://<gitdir>/<rev>/<path>`), bounded by `lru_size`: returning to a file gets the same buffer back with its parse kept. Side-by-side, unified and conflict views now `release` on close; the diff view marks committed sides `keep`. Docs and README updated; the "not implemented yet" limitation removed. Decisions are under Implementation notes; follow-ups under Open questions.
