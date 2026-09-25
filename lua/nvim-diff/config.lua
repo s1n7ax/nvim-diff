@@ -86,11 +86,26 @@ local M = {}
 ---@field next_conflict NvimDiff.Config.Key
 ---@field prev_conflict NvimDiff.Config.Key
 
+--- Buffer-local to the diff panes of a view showing PR review comment threads.
+---@class NvimDiff.Config.ThreadKeymaps
+--- Expand the threads under the cursor's line in place, or collapse them. On a line with
+--- no thread the key does what it would otherwise do.
+---@field toggle NvimDiff.Config.Key
+---@field next NvimDiff.Config.Key Cursor to the next thread's line, wrapping.
+---@field prev NvimDiff.Config.Key
+---@field toggle_resolved NvimDiff.Config.Key Flip resolved threads between dimmed and hidden.
+---@field list NvimDiff.Config.Key Open or close the side list of outdated and file-level comments.
+
+---@class NvimDiff.Config.Threads
+--- What a resolved thread looks like until toggled: drawn dimmed with a ✓, or not at all.
+---@field resolved "dim"|"hide"
+
 ---@class NvimDiff.Config.Keymaps
 ---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
 ---@field view NvimDiff.Config.ViewKeymaps Buffer-local to the file panel and every pane of a view.
 ---@field history NvimDiff.Config.HistoryKeymaps Buffer-local to the history panel.
 ---@field conflict NvimDiff.Config.ConflictKeymaps
+---@field threads NvimDiff.Config.ThreadKeymaps
 
 ---@class NvimDiff.Config
 ---@field layout "side_by_side"|"unified"
@@ -105,6 +120,7 @@ local M = {}
 ---@field log NvimDiff.Config.Log
 ---@field panel NvimDiff.Config.Panel
 ---@field history NvimDiff.Config.History
+---@field threads NvimDiff.Config.Threads
 ---@field keymaps NvimDiff.Config.Keymaps
 
 ---@type NvimDiff.Config
@@ -161,6 +177,10 @@ local defaults = {
     height = 16,
   },
 
+  threads = {
+    resolved = "dim",
+  },
+
   keymaps = {
     panel = {
       select = "<CR>",
@@ -186,6 +206,13 @@ local defaults = {
       take_none = "dx",
       next_conflict = "]x",
       prev_conflict = "[x",
+    },
+    threads = {
+      toggle = "<CR>",
+      next = "]t",
+      prev = "[t",
+      toggle_resolved = "gR",
+      list = "gC",
     },
   },
 
@@ -250,6 +277,10 @@ local schema = {
     height = { type = "number", integer = true, min = 1 },
   },
 
+  threads = {
+    resolved = { type = "string", one_of = { "dim", "hide" } },
+  },
+
   keymaps = {
     panel = {
       select = KEY,
@@ -274,6 +305,13 @@ local schema = {
       take_none = KEY,
       next_conflict = KEY,
       prev_conflict = KEY,
+    },
+    threads = {
+      toggle = KEY,
+      next = KEY,
+      prev = KEY,
+      toggle_resolved = KEY,
+      list = KEY,
     },
   },
 

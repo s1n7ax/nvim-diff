@@ -73,6 +73,9 @@ local M = {}
 --- The side the cursor was on in side-by-side, so returning to it from an unchanged line
 --- (which unified shows once, as neither side in particular) lands in the same pane.
 ---@field private side NvimDiff.Side
+--- More scene callbacks besides the spec's `on_scene`, added with `watch_scene`.
+---@field private watchers table<integer, fun(view: NvimDiff.FileView)>
+---@field private next_watcher integer
 local View = {}
 View.__index = View
 
@@ -94,6 +97,8 @@ function M.open(spec)
     blocks = {},
     block_order = {},
     side = "new",
+    watchers = {},
+    next_watcher = 0,
   }, View)
   self.mode = mode == "structural" and self:structural_diff() and "structural" or "line"
   local wins = spec.wins or {}
@@ -139,10 +144,30 @@ function View:diff()
   return self.diffs[self.mode] or self.diffs.line
 end
 
---- Tell the owner a scene is up.
+--- Tell the owner a scene is up, then every watcher, in the order they were added.
 function View:notify()
   if self.spec.on_scene then
     self.spec.on_scene(self)
+  end
+  for i = 1, self.next_watcher do
+    local fn = self.watchers[i]
+    if fn then
+      fn(self)
+    end
+  end
+end
+
+--- Call `fn` whenever `on_scene` would be (after every flip and mode change), for a second
+--- party that decorates the view's buffers — comment threads map their keys in each new
+--- scene's buffers this way. Not called for the scene already up.
+---@param fn fun(view: NvimDiff.FileView)
+---@return fun() unwatch Idempotent.
+function View:watch_scene(fn)
+  self.next_watcher = self.next_watcher + 1
+  local id = self.next_watcher
+  self.watchers[id] = fn
+  return function()
+    self.watchers[id] = nil
   end
 end
 
