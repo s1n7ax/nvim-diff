@@ -54,7 +54,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 <!-- requirement fog: known-coming questions not yet sharp enough to ask -->
 
 - Injected languages (a Lua fence in markdown, a script tag in HTML, Vue SFCs) need the token list spliced together from one tree per language by byte offset. Not in the first structural step: the root tree is flattened alone — a later step or never?
-- How the user writes a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer.
+- How the user writes a reply to a thread — inside the expanded virtual lines, or a separate prompt buffer. (Now a `grill:` step on the map.)
+- Opening the same PR in two Neovim instances: `worktree.add` replaces the worktree even when the other instance holds its lock, so the second open takes the review away from the first. Refuse, share, or take over?
 - What a "moved code" change should look like. Neither the token-stream design nor difftastic detects a moved block; it reads as a delete plus an add. (The per-language degradation half of this question is answered: it degrades, on three measured triggers.)
 - `git log -L` cannot follow renames and is slow on big repos — line history needs a visible "trail ended at a rename" state and probably an async, cancellable run.
 - Whether an LSP indexing both the main tree and the PR worktree causes problems in practice.
@@ -140,12 +141,13 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: merge conflict three-way layout — [result](#result-implement-merge-conflict-three-way-layout)
 - [x] implement: wire the conflict view in — a command, `U` entries in the file panel open it, stepping between conflicted files — [result](#result-implement-wire-the-conflict-view-in)
 - [x] implement: GitHub client — gh auth, Enterprise hosts, PR fetch — [result](#result-implement-github-client)
-- [ ] implement: PR review mode — worktree checkout, viewed marks, jump to next unviewed
-- [ ] implement: reading comment threads — collapsed virtual line, expand in place, side list
-- [ ] implement: writing inline comments and replies
-- [ ] implement: resolve, reply-and-resolve, unresolve
+- [x] implement: PR review mode — worktree checkout, viewed marks, jump to next unviewed — [result](#result-implement-pr-review-mode)
+- [x] implement: reading comment threads — collapsed virtual line, expand in place, side list — [result](#result-implement-reading-comment-threads)
+- [ ] grill: how the user writes a comment or a reply — inside the expanded virtual lines, or a separate prompt buffer
+- [ ] implement: writing inline comments and replies — needs: grill: how the user writes a comment or a reply
 - [ ] implement: review verdict command
-- [ ] implement: README, docs, and health check polish
+- [ ] implement: resolve, reply-and-resolve, unresolve — needs: writing inline comments and replies
+- [ ] implement: README, docs, and health check polish — needs: resolve, reply-and-resolve, unresolve
 
 ## Implementation notes
 
@@ -285,6 +287,11 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Conflict keys (diffview's, in all four windows): `<leader>co/cb/ct/ca`, `dx` take none (extra), `]x`/`[x`. `take_both` = ours then theirs. Each take is one undoable splice; nothing written or staged. Theirs head probed from `MERGE_HEAD`, `REBASE_HEAD`, `REVERT_HEAD`, `CHERRY_PICK_HEAD`. Missing stage = empty pane; binary refused. Markers fixed at 7 chars. Closing any window closes the view. No user command yet (a later step).
 - Merging the wave: the history view builds its own View, so it needed the structural step's `modes` table added (`3bfb8fa`).
 - Merging the GitHub client / conflict-wiring / range-compare wave: GitHub client had no file overlap and merged clean; the other two both touched `plugin/nvim-diff.lua`, `config.lua`, `views/diff.lua` and `tests/spec/views_diff_spec.lua`, but every conflict was additive (two new commands, two new tests) — resolved by keeping both sides, no logic fixup commit needed.
+- Merging the PR-review / comment-threads wave: one additive `config.lua` conflict (two new `keymaps` sub-tables), resolved keeping both. The two steps were built blind to each other, so a glue commit (`0582b36`) makes `:NvimDiffPR` fetch threads (`github/threads.lua`) after the viewed states and hand them to `view:set_threads`; a failed thread fetch aborts the open, like a failed viewed fetch. `make check`: 500/500.
+- The map was missing `needs:` markers between the PR-review steps; added them, and pulled the "how to write a reply" open question in as a `grill:` step, since it is a requirement the user owns and writing comments cannot start without it.
+- `:NvimDiffPR <n>` (or `#<n>`) opens a review; keys `<leader><space>` mark viewed + jump, `<leader><BS>` unmark (octo's viewed key). A mark waits for GitHub's reply before the panel changes; a refusal leaves the panel as it was. Next-unviewed walks panel order, wraps, and treats re-changed as unviewed. Everything is fetched before the tab opens, so a failure leaves no tab and no worktree. Ending a review force-wipes buffers on worktree files, warning with the names of any that had unsaved changes.
+- PR commits are fetched with `--refmap=` so fetching `refs/heads/<base>` never moves the user's `refs/remotes/origin/*`; only `FETCH_HEAD` is written. Fixed 120 s timeout, no config key.
+- Thread keys: `<CR>` expand/collapse (falls through on a line with no thread), `]t`/`[t` next/prev, `gR` dim ↔ hide resolved, `gC` side list. Resolved threads default to **dimmed** (`threads.resolved = "dim"`), matching the resolve requirement. Every outdated thread goes to the side list even when GitHub still gives it a line; a thread past the end of the shown file goes there as "not in this diff". A multi-line comment hangs under its last line. Expanded state is per view, never persisted. Markdown shows raw. Side list is a 50-column right split, no jump-to-file yet.
 
 ## Results
 
@@ -1528,3 +1535,19 @@ Merged to `main` in `1ee828c` (branch `worktree-agent-aacc9d114c02be4ff`, commit
 Range compare: `m` (`keymaps.history.mark`) marks a ring of at most two commits in the history panel (a third drops the oldest, shown as a trailing `★`); `M` (`keymaps.history.compare`) diffs the two marked commits, older on the left, through `commands/diff.lua`'s `open` — so it gets the merge-base/tip-to-tip toggle for free. Line history: `git/log.lua` gained `line_args`/`parse_line_record`/`walk_line`/`line_commits` for `git log -L` (a genuinely different output shape, parsed directly rather than reusing the raw/numstat walker); `views/history.lua` gained `M.open_line`/`View:walk_line`/`View:add_line` reusing the whole existing panel/streaming/select/threshold machinery, since a line-history commit is just a `HistoryCommit` with one synthetic `FileEntry`. Entry points: `gL` (`keymaps.view.line_history`) in any diff pane, and `:NvimDiffLineHistory` on the current buffer's cursor line. `scene/fileview.lua` gained `View:jump(side, lnum)` to land the diff on the range's line.
 
 Decisions: `git log -L` already follows plain renames with no `--follow` flag to begin with (measured on git 2.54 and this repo's own history) — no version probe added, no speculative "trail may have ended at an undetected rename" indicator built, since the ambiguous case is indistinguishable from an ordinary "file added here" commit and would misfire on almost every line history's oldest commit; real rename crossings are still surfaced via the existing "⤷ renamed from" marker. The walk is async/cancellable via the existing `job.task`/`cmd.stream` pattern, not deferred. Line-history entries are never size-deferred (`-L` gives no blob oids for the threshold check) — documented as a known, bounded gap. Fixed a latent bug found along the way: `redraw_commit` located a commit's row via `entry`, which is wrong in single-file history (`entry` is the `FileEntry`, not the commit); added `View:commit_line(hc)` matching on `row.commit` instead.
+
+### result: implement: PR review mode
+
+Merged to `main` in `2c18054` (branch `worktree-agent-aa0ed4c8cdaaf1aa8`, commit `d3019ed`), run in parallel with the comment-threads step. `make check` on the branch: 472/472 (20 new).
+
+Built `git/fetch.lua` (`has_commit`, `commits(repo, remote, refs, oids)` — fetches `refs/pull/<n>/head` and the base branch only when a SHA is missing, falling back to fetch-by-oid, writing no local refs), `github/viewed.lua` (paged viewed-state read, `mark`/`unmark` via `markFileAsViewed`/`unmarkFileAsViewed`; `VIEWED`/`UNVIEWED`/`DISMISSED` → `viewed`/`unviewed`/`rechanged`), and `views/review.lua` (`open`, `get`, `command`; `Review:mark_viewed`/`unmark_viewed`/`next_unviewed`/`close`). `:NvimDiffPR <n>` fetches the PR, diffs merge-base → head locally, reads viewed state, checks head out into `.git/nvim-diff/pr-<n>`, opens the diff view in a new tab with `:tcd` to the worktree, and selects the first unviewed file. `views/diff.lua` untouched — keys go through the `diff_buf_ready` event, cleanup through `view_closed` plus a `TabClosed` autocmd. Test helper `tests/prremote.lua` fakes a GitHub-shaped `origin` backed by a local bare repo via a stub `core.sshCommand`, so real `git fetch` runs offline.
+
+Found: fetching `refs/heads/main` by name updated the user's tracking ref until `--refmap=` was added. A JSON `null` arrives as `vim.NIL` (truthy); `viewed.lua` checks types, `github/pr.lua` has the same weakness for a null `pullRequest` with no `errors` array (left alone — GitHub does not send that). Mark/unmark were verified against GitHub's schema and the live file-list query (`cli/cli#10513`), but only run against the stub — a live run would change a real PR's viewed state. Two Neovims opening the same PR: the second steals the worktree (now an open question).
+
+### result: implement: reading comment threads
+
+Merged to `main` in `7ce2b67` (branch `worktree-agent-a52ad181ee0369dfc`, commit `7107078`), then wired into `:NvimDiffPR` by `0582b36`. `make check` on the branch: 479/479 (27 new); 500/500 on `main` after the merge and wiring.
+
+Built `github/threads.lua` (`fetch(target, number)` — review threads with every comment, author, resolved/outdated state, path, line, side; `LEFT`/`RIGHT` → `old`/`new`; threads and comments paged 100 at a time with cursor variables, since `--paginate` with `-i` glues header blocks together; verified live against `cli/cli#10513`, 84 threads), `review/thread.lua` (pure: `anchor` returns a row or `outdated`/`file`/`off_file`; `collapsed_line` `▌ ▸ alice  why 9090?  · 1 reply · unresolved`; `expanded_lines` wraps each comment under author and date), `review/threadview.lua` (`attach(fileview, threads)` → controller with toggle/expand/collapse/jump/resolved-mode/detach), `review/sidelist.lua` (read-only right split, grouped by path, `q` closes). All threads on one row are one fileview block, so the opposite pane gets blank padding, never `┈` filler; folds split around threads; both layouts and the toggle work. Shared-file changes: `scene/fileview.lua` `View:watch_scene(fn)` (a second scene listener, so the thread controller can remap after a layout flip), `views/diff.lua` `set_threads`/`attach_threads`/`thread_items`/`toggle_thread_list`.
+
+Found: the earlier block machinery (padding, fold splitting, row maps, replay after toggle) already did the hard parts. The collapsed line overflows 40-column panes, so the first comment keeps ≥16 cells and the reply/state text is cut (`· 1 reply · unresolv…`). Every `set_block` repaints the whole file, so N commented rows cost N repaints on open — a bulk `set_blocks` belongs with the existing replay-cost question.
