@@ -333,6 +333,134 @@ describe("views.history", function()
     expect.falsy(api.nvim_buf_is_valid(panel_buf))
   end)
 
+  it("marks two commits and compares the range between them, older on the left", function()
+    open({ path = "g.txt" })
+    settle(view)
+    -- Panel rows: 1 title, 2 count, 3 merge, 4 side, 5 rename, 6 its marker, 7 second, 8 first.
+    local function mark(index)
+      local lnum = assert(view.panel:line_of(view.commits[index].entries[1]))
+      view.panel:set_cursor(lnum)
+      view:toggle_mark()
+    end
+    mark(2) -- side
+    expect.matches("★$", panel_lines(view)[4])
+    mark(5) -- first (the root)
+    expect.matches("★$", panel_lines(view)[8])
+    expect.eq(2, #view.marks)
+
+    local compared = view:compare_marked()
+    expect.eq(0, #view.marks)
+    -- Marking is undone visually too.
+    expect.falsy(panel_lines(view)[4]:match("★$"))
+    expect.falsy(panel_lines(view)[8]:match("★$"))
+    expect.truthy(compared)
+    expect.eq(r:oid("HEAD~4"), compared.left.oid) -- first is an ancestor of side: merge-base(first, side) = first
+    expect.eq(r:oid("side"), compared.right.oid)
+    compared:close()
+  end)
+
+  it("marking a third commit drops the oldest mark", function()
+    open({ path = "g.txt" })
+    settle(view)
+    local function mark(index)
+      local lnum = assert(view.panel:line_of(view.commits[index].entries[1]))
+      view.panel:set_cursor(lnum)
+      view:toggle_mark()
+    end
+    mark(5) -- first, row 8
+    mark(4) -- second, row 7
+    mark(3) -- rename, row 5; drops first
+    expect.eq({ view.commits[4], view.commits[3] }, view.marks)
+    expect.falsy(panel_lines(view)[8]:match("★$")) -- first's row, unmarked again
+    expect.matches("★$", panel_lines(view)[7]) -- second
+    expect.matches("★$", panel_lines(view)[5]) -- rename
+  end)
+
+  it("warns instead of comparing when fewer than two commits are marked", function()
+    open({ path = "g.txt" })
+    settle(view)
+    local warnings = {}
+    local warn = require("nvim-diff.core.log").warn
+    require("nvim-diff.core.log").warn = function(msg, ...)
+      warnings[#warnings + 1] = msg:format(...)
+    end
+    local tabs = #api.nvim_list_tabpages()
+    local compared = view:compare_marked()
+    require("nvim-diff.core.log").warn = warn
+    expect.eq(nil, compared)
+    expect.eq(1, #warnings)
+    expect.eq(tabs, #api.nvim_list_tabpages())
+  end)
+
+  it("walks one line's history (git log -L), jumping the diff to its range on each commit", function()
+    local repo = assert(repo_mod.discover(r.root))
+    view = history.open_line({ repo = repo, path = "g.txt", line = 2 })
+    settle(view)
+    expect.eq("Line history: g.txt:2", panel_lines(view)[1])
+    expect.eq({
+      "M " .. commit_text(r, "HEAD~3", "second") .. " L2",
+      "A " .. commit_text(r, "HEAD~4", "first") .. " L2",
+    }, vim.list_slice(panel_lines(view), 3, 4))
+
+    -- The newest commit ("second") opens first, cursor on line 2 of the new side.
+    expect.eq("side_by_side", view.file.layout)
+    expect.eq(2, view.file.scene:cursor_line("new"))
+    expect.eq("f.txt", view.current.path) -- the file's name before the rename
+
+    view:next_file() -- "first": added, opens unified
+    expect.eq("unified", view.file.layout)
+    expect.eq(2, view.file.scene:cursor_line("new"))
+  end)
+
+  it(
+    "shows the rename marker, and reads the right blob, when a commit both renames the file and touches the range",
+    function()
+      local rr = gitrepo.new()
+      rr:write("a.txt", "1\n2\n3\n")
+      rr:commit("first")
+      rr:git({ "mv", "a.txt", "b.txt" })
+      rr:write("b.txt", "1\nTWO\n3\n")
+      rr:commit("rename and edit")
+      local repo = assert(repo_mod.discover(rr.root))
+      view = history.open_line({ repo = repo, path = "b.txt", line = 2 })
+      settle(view)
+      expect.eq({
+        "R " .. commit_text(rr, "HEAD", "rename and edit") .. " L2",
+        "  ⤷ renamed from a.txt",
+        "A " .. commit_text(rr, "HEAD~1", "first") .. " L2",
+      }, vim.list_slice(panel_lines(view), 3, 5))
+      expect.truthy(view.file, "the rename commit's diff failed to load")
+      local old, new = sides(view)
+      expect.eq({ "── a/a.txt ──", "1", "2", "3" }, old)
+      expect.eq({ "── b/b.txt ──", "1", "TWO", "3" }, new)
+    end
+  )
+
+  it(":NvimDiffLineHistory opens the current buffer's cursor line", function()
+    vim.cmd("runtime plugin/nvim-diff.lua")
+    local opened = {}
+    local off = event.on(event.events.VIEW_OPENED, function(v)
+      opened[#opened + 1] = v
+    end)
+    local cwd = vim.uv.cwd()
+    vim.cmd.cd(r.root)
+    local ok, err = pcall(function()
+      vim.cmd("edit g.txt")
+      api.nvim_win_set_cursor(0, { 2, 0 })
+      vim.cmd("NvimDiffLineHistory")
+      expect.eq("g.txt", opened[1].path)
+      expect.eq(2, opened[1].line.start)
+    end)
+    vim.cmd.cd(cwd)
+    off()
+    for _, v in ipairs(opened) do
+      settle(v)
+      v:close()
+    end
+    vim.cmd("silent! bwipeout! g.txt")
+    expect.truthy(ok, err)
+  end)
+
   it(":NvimDiffHistory opens a file's, a directory's or the repository's history", function()
     vim.cmd("runtime plugin/nvim-diff.lua")
     local opened = {}

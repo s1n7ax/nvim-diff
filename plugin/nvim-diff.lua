@@ -31,3 +31,10 @@ end, {
   complete = "file",
   desc = "nvim-diff: commit history of a file or directory (% = current file), or of the repository",
 })
+
+vim.api.nvim_create_user_command("NvimDiffLineHistory", function()
+  require("nvim-diff.views.history").command_line()
+end, {
+  nargs = 0,
+  desc = "nvim-diff: history of the line under the cursor in the current buffer (git log -L)",
+})

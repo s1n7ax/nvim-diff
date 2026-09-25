@@ -230,3 +230,109 @@ describe("git log", function()
     expect.eq("file", log.kind(repo, "f.txt"))
   end)
 end)
+
+describe("git log -L", function()
+  after_each(function()
+    gitrepo.cleanup()
+  end)
+
+  --- `subject: path Loldstart,oldcount->newstart,newcount [<- oldpath]` per commit.
+  ---@param commits NvimDiff.Git.LineCommit[]
+  ---@return string[]
+  local function line_summary(commits)
+    local out = {}
+    for _, c in ipairs(commits) do
+      local h = c.hunks[1]
+      local text = ("%s L%d,%d->%d,%d"):format(c.path, h.old_start, h.old_count, h.new_start, h.new_count)
+      if c.oldpath then
+        text = text .. " <- " .. c.oldpath
+      end
+      out[#out + 1] = c.subject .. ": " .. text
+    end
+    return out
+  end
+
+  it("follows the range's content across a plain rename with no help from --follow", function()
+    -- Line 2 ("b"/"B") is edited in `second`, survives the rename untouched, and is
+    -- never touched again — so the walk (queried at g.txt, HEAD) skips straight past the
+    -- rename and the merge to the two commits that actually touched it, reporting them
+    -- under the path they had at the time.
+    local r = fixture()
+    local repo = assert(repo_mod.discover(r.root))
+    local commits = assert(log.line_commits(repo, { path = "g.txt", start = 2, stop = 2 }))
+    expect.eq({
+      "second: f.txt L2,1->2,1",
+      "first: f.txt L0,0->2,1",
+    }, line_summary(commits))
+    expect.eq(r:oid("HEAD~3"), commits[1].oid)
+    expect.eq({ r:oid("HEAD~4") }, commits[1].parents)
+    expect.eq("nvim-diff", commits[1].author)
+    expect.eq("test@nvim-diff.invalid", commits[1].email)
+    expect.truthy(commits[1].time > 1e9)
+    expect.eq(1, commits[1].additions)
+    expect.eq(1, commits[1].deletions)
+    expect.eq(false, commits[1].added)
+    expect.eq({}, commits[2].parents)
+    expect.eq(true, commits[2].added)
+    expect.eq(1, commits[2].additions)
+    expect.eq(0, commits[2].deletions)
+  end)
+
+  it("reports a same-commit rename and content change as an ordinary rename", function()
+    local r = gitrepo.new()
+    r:write("a.txt", "1\n2\n3\n")
+    r:commit("first")
+    r:git({ "mv", "a.txt", "b.txt" })
+    r:write("b.txt", "1\nTWO\n3\n")
+    r:commit("rename and edit")
+    local repo = assert(repo_mod.discover(r.root))
+    local commits = assert(log.line_commits(repo, { path = "b.txt", start = 2, stop = 2 }))
+    expect.eq({
+      "rename and edit: b.txt L2,1->2,1 <- a.txt",
+      "first: a.txt L0,0->2,1",
+    }, line_summary(commits))
+  end)
+
+  it("stops with no earlier content at the walk's true root", function()
+    local r = gitrepo.new()
+    r:write("a.txt", "1\n2\n3\n")
+    r:commit("first")
+    local repo = assert(repo_mod.discover(r.root))
+    local commits = assert(log.line_commits(repo, { path = "a.txt", start = 1, stop = 3 }))
+    expect.eq(1, #commits)
+    expect.eq(true, commits[1].added)
+    expect.eq({}, commits[1].parents)
+  end)
+
+  it("streams inside a task, and cancelling the task stops git", function()
+    local r = fixture()
+    local repo = assert(repo_mod.discover(r.root))
+    local seen = 0
+    local task = job.task(function()
+      return log.walk_line(repo, { path = "g.txt", start = 2, stop = 2 }, function(batch)
+        seen = seen + #batch
+      end)
+    end)
+    expect.truthy(task:wait(5000))
+    expect.eq(2, seen)
+    expect.eq({ true }, task.values)
+
+    task = job.task(function()
+      return log.walk_line(repo, { path = "g.txt", start = 2, stop = 2 }, function() end)
+    end)
+    task:cancel()
+    expect.truthy(task:wait(5000))
+    expect.truthy(job.is_cancelled(task.err))
+  end)
+
+  it("rejects a bad revision, a bad range or a missing path", function()
+    local r = fixture()
+    local repo = assert(repo_mod.discover(r.root))
+    expect.eq(
+      "bad_revision",
+      select(2, log.line_commits(repo, { path = "g.txt", start = 1, stop = 1, rev = "nope" })).kind
+    )
+    expect.eq("invalid", select(2, log.line_commits(repo, { path = "g.txt", start = 3, stop = 1 })).kind)
+    expect.eq("invalid", select(2, log.line_commits(repo, { path = "", start = 1, stop = 1 })).kind)
+  end)
+end)

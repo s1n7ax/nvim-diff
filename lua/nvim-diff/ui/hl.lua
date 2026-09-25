@@ -111,6 +111,10 @@ M.groups = {
     light = { link = "NvimDiffPanelRechanged" },
   },
   NvimDiffHistoryError = { dark = { link = "ErrorMsg" }, light = { link = "ErrorMsg" } },
+  -- A commit marked for range compare.
+  NvimDiffHistoryMarked = { dark = { fg = "#d7af5f", bold = true }, light = { fg = "#8a6d1f", bold = true } },
+  -- The tracked line range, in a line history's rows.
+  NvimDiffHistoryLineRange = { dark = { link = "NvimDiffHistoryDate" }, light = { link = "NvimDiffHistoryDate" } },
 }
 
 --- Namespace-local remaps. These exist only inside plugin windows.

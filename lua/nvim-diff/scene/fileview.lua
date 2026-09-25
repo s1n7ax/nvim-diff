@@ -273,6 +273,14 @@ local function place_pair(p, side, bl, winline)
   p.sync:sync(win)
 end
 
+--- Put `side`'s cursor on file line `lnum`, in whichever layout is showing, and bring the
+--- other pane along (side-by-side) or just centre it (unified).
+---@param side NvimDiff.Side
+---@param lnum integer
+function View:jump(side, lnum)
+  self.scene:jump(side, lnum)
+end
+
 --- Flip to the other layout.
 function View:toggle()
   self:set_layout(self.layout == "unified" and "side_by_side" or "unified")

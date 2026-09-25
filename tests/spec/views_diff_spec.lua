@@ -438,6 +438,32 @@ describe("views.diff", function()
     view:next_file()
     expect.eq({ "row", { { "leaf", view.panel.win }, { "leaf", view.file.scene.win } } }, vim.fn.winlayout())
   end)
+
+  it("opens the history of the line under the cursor, from whichever pane it is in", function()
+    open()
+    view:select(find(view, "lua/nvim-diff/scene/a.lua"))
+    local file = assert(view.file)
+    -- The key reaches every pane.
+    expect.truthy(api.nvim_buf_call(file.scene.bufs.old, function()
+      return vim.fn.maparg("gL", "n") ~= ""
+    end))
+
+    -- The old pane is a committed revision (`base`): buffer line 3 (line 2, after the
+    -- mandatory header row) is "b".
+    api.nvim_win_set_cursor(file.scene.wins.old, { 3, 0 })
+    api.nvim_set_current_win(file.scene.wins.old)
+    local line_view = view:line_history()
+    expect.truthy(line_view)
+    expect.eq("lua/nvim-diff/scene/a.lua", line_view.path)
+    expect.eq(base, line_view.start.oid)
+    expect.eq(2, line_view.line.start)
+    line_view:close()
+
+    -- The new pane is the worktree: no committed revision to walk from.
+    api.nvim_set_current_win(file.scene.wins.new)
+    api.nvim_win_set_cursor(file.scene.wins.new, { 3, 0 })
+    expect.eq(nil, view:line_history())
+  end)
 end)
 
 describe("views.diff, driven by real keystrokes", function()

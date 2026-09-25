@@ -63,6 +63,15 @@ local M = {}
 ---@field prev_file NvimDiff.Config.Key
 --- Flip a branch diff between merge-base (`a...b`) and tip-to-tip (`a..b`).
 ---@field toggle_range NvimDiff.Config.Key
+--- History of the line under the cursor (`git log -L`), from a diff pane.
+---@field line_history NvimDiff.Config.Key
+
+---@class NvimDiff.Config.HistoryKeymaps
+--- Mark the commit under the panel's cursor for range compare. A third mark drops the
+--- oldest: marks are a ring of at most two.
+---@field mark NvimDiff.Config.Key
+--- Diff the two marked commits, older against newer, in a new tabpage.
+---@field compare NvimDiff.Config.Key
 
 --- Buffer-local to the four windows of a merge conflict view. The take keys act on the
 --- conflict under the result's cursor.
@@ -78,6 +87,7 @@ local M = {}
 ---@class NvimDiff.Config.Keymaps
 ---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
 ---@field view NvimDiff.Config.ViewKeymaps Buffer-local to the file panel and every pane of a view.
+---@field history NvimDiff.Config.HistoryKeymaps Buffer-local to the history panel.
 ---@field conflict NvimDiff.Config.ConflictKeymaps
 
 ---@class NvimDiff.Config
@@ -159,6 +169,11 @@ local defaults = {
       next_file = "<Tab>",
       prev_file = "<S-Tab>",
       toggle_range = "gm",
+      line_history = "gL",
+    },
+    history = {
+      mark = "m",
+      compare = "M",
     },
     -- diffview's merge-tool keys, so muscle memory carries over.
     conflict = {
@@ -243,6 +258,11 @@ local schema = {
       next_file = KEY,
       prev_file = KEY,
       toggle_range = KEY,
+      line_history = KEY,
+    },
+    history = {
+      mark = KEY,
+      compare = KEY,
     },
     conflict = {
       take_ours = KEY,
