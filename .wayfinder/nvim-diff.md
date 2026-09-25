@@ -129,6 +129,7 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - Should a suggestion take the lines from the PR worktree buffer when the user has edited the file locally? Today it takes the head blob as diffed.
 - File-level comments use REST `subject_type=file`; older GHES may lack it. No feature detection — the API error shows.
 - Live `gh` output for a `204 No Content` DELETE was never seen; `classify` accepts an empty 2xx body on the stub's word.
+- `gm` and `gL` are also mapped in the panels and note buffers; `gm` in the history panel only warns. Should they be mapped there at all?
 
 ## Map
 
@@ -161,7 +162,9 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: review verdict command — [result](#result-implement-review-verdict-command)
 - [x] implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel — needs: comment split and posting — [result](#result-implement-edit-and-delete-own-comments-suggestion-pre-fill-file-level-comments-from-the-panel)
 - [x] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting — [result](#result-implement-resolve-reply-and-resolve-unresolve)
-- [ ] implement: README, docs, and health check polish — needs: resolve, reply-and-resolve, unresolve; edit and delete own comments, suggestion pre-fill, file-level comments from the panel
+- [x] implement: README, docs, and health check polish — [result](#result-implement-readme-docs-and-health-check-polish)
+- [ ] implement: LRU cap on non-local diff buffers — `buffers.lru_size` is accepted but nothing reads it
+- [ ] task: one live run of every GitHub write path (comment, reply, range, file-level, edit, delete, suggestion, resolve, unresolve, verdict) against a real throwaway PR — so far only the `gh` stub has seen them
 
 ## Implementation notes
 
@@ -323,6 +326,10 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - A thread resolved during the review stays drawn and dimmed even in `threads.resolved = "hide"` (`ThreadState.kept`), until `gR` flips the mode. A resolved thread's collapsed line starts with `✓` so narrow panes still show it.
 - A locally built thread (`local_only = true`) is resolved by refetching and matching its first comment id; if the refetch fails nothing is sent and the reason is shown. Already in the requested state after refetch counts as success.
 - Merging the edit/delete + resolve wave: one conflict, the `views/review.lua` header doc comment, resolved by keeping both paragraphs. No glue code needed. `make check`: 600/600.
+
+- Docs are checked against the code by `tests/spec/doc_spec.lua` (run by `make check`): `:helptags` builds with no duplicates, lines ≤ 78 columns, every `|link|` resolves, every command, option (with its printed default), default key and highlight group is documented in both help and README, and the README's `setup({...})` block equals `config.get_defaults()`. Help option tags are `nvim-diff-config.<dotted.path>` followed by `(default: …)`.
+- `buffers.lru_size` is documented as "reserved: accepted, no effect yet" until the LRU step lands. The README's module-layout section was dropped rather than kept in sync.
+- Health: `gh` lists each host with its login and warns per host whose token is rejected; the "no authenticated host" warning appears only when `gh` knows no host. It also checks the host `:NvimDiffPR` would use here (`github.host` → `$GH_HOST` → `origin` remote), info-only outside a repo or without `origin`. git < 2.31 warns (merges list no files in history), checked by version number, not the `git/log.lua` probe.
 
 ## Results
 
@@ -1628,3 +1635,11 @@ Merged to `main` in `09a26aa` (branch `worktree-agent-ab5faea1a88eb0870`, commit
 Built `threads.resolve`/`unresolve`/`apply` in `github/threads.lua` (thread id only, no `resolutionReason`), and resolve, reply-and-resolve and unresolve actions in `views/review.lua` on the cursor's line. Reply-and-resolve reuses the comment split with a `— then resolve` header.
 
 Found: in a 40-column pane the collapsed line cut off the `✓ resolved` text, so the ✓ now leads the line. In hide mode a fresh resolve vanished at once and could not be undone, hence `kept`. Decisions are under Implementation notes.
+
+### result: implement: README, docs, and health check polish
+
+Merged to `main` in `21e732a` (branch `worktree-agent-af41f39e95d37d92f`, commits `6358259`, `7c43d73`). `make check` on main after merge: 618/618 (18 new: 11 health, 7 doc).
+
+Rewrote `README.md` (commands table, keys grouped by where they work, full `setup()` defaults, highlight groups, PR review section, limitations) and `doc/nvim-diff.txt` (a tag for every command, option, highlight group and key section). Health check gained per-host `gh` auth, the repo's own PR host incl. GHES, and the git 2.31 merge-history warning. Docs are now tested against the code.
+
+Found, not fixed: `buffers.lru_size` does nothing — there is no buffer LRU, contrary to the implementation note (now its own step). The notes' highlight-group list missed `NvimDiffComment*`, `NvimDiffConflict*` and `NvimDiffHistory*`; the docs follow the code. `:NvimDiffClose` does not close history views (open question, listed as a limitation). `gm`/`gL` are also mapped in panels and note buffers.
