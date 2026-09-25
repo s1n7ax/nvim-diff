@@ -122,9 +122,13 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - History: no "unfold all" key in folder/repo mode; no uncommitted pseudo-commit at the top; commit rows show no large-file marker until selected.
 - Merges in history need `--diff-merges=first-parent` (git 2.31, above the 2.25 minimum); older git lists no files for merges. Raise the minimum?
 
-- `:NvimDiffClose` ends the review even when the verdict split holds unsent text (`View:close` swallows the failed `tabclose`); the split survives but posting says "review has ended". Should ending a review ask first when any draft (comment or verdict) has text?
+- Ending a review with an unsent draft (comment or verdict) keeps it as a listed buffer with posting off, plus a warning. Should ending a review ask first instead?
 - A reply can only be started from the thread's anchor line, not from inside the expanded thread's virtual lines. Acceptable?
 - Closing the tab with a comment draft open warns twice (window close, then review end).
+- Threads in the side list (outdated, file-level) can be edited and deleted there, but not replied to or resolved. Should the side list get the reply and resolve keys?
+- Should a suggestion take the lines from the PR worktree buffer when the user has edited the file locally? Today it takes the head blob as diffed.
+- File-level comments use REST `subject_type=file`; older GHES may lack it. No feature detection — the API error shows.
+- Live `gh` output for a `204 No Content` DELETE was never seen; `classify` accepts an empty 2xx body on the stub's word.
 
 ## Map
 
@@ -155,8 +159,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] grill: how the user writes a comment or a reply — inside the expanded virtual lines, or a separate prompt buffer — [result](#result-grill-how-the-user-writes-a-comment-or-a-reply)
 - [x] implement: comment split and posting — new line and range comments on either pane, replies, failed-post and cancel handling — [result](#result-implement-comment-split-and-posting)
 - [x] implement: review verdict command — [result](#result-implement-review-verdict-command)
-- [ ] implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel — needs: comment split and posting
-- [ ] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting
+- [x] implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel — needs: comment split and posting — [result](#result-implement-edit-and-delete-own-comments-suggestion-pre-fill-file-level-comments-from-the-panel)
+- [x] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting — [result](#result-implement-resolve-reply-and-resolve-unresolve)
 - [ ] implement: README, docs, and health check polish — needs: resolve, reply-and-resolve, unresolve; edit and delete own comments, suggestion pre-fill, file-level comments from the panel
 
 ## Implementation notes
@@ -308,9 +312,17 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - A draft closed by `:q`/`:q!`/`:tabclose` is kept hidden and `<leader>cc` brings it back; one draft per review; a review ending with an unsent draft leaves it as a listed buffer with posting off, plus a warning. Posts block, like marking viewed. Several threads on one line: the cursor's pane wins, then a picker.
 - Verdict: `:NvimDiffVerdict [approve|request-changes|comment]` (no arg = picker), command only, no default key. `github/review.lua` `submit` posts `POST …/pulls/{n}/reviews` with `event`, `commit_id` = the head the review opened at, `body` if any, never `comments`. Summary split `review/verdict.lua`, `buftype=acwrite`, winbar header, `keymaps.verdict = {post = "<C-s>", cancel = "q"}`; `:w` warns and never posts; `:q` on unsent text fails with E37.
 - GitHub refuses Request changes and Comment with an empty body (422), so the summary is enforced for those two and optional only for Approve; the header says so.
-- `review/verdict.lua` and `review/compose.lua` each have their own editor split. They should become one module, and the two cancel keys (`q` vs `<C-c>`) should agree — owed by the edit/delete step, which reuses the split.
-- `github/cmd.lua` `classify` drops REST 422 messages (they are plain strings, not `{message}`); both new modules work around it locally. The fix belongs in `classify` — owed by the edit/delete step.
 - Both write paths were run only against the `gh` stub; a live run would post to a real PR.
+
+- `review/compose.lua` is the **one** editor split; `review/verdict.lua` is a thin layer over it (`write_posts = false`, `allow_empty = true`, `insert = false`). Both cancel with `<C-c>` (`keymaps.verdict.cancel` default changed from `q`); the verdict uses `comment.height`. Verdict `:q` with text hides the draft like a comment draft and `:NvimDiffVerdict` brings it back (no more E37). The editor strips blank lines at both ends. Cancel asks only when something would be lost (typed text, or an edit that changed).
+- `github/cmd.lua` `classify` keeps REST 422 reasons, reports `{field, code}` errors as "field code", drops a top message that only repeats the status reason, and treats an empty 2xx body (DELETE 204) as success. The local workarounds are gone.
+- Edit/delete: `keymaps.comment.edit = "<leader>ce"`, `delete = "<leader>cd"`, in diff panes and the side list. "Own" = `viewerDidAuthor`. Cursor's pane first, then both sides, then a picker. Delete confirms with location + 60-char excerpt. Threads refetched after; on failure the change is applied to what is on screen. REST `PATCH`/`DELETE …/pulls/comments/{id}`.
+- Suggestion: `keymaps.comment.suggest = "<C-g>s"` (normal + insert, in the split). New side only, lines from the head blob as diffed; refused on the old side, file-level/outdated threads, and threads on another file (the key says why; the header lists it only where it works). Replaces a blank cursor line, else goes below; the fence grows when the lines hold a fence.
+- File-level comment: `keymaps.comment.add` on a file panel row, no key of its own. `POST …/pulls/{n}/comments` with `subject_type=file`. The side list opens after posting.
+- Resolve: `keymaps.threads.resolve = "<leader>cx"`, `reply_resolve = "<leader>cR"`, `unresolve = "<leader>cu"` — separate keys, not a toggle, mapped only in review diff panes. Resolve/unresolve redraw from the mutation's answer with no refetch; reply-and-resolve posts over REST, resolves over GraphQL, then refetches. If the reply posts but the resolve fails, the split closes (the reply is public) and the error is logged.
+- A thread resolved during the review stays drawn and dimmed even in `threads.resolved = "hide"` (`ThreadState.kept`), until `gR` flips the mode. A resolved thread's collapsed line starts with `✓` so narrow panes still show it.
+- A locally built thread (`local_only = true`) is resolved by refetching and matching its first comment id; if the refetch fails nothing is sent and the reason is shown. Already in the requested state after refetch counts as success.
+- Merging the edit/delete + resolve wave: one conflict, the `views/review.lua` header doc comment, resolved by keeping both paragraphs. No glue code needed. `make check`: 600/600.
 
 ## Results
 
@@ -1600,3 +1612,19 @@ Merged to `main` in `7baad62` (branch `worktree-agent-ae12bb1b4e656c447`, commit
 Built `github/review.lua` (`submit(pr, event, body)` — one REST review with no inline comments; refuses an unknown event, which would create a pending review, and an empty body where GitHub requires one; surfaces a 422's real reason such as "Can not approve your own pull request"), `review/verdict.lua` (summary split; reuses an open split and keeps its text when the command runs again with another verdict), and `:NvimDiffVerdict` with completion, valid only in a review tab. Tests: `github_review` and `review_verdict` specs.
 
 Found: the requirement's "optional summary" is optional only for Approve — GitHub 422s the other two without one. `cmd.classify` loses REST 422 messages. `:NvimDiffClose` with unsent verdict text ends the review and leaves the split behind (now an open question).
+
+### result: implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel
+
+Merged to `main` in `ba49413` (branch `edit-delete-suggest-file-comments`, commits `8f25bb2`, `f9591a9`). `make check` on the branch: 587/587 (32 new). Run against the `gh` stub only.
+
+Built edit and delete of own comments (diff panes and side list), the `suggestion` pre-fill key in the split, and file-level comments from the file panel through the same split. Paid both debts: `review/compose.lua` is the single editor split with `review/verdict.lua` on top, cancel keys agree on `<C-c>`, and `github/cmd.lua` `classify` keeps REST 422 reasons.
+
+Found: a DELETE returns 204 with an empty body, which `classify` used to reject. An unsent verdict now survives the review ending as a listed buffer, like a comment draft — the open question about ending a review with drafts is only partly settled. Decisions are under Implementation notes.
+
+### result: implement: resolve, reply-and-resolve, unresolve
+
+Merged to `main` in `09a26aa` (branch `worktree-agent-ab5faea1a88eb0870`, commits `77c4415`, `adad567`). `make check` on the branch: 568/568 (13 new). Run against the `gh` stub only.
+
+Built `threads.resolve`/`unresolve`/`apply` in `github/threads.lua` (thread id only, no `resolutionReason`), and resolve, reply-and-resolve and unresolve actions in `views/review.lua` on the cursor's line. Reply-and-resolve reuses the comment split with a `— then resolve` header.
+
+Found: in a 40-column pane the collapsed line cut off the `✓ resolved` text, so the ✓ now leads the line. In hide mode a fresh resolve vanished at once and could not be undone, hence `kept`. Decisions are under Implementation notes.
