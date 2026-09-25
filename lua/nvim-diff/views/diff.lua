@@ -416,13 +416,13 @@ local function lang_for(git_path)
   return nil
 end
 
---- Buffer name for one side, unless a buffer already has it (another view showing it).
+--- Buffer name for one side. `scene/buffer.lua` falls back to an unnamed buffer when a
+--- window already shows one by this name, and takes back a kept one otherwise.
 ---@param at NvimDiff.Git.Rev
 ---@param git_path string
----@return string?
+---@return string
 function View:buf_name(at, git_path)
-  local name = ("nvim-diff://%s/%s/%s"):format(self.repo.gitdir, rev_mod.id(at), git_path)
-  return vim.fn.bufexists(name) == 0 and name or nil
+  return ("nvim-diff://%s/%s/%s"):format(self.repo.gitdir, rev_mod.id(at), git_path)
 end
 
 --- The two revisions `entry` is diffed between. The view's own pair here; a history view
@@ -598,12 +598,14 @@ function View:show_diff(entry)
       label = "a/" .. old_path,
       name = self:buf_name(left, old_path),
       lang = lang_for(old_path),
+      keep = left.type == "commit",
     },
     new = {
       lines = new,
       label = "b/" .. entry.path,
       name = self:buf_name(right, entry.path),
       lang = lang_for(entry.path),
+      keep = right.type == "commit",
     },
     wins = layout == "unified" and { win = wins[1] } or { old = wins[1], new = wins[2] },
     on_scene = function(file)

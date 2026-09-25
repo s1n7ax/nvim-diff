@@ -413,9 +413,7 @@ function Unified:close(opts)
     end
   end
   folds_scene.forget(self.buf)
-  if api.nvim_buf_is_valid(self.buf) then
-    pcall(api.nvim_buf_delete, self.buf, { force = true })
-  end
+  buffer.release(self.buf)
 end
 
 return M

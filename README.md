@@ -188,7 +188,7 @@ require("nvim-diff").setup({
   },
 
   buffers = {
-    lru_size = 64, -- reserved: accepted, no effect yet
+    lru_size = 64, -- committed-file diff buffers kept for reuse; 0 keeps none
   },
 
   git = { bin = "git", timeout_ms = 15000 },
@@ -308,7 +308,6 @@ and only when you run it.
   synchronously when a file opens.
 - No hunk or file staging, and no staged/unstaged split in the working-tree view.
 - `:NvimDiffClose` does not close history or conflict views.
-- `buffers.lru_size` is accepted but not implemented yet.
 
 ## Development
 

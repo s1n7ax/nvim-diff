@@ -254,7 +254,7 @@ function View:load(git_path, file, lines, present, merge, map, placeholder)
       lines = lines[side],
       header = header[side],
       trailer = map.trailer,
-      name = vim.fn.bufexists(name) == 0 and name or nil,
+      name = name,
       lang = lang,
     })
   end
@@ -267,8 +267,8 @@ function View:load(git_path, file, lines, present, merge, map, placeholder)
     api.nvim_win_set_cursor(self.wins[side], { 1, 0 })
   end
   for _, side in ipairs(SIDES) do
-    if old_bufs[side] and api.nvim_buf_is_valid(old_bufs[side]) then
-      pcall(api.nvim_buf_delete, old_bufs[side], { force = true })
+    if old_bufs[side] then
+      buffer.release(old_bufs[side])
     end
   end
 
@@ -674,9 +674,7 @@ function View:close()
     pcall(api.nvim_win_close, self.wins.result, true)
   end
   for _, side in ipairs(SIDES) do
-    if api.nvim_buf_is_valid(self.bufs[side]) then
-      pcall(api.nvim_buf_delete, self.bufs[side], { force = true })
-    end
+    buffer.release(self.bufs[side])
   end
 end
 
