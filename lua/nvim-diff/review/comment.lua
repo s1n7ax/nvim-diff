@@ -8,7 +8,9 @@
 --- to a single hunk. In unified the two ends may fall on different sides — a deleted line
 --- down to an added one — which GitHub takes as `start_side` and `side`.
 ---
---- Also the headers the comment split shows. Pure apart from reading the fileview.
+--- Also the headers the comment split shows, which of a thread's comments are the user's
+--- own (to edit or delete), and the lines a suggestion block starts from. Pure apart from
+--- reading the fileview.
 
 local thread_mod = require("nvim-diff.review.thread")
 
@@ -96,24 +98,133 @@ function M.header(target)
   return ("Comment on %s %s"):format(target.path, where)
 end
 
+--- A comment's body on one line, cut to `width` cells.
+---@param c? NvimDiff.GitHub.Comment
+---@param width integer
+---@return string
+function M.excerpt(c, width)
+  local text = c and vim.trim((c.body:gsub("%s+", " "))) or ""
+  if vim.fn.strdisplaywidth(text) > width then
+    text = vim.fn.strcharpart(text, 0, width - 1) .. "…"
+  end
+  return text
+end
+
+--- Where a thread is: `a.lua L12`, `a.lua old L3`, `the file a.lua`.
+---@param thread NvimDiff.GitHub.Thread
+---@return string
+function M.where(thread)
+  if thread.subject == "file" then
+    return "the file " .. thread.path
+  end
+  local range = thread_mod.range_label(thread)
+  if not range then
+    return thread.path
+  end
+  if thread.side == "old" then
+    return ("%s old %s"):format(thread.path, range)
+  end
+  return ("%s %s"):format(thread.path, range)
+end
+
 --- `Reply to alice on a.lua L12: why 9090?` — the thread's first comment, cut to one line.
 ---@param thread NvimDiff.GitHub.Thread
 ---@param width? integer Cells the excerpt may take; default 40.
 ---@return string
 function M.reply_header(thread, width)
-  width = width or 40
   local first = thread.comments[1]
   local who = first and first.author or "?"
-  local excerpt = first and vim.trim((first.body:gsub("%s+", " "))) or ""
-  if vim.fn.strdisplaywidth(excerpt) > width then
-    excerpt = vim.fn.strcharpart(excerpt, 0, width - 1) .. "…"
+  return ("Reply to %s on %s: %s"):format(who, M.where(thread), M.excerpt(first, width or 40))
+end
+
+--- `Edit your comment on a.lua L12`.
+---@param thread NvimDiff.GitHub.Thread
+---@return string
+function M.edit_header(thread)
+  return ("Edit your comment on %s"):format(M.where(thread))
+end
+
+--- `Comment on the file a.lua`.
+---@param path string
+---@return string
+function M.file_header(path)
+  return ("Comment on the file %s"):format(path)
+end
+
+--- One of the user's comments, for a picker: `a.lua L12: the text`.
+---@param thread NvimDiff.GitHub.Thread
+---@param c NvimDiff.GitHub.Comment
+---@param width? integer Default 50.
+---@return string
+function M.label(thread, c, width)
+  return ("%s: %s"):format(M.where(thread), M.excerpt(c, width or 50))
+end
+
+--- The user's own comments in `threads`, in order, each with its thread.
+---@param threads NvimDiff.GitHub.Thread[]
+---@return { thread: NvimDiff.GitHub.Thread, comment: NvimDiff.GitHub.Comment }[]
+function M.own(threads)
+  local out = {}
+  for _, t in ipairs(threads) do
+    for _, c in ipairs(t.comments) do
+      if c.viewer_did_author then
+        out[#out + 1] = { thread = t, comment = c }
+      end
+    end
   end
-  local range = thread_mod.range_label(thread)
-  local where = range and ("%s %s"):format(thread.path, range) or thread.path
-  if thread.side == "old" and range then
-    where = ("%s old %s"):format(thread.path, range)
+  return out
+end
+
+--- The new side's lines `first`..`last` of `file`, for a suggestion — GitHub applies one to
+--- the PR head only, so the old side has none.
+---@param file? NvimDiff.FileView
+---@param side? NvimDiff.Side
+---@param first? integer
+---@param last? integer
+---@param start_side? NvimDiff.Side
+---@return NvimDiff.ComposeSuggestion
+local function suggestion(file, side, first, last, start_side)
+  if not file or file:is_closed() then
+    return { reason = "the file is not showing" }
   end
-  return ("Reply to %s on %s: %s"):format(who, where, excerpt)
+  if side ~= "new" or (start_side and start_side ~= "new") then
+    return { reason = "a suggestion replaces lines of the new side only" }
+  end
+  if not (first and last) then
+    return { reason = "no lines to suggest on" }
+  end
+  local lines = file:lines("new")
+  if first < 1 or last > #lines or first > last then
+    return { reason = "the lines are not in the file shown" }
+  end
+  return { lines = { unpack(lines, first, last) } }
+end
+
+--- The suggestion for a new comment on `target`.
+---@param file NvimDiff.FileView
+---@param target NvimDiff.CommentTarget
+---@return NvimDiff.ComposeSuggestion
+function M.suggestion_for_target(file, target)
+  return suggestion(file, target.side, target.start_line or target.line, target.line, target.start_side)
+end
+
+--- The suggestion for a reply to (or an edit in) `thread`, drawn from `file` when it shows
+--- the thread's file.
+---@param file? NvimDiff.FileView
+---@param path? string The path `file` shows.
+---@param thread NvimDiff.GitHub.Thread
+---@return NvimDiff.ComposeSuggestion
+function M.suggestion_for_thread(file, path, thread)
+  if thread.subject == "file" then
+    return { reason = "a file comment has no lines" }
+  end
+  if thread.outdated or not thread.line then
+    return { reason = "the thread's lines are no longer in the diff" }
+  end
+  if path ~= thread.path then
+    return { reason = "the thread's file is not showing" }
+  end
+  return suggestion(file, thread.side or "new", thread.start_line or thread.line, thread.line, thread.start_side)
 end
 
 --- A thread built from a comment GitHub just accepted, for when the threads cannot be
@@ -132,7 +243,7 @@ function M.thread_of(c)
     resolved = false,
     outdated = false,
     collapsed = false,
-    subject = "line",
+    subject = c.subject or "line",
     can_reply = true,
     can_resolve = false,
     can_unresolve = false,

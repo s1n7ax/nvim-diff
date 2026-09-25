@@ -210,4 +210,112 @@ describe("review compose", function()
     expect.eq(nil, c:orphan())
     expect.falsy(api.nvim_buf_is_valid(c.buf))
   end)
+
+  describe("editing a posted comment", function()
+    it("opens with its text, and cancels without asking while it is unchanged", function()
+      local asked = false
+      compose.confirm = function()
+        asked = true
+        return false
+      end
+      local c, seen = start({ lines = { "old words", "second" } })
+      expect.eq({ "old words", "second" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+      expect.eq(false, c:is_changed())
+      expect.eq(true, c:cancel())
+      expect.falsy(asked)
+      expect.eq({ "cancelled" }, seen.done)
+    end)
+
+    it("asks before discarding a change", function()
+      local asked
+      compose.confirm = function(prompt)
+        asked = prompt
+        return false
+      end
+      local c = start({ lines = { "old words" } })
+      type_text(c, { "new words" })
+      expect.eq(false, c:cancel())
+      expect.eq("Discard this comment?", asked)
+      expect.eq({ "new words" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+    end)
+
+    it("lets an unchanged edit go with its window", function()
+      local c = start({ lines = { "old words" } })
+      vim.cmd("quit")
+      expect.truthy(vim.wait(500, function()
+        return not api.nvim_buf_is_valid(c.buf)
+      end, 10))
+    end)
+  end)
+
+  describe("a split where :w must not post", function()
+    it("only warns on :w, posts empty text when allowed, and names itself", function()
+      local c, seen = start({
+        write_posts = false,
+        allow_empty = true,
+        noun = "review verdict",
+        keys = { submit = "<C-s>", cancel = "<C-c>" },
+      })
+      vim.cmd("write")
+      expect.eq({}, seen.texts)
+      expect.matches("<C%-s> post · <C%-c> cancel", vim.wo[c.win].winbar)
+      expect.falsy(vim.wo[c.win].winbar:find(":w", 1, true))
+      expect.eq(true, c:submit())
+      expect.eq({ "" }, seen.texts)
+    end)
+  end)
+
+  describe("suggestion", function()
+    ---@param buf integer
+    ---@param mode string
+    ---@return string?
+    local function suggest_lhs(buf, mode)
+      for _, m in ipairs(api.nvim_buf_get_keymap(buf, mode)) do
+        if m.desc == "nvim-diff: insert a suggestion of the commented lines" then
+          return m.lhs
+        end
+      end
+      return nil
+    end
+
+    it("is mapped only where there are commented lines, and named in the header", function()
+      local plain = start()
+      expect.eq(nil, suggest_lhs(plain.buf, "n"))
+      plain:close()
+      local c = start({ suggestion = { lines = { "x" } } })
+      expect.eq("<C-G>s", suggest_lhs(c.buf, "n"))
+      expect.eq("<C-G>s", suggest_lhs(c.buf, "i"))
+      expect.matches("<C%-g>s suggestion", vim.wo[c.win].winbar)
+    end)
+
+    it("fills a blank line with a suggestion block and puts the cursor on its code", function()
+      local c = start({ suggestion = { lines = { "local a = 1", "  return a" } } })
+      vim.cmd.stopinsert()
+      expect.eq(true, c:insert_suggestion())
+      expect.eq({ "```suggestion", "local a = 1", "  return a", "```" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+      expect.eq({ 2, 0 }, api.nvim_win_get_cursor(c.win))
+    end)
+
+    it("goes under a line that has text, through the key", function()
+      local c = start({ suggestion = { lines = { "b = 2" } } })
+      vim.cmd.stopinsert()
+      type_text(c, { "Rename this:" })
+      api.nvim_win_set_cursor(c.win, { 1, 0 })
+      api.nvim_feedkeys(api.nvim_replace_termcodes("<C-g>s", true, false, true), "x", false)
+      expect.eq({ "Rename this:", "```suggestion", "b = 2", "```" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+    end)
+
+    it("uses a longer fence when the lines hold one", function()
+      expect.eq("```", compose.fence({ "a", "`b`" }))
+      expect.eq("````", compose.fence({ "```lua", "x", "```" }))
+      expect.eq("`````", compose.fence({ "  ````" }))
+    end)
+
+    it("inserts nothing where there are no lines to suggest on, and does not offer it", function()
+      local c = start({ suggestion = { reason = "a suggestion replaces lines of the new side only" } })
+      expect.falsy(vim.wo[c.win].winbar:find("suggestion", 1, true))
+      expect.eq(false, c:insert_suggestion())
+      expect.eq({ "" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+    end)
+  end)
 end)

@@ -103,6 +103,8 @@ local by_tab = {}
 ---@field thread_state? NvimDiff.ThreadState Expanded threads and the resolved mode, across files.
 ---@field thread_view? NvimDiff.ThreadView The threads on the diff showing.
 ---@field thread_list? NvimDiff.SideList
+--- Called with each side list as it opens (a review maps its comment keys there).
+---@field on_thread_list? fun(list: NvimDiff.SideList)
 local View = {}
 View.__index = View
 
@@ -918,11 +920,24 @@ function View:toggle_thread_list()
     self.thread_list = nil
     return
   end
+  self:open_thread_list()
+end
+
+--- Open the side list right of the diff, unless it is open already.
+---@return NvimDiff.SideList
+function View:open_thread_list()
+  if self.thread_list and self.thread_list:is_open() then
+    return self.thread_list
+  end
   local wins = self.file and not self.file:is_closed() and self.file:wins() or { self.note_win }
   self.thread_list = require("nvim-diff.review.sidelist").open({
     items = self:thread_items(),
     win = wins[#wins],
   })
+  if self.on_thread_list then
+    self.on_thread_list(self.thread_list)
+  end
+  return self.thread_list
 end
 
 --- The view class, for views that build on this one (`views/history.lua`).

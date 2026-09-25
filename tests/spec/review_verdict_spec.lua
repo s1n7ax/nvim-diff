@@ -1,6 +1,7 @@
 local t = require("tests.harness")
 local describe, it, before_each, after_each, expect = t.describe, t.it, t.before_each, t.after_each, t.expect
 
+local compose = require("nvim-diff.review.compose")
 local config = require("nvim-diff.config")
 local ghstub = require("tests.ghstub")
 local review_mod = require("nvim-diff.views.review")
@@ -49,17 +50,31 @@ local function maps(buf, mode)
   return out
 end
 
+---@param buf integer
+---@return string[]
+local function errors_shown(buf)
+  local out = {}
+  for _, m in ipairs(api.nvim_buf_get_extmarks(buf, compose.ns, 0, -1, { details = true })) do
+    for _, vl in ipairs(m[4].virt_lines or {}) do
+      out[#out + 1] = vl[1][1]
+    end
+  end
+  return out
+end
+
 describe("review verdict", function()
   local real_confirm, real_get, real_notify
 
   before_each(function()
     config.reset()
-    real_confirm, real_get, real_notify = verdict.confirm, review_mod.get, vim.notify
+    config.setup({ log = { level = "off" } })
+    real_confirm, real_get, real_notify = compose.confirm, review_mod.get, vim.notify
     vim.notify = function() end -- luacheck: ignore 122
   end)
 
   after_each(function()
-    verdict.confirm, review_mod.get, vim.notify = real_confirm, real_get, real_notify -- luacheck: ignore 122
+    vim.cmd.stopinsert()
+    compose.confirm, review_mod.get, vim.notify = real_confirm, real_get, real_notify -- luacheck: ignore 122
     for _, buf in ipairs(api.nvim_list_bufs()) do
       if api.nvim_buf_get_name(buf):find("nvim-diff://verdict/", 1, true) then
         vim.bo[buf].modified = false
@@ -79,25 +94,33 @@ describe("review verdict", function()
     return calls
   end
 
-  it("opens a full-width markdown split at the bottom with a header naming the verdict", function()
+  it("opens the editor split at the bottom, full width, with a header naming the verdict", function()
     local left = api.nvim_get_current_win()
     vim.cmd("vsplit")
     local v = verdict.open(fake_review(), "REQUEST_CHANGES")
-    expect.eq(v.win, api.nvim_get_current_win())
-    expect.eq(v.buf, api.nvim_win_get_buf(v.win))
-    expect.eq(vim.o.columns, api.nvim_win_get_width(v.win), "under every window, not just one")
-    expect.eq(verdict.HEIGHT, api.nvim_win_get_height(v.win))
+    local win = assert(v:win())
+    expect.eq(win, api.nvim_get_current_win())
+    expect.eq(v.buf, api.nvim_win_get_buf(win))
+    expect.eq(v.compose.buf, v.buf, "the comment split's editor")
+    expect.eq(vim.o.columns, api.nvim_win_get_width(win), "under every window, not just one")
+    expect.eq(config.get().comment.height, api.nvim_win_get_height(win))
     expect.eq("markdown", vim.bo[v.buf].filetype)
     expect.eq("acwrite", vim.bo[v.buf].buftype)
-    expect.eq(true, vim.wo[v.win].spell)
-    local bar = vim.wo[v.win].winbar
+    expect.eq(true, vim.wo[win].spell)
+    local bar = vim.wo[win].winbar
     expect.matches("Request changes PR #7", bar)
     expect.matches("summary required", bar)
-    expect.matches("<C%-s> post · q cancel", bar)
-    expect.eq("<C-S>", maps(v.buf, "n")["nvim-diff: post the review verdict to GitHub"])
-    expect.eq("<C-S>", maps(v.buf, "i")["nvim-diff: post the review verdict to GitHub"])
-    expect.eq("q", maps(v.buf, "n")["nvim-diff: cancel the review verdict"])
+    expect.matches("<C%-s> post · <C%-c> cancel", bar)
+    for _, mode in ipairs({ "n", "i" }) do
+      expect.eq("<C-S>", maps(v.buf, mode)["nvim-diff: post the review verdict"], mode)
+      expect.eq("<C-C>", maps(v.buf, mode)["nvim-diff: cancel the review verdict"], mode)
+    end
+    expect.eq(nil, maps(v.buf, "n")["nvim-diff: insert a suggestion of the commented lines"])
     expect.truthy(api.nvim_win_is_valid(left))
+  end)
+
+  it("cancels with the same key as the comment split", function()
+    expect.eq(config.get().keymaps.comment.cancel, config.get().keymaps.verdict.cancel)
   end)
 
   it("posts the typed summary and closes the split", function()
@@ -105,8 +128,8 @@ describe("review verdict", function()
     local v = verdict.open(fake_review(), "COMMENT")
     api.nvim_buf_set_lines(v.buf, 0, -1, false, { "", "Looks good,", "one nit.", "" })
 
-    local result = assert(v:post())
-    expect.eq(1, result.id)
+    expect.eq(true, v:post())
+    expect.eq(1, assert(v.result).id)
     expect.falsy(api.nvim_buf_is_valid(v.buf))
     expect.falsy(verdict.get(v.review))
     local sent = calls()
@@ -121,9 +144,9 @@ describe("review verdict", function()
     api.nvim_buf_set_lines(v.buf, 0, -1, false, { "ship it" })
 
     expect.falsy(v:post())
-    expect.truthy(api.nvim_win_is_valid(v.win))
+    expect.truthy(v:win())
     expect.eq({ "ship it" }, api.nvim_buf_get_lines(v.buf, 0, -1, false))
-    expect.matches("Can not approve your own pull request", vim.wo[v.win].winbar)
+    expect.eq({ "✗ not posted: Can not approve your own pull request" }, errors_shown(v.buf))
     expect.eq(v, verdict.get(v.review))
   end)
 
@@ -131,8 +154,8 @@ describe("review verdict", function()
     local calls = stub(reply("200 OK", OK))
     local v = verdict.open(fake_review(), "REQUEST_CHANGES")
     expect.falsy(v:post())
-    expect.truthy(api.nvim_win_is_valid(v.win))
-    expect.matches("needs a summary", vim.wo[v.win].winbar)
+    expect.truthy(v:win())
+    expect.eq({ "✗ not posted: Request changes needs a summary" }, errors_shown(v.buf))
     expect.eq(0, #calls())
   end)
 
@@ -147,19 +170,19 @@ describe("review verdict", function()
 
   it("cancels at once when nothing was typed", function()
     local asked = false
-    verdict.confirm = function()
+    compose.confirm = function()
       asked = true
       return false
     end
     local v = verdict.open(fake_review(), "APPROVE")
-    api.nvim_feedkeys("q", "x", false)
+    api.nvim_feedkeys(api.nvim_replace_termcodes("<C-c>", true, false, true), "x", false)
     expect.falsy(asked)
     expect.falsy(api.nvim_buf_is_valid(v.buf))
   end)
 
   it("asks before discarding typed text, and keeps it on no", function()
     local answer = false
-    verdict.confirm = function()
+    compose.confirm = function()
       return answer
     end
     local v = verdict.open(fake_review(), "COMMENT")
@@ -172,14 +195,22 @@ describe("review verdict", function()
     expect.falsy(api.nvim_buf_is_valid(v.buf))
   end)
 
-  it("never posts on :w, and :q refuses to drop unsent text", function()
+  it("never posts on :w; :q hides unsent text and the command brings it back", function()
     local calls = stub(reply("200 OK", OK))
-    local v = verdict.open(fake_review(), "COMMENT")
+    local review = fake_review()
+    local v = verdict.open(review, "COMMENT")
     api.nvim_buf_set_lines(v.buf, 0, -1, false, { "draft" })
     vim.cmd("write")
     expect.eq(0, #calls())
-    expect.falsy(pcall(vim.cmd, "quit"))
+    vim.cmd("quit")
+    vim.wait(100, function()
+      return v:win() == nil
+    end)
     expect.truthy(api.nvim_buf_is_valid(v.buf))
+    expect.eq(v, verdict.get(review))
+    local again = verdict.open(review, "COMMENT")
+    expect.eq(v, again)
+    expect.eq(v.buf, api.nvim_win_get_buf(api.nvim_get_current_win()))
     expect.eq({ "draft" }, api.nvim_buf_get_lines(v.buf, 0, -1, false))
   end)
 
@@ -190,9 +221,9 @@ describe("review verdict", function()
     vim.cmd("wincmd p")
     local again = verdict.open(review, "APPROVE")
     expect.eq(v, again)
-    expect.eq(v.win, api.nvim_get_current_win())
+    expect.eq(v:win(), api.nvim_get_current_win())
     expect.eq("APPROVE", v.event)
-    expect.matches("Approve PR #7", vim.wo[v.win].winbar)
+    expect.matches("Approve PR #7", vim.wo[assert(v:win())].winbar)
     expect.eq({ "kept" }, api.nvim_buf_get_lines(v.buf, 0, -1, false))
   end)
 
@@ -202,7 +233,19 @@ describe("review verdict", function()
     v.review.valid = false
     expect.falsy(v:post())
     expect.eq(0, #calls())
-    expect.matches("the review has ended", vim.wo[v.win].winbar)
+    expect.eq({ "✗ not posted: the review has ended" }, errors_shown(v.buf))
+  end)
+
+  it("keeps a summary with text in a listed buffer when the review ends", function()
+    local review = fake_review()
+    local v = verdict.open(review, "COMMENT")
+    api.nvim_buf_set_lines(v.buf, 0, -1, false, { "half written" })
+    expect.eq(api.nvim_buf_get_name(v.buf), verdict.orphan(review))
+    expect.eq(true, vim.bo[v.buf].buflisted)
+    expect.eq(nil, verdict.get(review))
+    local empty = verdict.open(fake_review(), "APPROVE")
+    expect.eq(nil, verdict.orphan(empty.review))
+    expect.falsy(api.nvim_buf_is_valid(empty.buf))
   end)
 
   describe(":NvimDiffVerdict", function()

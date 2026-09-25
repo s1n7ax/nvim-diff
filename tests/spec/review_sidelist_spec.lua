@@ -114,6 +114,27 @@ describe("review.sidelist", function()
     expect.falsy(list:is_open())
   end)
 
+  it("knows which thread each of its lines draws", function()
+    local win = api.nvim_get_current_win()
+    local f = T("F", { subject = "file", line = NONE })
+    local o = T("O", { outdated = true, line = NONE, path = "b.lua" })
+    local list = sidelist.open({ items = sidelist.items({ f, o }), win = win })
+    api.nvim_set_current_win(list.win)
+    local seen = {}
+    for lnum = 1, api.nvim_buf_line_count(list.buf) do
+      api.nvim_win_set_cursor(list.win, { lnum, 0 })
+      local th = list:thread_at_cursor()
+      seen[#seen + 1] = th and th.id or "-"
+    end
+    -- Title, blank, a.lua, F's lines, blank, b.lua, O's lines.
+    expect.eq("-", seen[1])
+    expect.eq("-", seen[3])
+    expect.eq("F", seen[4])
+    expect.truthy(vim.tbl_contains(seen, "O"))
+    expect.eq("O", seen[#seen])
+    list:close()
+  end)
+
   it("shows a PR's threads through the diff view, and keeps expansion across files", function()
     local r = gitrepo.new()
     r:write("a.lua", "a\nb\nc\n")

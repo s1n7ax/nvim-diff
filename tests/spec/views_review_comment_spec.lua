@@ -41,10 +41,11 @@ end
 ---@param line integer
 ---@param side string
 ---@param comments table[]
-local function gql_thread(id, line, side, comments)
+---@param path? string
+local function gql_thread(id, line, side, comments, path)
   return {
     id = id,
-    path = "a.txt",
+    path = path or "a.txt",
     line = line,
     startLine = vim.NIL,
     originalLine = line,
@@ -102,10 +103,38 @@ local REPLIED = vim.json.encode({
   in_reply_to_id = 101,
 })
 
+local EDITED = vim.json.encode({
+  id = 301,
+  node_id = "PRRC_mine",
+  body = "my better take",
+  user = { login = "me" },
+  path = "a.txt",
+  line = 2,
+  side = "RIGHT",
+})
+
+local FILE_POSTED = vim.json.encode({
+  id = 401,
+  node_id = "PRRC_file",
+  body = "split this file",
+  user = { login = "me" },
+  path = "b.txt",
+  line = vim.NIL,
+  side = vim.NIL,
+  subject_type = "file",
+})
+
+--- My own comment, on a.txt line 2.
+---@param body? string
+local function mine(body)
+  return gql_thread("PRRT_3", 2, "RIGHT", { gql_comment("PRRC_mine", "301", "me", body or "my first take") })
+end
+
 --- A `gh` for PR #7 whose threads gain the posted comment once a POST went through (a
---- marker file records it).
+--- marker file records it). `before` and `after` replace the thread lists served before and
+--- after a write; edits (`PATCH`) and deletes (`DELETE`) of any comment go through too.
 ---@param fixture Test.PRRemote
----@param opts? { fail_post?: boolean, fail_refetch?: boolean }
+---@param opts? { fail_post?: boolean, fail_refetch?: boolean, before?: table[], after?: table[] }
 ---@return string bin
 ---@return fun(): string[] calls
 local function stub(fixture, opts)
@@ -148,8 +177,8 @@ local function stub(fixture, opts)
     },
   })
   local first = gql_thread("PRRT_1", 1, "RIGHT", { gql_comment("PRRC_1", "101", "alice", "why?") })
-  local before = threads_body({ first })
-  local after = threads_body({
+  local before = threads_body(opts.before or { first })
+  local after = threads_body(opts.after or {
     gql_thread("PRRT_1", 1, "RIGHT", {
       gql_comment("PRRC_1", "101", "alice", "why?"),
       gql_comment("PRRC_reply", "203", "me", "agreed"),
@@ -159,6 +188,12 @@ local function stub(fixture, opts)
   local refused = '{"message":"Validation Failed","errors":["line must be part of the diff"]}'
   local after_arm = opts.fail_refetch and answer("502 Bad Gateway", '{"message":"down"}') or answer("200 OK", after)
   return ghstub.new(table.concat({
+    "  *--method\\ DELETE*pulls/comments/*)",
+    ("    touch '%s'; printf 'HTTP/2.0 204 No Content\\n\\n'; exit 0 ;;"):format(marker),
+    "  *--method\\ PATCH*pulls/comments/*)",
+    ("    touch '%s'; %s; exit 0 ;;"):format(marker, answer("200 OK", EDITED)),
+    "  *subject_type=file*)",
+    ("    touch '%s'; %s; exit 0 ;;"):format(marker, answer("201 Created", FILE_POSTED)),
     "  *comments/101/replies*)",
     ("    touch '%s'; %s; exit 0 ;;"):format(marker, answer("201 Created", REPLIED)),
     "  *pulls/7/comments*)",
@@ -227,7 +262,10 @@ describe("views review comments", function()
     end
     vim.cmd("silent! tabonly")
     for _, buf in ipairs(api.nvim_list_bufs()) do
-      if api.nvim_buf_get_name(buf):find("^nvim%-diff://comment/") then
+      if
+        api.nvim_buf_get_name(buf):find("^nvim%-diff://comment/")
+        or api.nvim_buf_get_name(buf):find("^nvim%-diff://verdict/")
+      then
         api.nvim_buf_delete(buf, { force = true })
       end
     end
@@ -372,6 +410,207 @@ describe("views review comments", function()
     expect.truthy(api.nvim_buf_is_valid(buf))
     expect.eq(true, vim.bo[buf].buflisted)
     expect.eq({ "not yet sent" }, api.nvim_buf_get_lines(buf, 0, -1, false))
+  end)
+
+  it("puts a suggestion block of the commented line into the split", function()
+    local review = setup()
+    local c = assert(review:comment())
+    vim.cmd.stopinsert()
+    expect.eq(true, c:insert_suggestion())
+    expect.eq({ "```suggestion", "A2", "```" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+  end)
+
+  it("has no suggestion for the old pane", function()
+    local review = setup({ side = "old" })
+    local c = assert(review:comment())
+    expect.eq(false, c:insert_suggestion())
+    expect.eq({ "" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+  end)
+
+  describe("own comments", function()
+    local real_confirm_delete
+
+    before_each(function()
+      real_confirm_delete = review_mod.confirm_delete
+    end)
+
+    after_each(function()
+      review_mod.confirm_delete = real_confirm_delete
+    end)
+
+    ---@param opts? table
+    local function setup_mine(opts)
+      local first = gql_thread("PRRT_1", 1, "RIGHT", { gql_comment("PRRC_1", "101", "alice", "why?") })
+      return setup(vim.tbl_extend("force", {
+        before = { first, mine() },
+        after = { first, mine("my better take") },
+      }, opts or {}))
+    end
+
+    it("edits one in the split, starting from its text", function()
+      local review, calls = setup_mine()
+      expect.eq(true, review:edit())
+      local c = assert(review.compose)
+      expect.matches("Edit your comment on a%.txt L2", vim.wo[c.win].winbar)
+      expect.eq({ "my first take" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+      vim.cmd.stopinsert()
+      expect.eq(true, c:insert_suggestion(), "a suggestion works in an edit too")
+      type_text(review, { "my better take" })
+      expect.eq(true, c:submit())
+      local sent = assert(last_call(calls, "%-%-method PATCH"))
+      expect.matches("repos/octocat/hello%-world/pulls/comments/301 %-f body=my better take$", sent)
+      local t3 = review.view.threads[2]
+      expect.eq("my better take", t3.comments[1].body, "refetched")
+      expect.eq(true, review.view.thread_state.expanded.PRRT_3)
+    end)
+
+    it("shows the edit even when the threads cannot be refetched", function()
+      local review = setup_mine({ fail_refetch = true })
+      review:edit()
+      type_text(review, { "my better take" })
+      expect.eq(true, review.compose:submit())
+      expect.eq(2, #review.view.threads)
+      expect.eq("my better take", review.view.threads[2].comments[1].body)
+      expect.eq("me", review.view.threads[2].comments[1].author)
+    end)
+
+    it("does not post an edit that empties the comment", function()
+      local review, calls = setup_mine()
+      review:edit()
+      local c = review.compose
+      type_text(review, { "" })
+      expect.eq(false, c:submit())
+      expect.truthy(c:is_open())
+      expect.eq(nil, last_call(calls, "%-%-method PATCH"))
+    end)
+
+    it("only offers the user's own comments", function()
+      local review, calls = setup_mine({ lnum = 1 })
+      expect.eq(false, review:edit())
+      expect.eq(nil, review.compose)
+      expect.eq(false, review:delete())
+      expect.eq(nil, last_call(calls, "%-%-method DELETE"))
+    end)
+
+    it("deletes one only after asking", function()
+      local first = gql_thread("PRRT_1", 1, "RIGHT", { gql_comment("PRRC_1", "101", "alice", "why?") })
+      local review, calls = setup_mine({ after = { first } })
+      local asked
+      review_mod.confirm_delete = function(prompt)
+        asked = prompt
+        return false
+      end
+      expect.eq(false, review:delete())
+      expect.matches("Delete your comment on a%.txt L2%?", asked)
+      expect.matches("my first take", asked)
+      expect.eq(nil, last_call(calls, "%-%-method DELETE"))
+      expect.eq(2, #review.view.threads)
+
+      review_mod.confirm_delete = function()
+        return true
+      end
+      expect.eq(true, review:delete())
+      expect.matches("%-%-method DELETE repos/octocat/hello%-world/pulls/comments/301$", last_call(calls, "DELETE"))
+      expect.eq(1, #review.view.threads, "refetched")
+    end)
+
+    it("drops a deleted comment's thread when the threads cannot be refetched", function()
+      local review = setup_mine({ fail_refetch = true })
+      review_mod.confirm_delete = function()
+        return true
+      end
+      expect.eq(true, review:delete())
+      expect.eq(
+        { "PRRT_1" },
+        vim.tbl_map(function(th)
+          return th.id
+        end, review.view.threads)
+      )
+    end)
+
+    it("edits and deletes from the side list too", function()
+      local file_thread =
+        gql_thread("PRRT_F", vim.NIL, "RIGHT", { gql_comment("PRRC_mine", "301", "me", "on the file") }, "b.txt")
+      file_thread.subjectType = "FILE"
+      file_thread.diffSide = vim.NIL
+      local review = setup({ before = { file_thread }, after = { file_thread } })
+      review.view:toggle_thread_list()
+      local list = assert(review.view.thread_list)
+      local descs = {}
+      for _, m in ipairs(api.nvim_buf_get_keymap(list.buf, "n")) do
+        descs[m.desc or ""] = m.lhs
+      end
+      expect.truthy(descs["nvim-diff: edit your comment in this thread"])
+      expect.truthy(descs["nvim-diff: delete your comment in this thread"])
+      api.nvim_set_current_win(list.win)
+      local lines = api.nvim_buf_get_lines(list.buf, 0, -1, false)
+      for i, l in ipairs(lines) do
+        if l:find("on the file", 1, true) then
+          api.nvim_win_set_cursor(list.win, { i, 0 })
+        end
+      end
+      expect.eq(true, review:edit())
+      local c = assert(review.compose)
+      expect.matches("Edit your comment on the file b%.txt", vim.wo[c.win].winbar)
+      expect.eq({ "on the file" }, api.nvim_buf_get_lines(c.buf, 0, -1, false))
+      vim.cmd.stopinsert()
+      expect.eq(false, c:insert_suggestion(), "a file comment has no lines")
+    end)
+  end)
+
+  it("posts a file-level comment from the file panel and opens the side list on it", function()
+    local file_thread =
+      gql_thread("PRRT_F", vim.NIL, "RIGHT", { gql_comment("PRRC_file", "401", "me", "split this file") }, "b.txt")
+    file_thread.subjectType = "FILE"
+    file_thread.diffSide = vim.NIL
+    local first = gql_thread("PRRT_1", 1, "RIGHT", { gql_comment("PRRC_1", "101", "alice", "why?") })
+    local review, calls = setup({ after = { first, file_thread } })
+    local panel = review.view.panel
+    api.nvim_set_current_win(panel.win)
+    for i, l in ipairs(api.nvim_buf_get_lines(panel.buf, 0, -1, false)) do
+      if l:find("b.txt", 1, true) then
+        api.nvim_win_set_cursor(panel.win, { i, 0 })
+      end
+    end
+    api.nvim_feedkeys("\\cc", "mx", false)
+    local c = assert(review.compose)
+    expect.matches("Comment on the file b%.txt", vim.wo[c.win].winbar)
+    type_text(review, { "split this file" })
+    expect.eq(true, c:submit())
+
+    local sent = assert(last_call(calls, "subject_type"))
+    expect.matches("%-%-method POST repos/octocat/hello%-world/pulls/7/comments ", sent)
+    expect.matches("%-f path=b%.txt ", sent)
+    expect.matches("%-f subject_type=file$", sent)
+    expect.falsy(sent:find("line=", 1, true))
+
+    local list = assert(review.view.thread_list)
+    expect.truthy(list:is_open())
+    local text = table.concat(api.nvim_buf_get_lines(list.buf, 0, -1, false), "\n")
+    expect.matches("file comment", text)
+    expect.matches("split this file", text)
+    expect.eq(panel.win, api.nvim_get_current_win(), "focus back in the panel")
+  end)
+
+  it("shows a file-level comment in the side list even when the threads cannot be refetched", function()
+    local review = setup({ fail_refetch = true })
+    local c = assert(review:file_comment(find(review, "b.txt")))
+    type_text(review, { "split this file" })
+    expect.eq(true, c:submit())
+    local list = assert(review.view.thread_list)
+    local text = table.concat(api.nvim_buf_get_lines(list.buf, 0, -1, false), "\n")
+    expect.matches("split this file", text)
+  end)
+
+  it("keeps an unsent verdict summary when the review ends", function()
+    local verdict = require("nvim-diff.review.verdict")
+    local review = setup()
+    local v = verdict.open(review, "COMMENT")
+    api.nvim_buf_set_lines(v.buf, 0, -1, false, { "summary so far" })
+    review:close()
+    expect.truthy(api.nvim_buf_is_valid(v.buf))
+    expect.eq(true, vim.bo[v.buf].buflisted)
+    expect.eq({ "summary so far" }, api.nvim_buf_get_lines(v.buf, 0, -1, false))
   end)
 
   it("maps the comment keys in both panes, in normal and visual mode", function()

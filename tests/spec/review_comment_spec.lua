@@ -104,5 +104,54 @@ describe("review comment", function()
       "Reply to alice on f.lua L2: why is this here at all, when the other…",
       comment.reply_header(thread --[[@as NvimDiff.GitHub.Thread]], 40)
     )
+    expect.eq("Edit your comment on f.lua L2", comment.edit_header(thread --[[@as NvimDiff.GitHub.Thread]]))
+    local file = { path = "f.lua", subject = "file", comments = {} }
+    expect.eq("Edit your comment on the file f.lua", comment.edit_header(file --[[@as NvimDiff.GitHub.Thread]]))
+    expect.eq("Comment on the file f.lua", comment.file_header("f.lua"))
+  end)
+
+  it("finds the user's own comments, in order", function()
+    local a =
+      { id = "a", comments = { { id = "a1", viewer_did_author = false }, { id = "a2", viewer_did_author = true } } }
+    local b = { id = "b", comments = { { id = "b1", viewer_did_author = true } } }
+    local own = comment.own({ a, b } --[[@as NvimDiff.GitHub.Thread[] ]])
+    expect.eq(
+      { "a2", "b1" },
+      vim.tbl_map(function(x)
+        return x.comment.id
+      end, own)
+    )
+    expect.eq(a, own[1].thread)
+  end)
+
+  it("suggests on the new side's lines only", function()
+    local f = open("side_by_side")
+    expect.eq({ lines = { "L2" } }, comment.suggestion_for_target(f, { path = "f.lua", side = "new", line = 2 }))
+    expect.eq(
+      { lines = { "l1", "L2", "l3" } },
+      comment.suggestion_for_target(f, { path = "f.lua", side = "new", line = 3, start_side = "new", start_line = 1 })
+    )
+    expect.matches("new side only", comment.suggestion_for_target(f, { path = "f.lua", side = "old", line = 2 }).reason)
+    local across = { path = "f.lua", side = "new", line = 2, start_side = "old", start_line = 2 }
+    expect.matches("new side only", comment.suggestion_for_target(f, across).reason)
+    local thread = { path = "f.lua", side = "new", line = 28, start_line = 27, subject = "line", comments = {} }
+    expect.eq(
+      { lines = { "l27", "L28" } },
+      comment.suggestion_for_thread(f, "f.lua", thread --[[@as NvimDiff.GitHub.Thread]])
+    )
+    expect.matches(
+      "not showing",
+      comment.suggestion_for_thread(f, "g.lua", thread --[[@as NvimDiff.GitHub.Thread]]).reason
+    )
+    thread.outdated = true
+    expect.matches(
+      "no longer",
+      comment.suggestion_for_thread(f, "f.lua", thread --[[@as NvimDiff.GitHub.Thread]]).reason
+    )
+    local file = { path = "f.lua", subject = "file", comments = {} }
+    expect.matches(
+      "file comment",
+      comment.suggestion_for_thread(f, "f.lua", file --[[@as NvimDiff.GitHub.Thread]]).reason
+    )
   end)
 end)
