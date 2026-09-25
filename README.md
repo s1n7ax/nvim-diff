@@ -1,5 +1,14 @@
 # nvim-diff
 
+> [!CAUTION]
+> ## ⚠️ This is a vibe-coded plugin ⚠️
+>
+> **Nearly every line of this plugin was written by an AI coding agent, not typed by hand.**
+> It is tested and used daily, but if you are sensitive about AI-generated code — on
+> principle, for licensing reasons, or because your workplace forbids it — **stay away
+> from this plugin.** No hard feelings; [diffview.nvim](https://github.com/sindrets/diffview.nvim)
+> is a fine human-written alternative.
+
 Diffs, file history, merge conflicts and GitHub pull request review for Neovim. Built to
 replace [diffview.nvim](https://github.com/sindrets/diffview.nvim) outright, with a PR
 review mode on top.
