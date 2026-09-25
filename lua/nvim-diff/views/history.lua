@@ -379,7 +379,7 @@ function View:add_line(batch)
       path = lc.path,
       oldpath = lc.oldpath,
       status = lc.oldpath and "R" or (lc.added and "A" or "M"),
-      similarity = lc.oldpath and 100 or nil,
+      -- `-L` gives no similarity score; nothing reads this field yet.
       additions = lc.additions,
       deletions = lc.deletions,
       binary = false,
