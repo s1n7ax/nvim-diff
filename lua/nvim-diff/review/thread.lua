@@ -16,7 +16,8 @@
 --- Collapsed, a thread is one line: `▌ ▸ alice  why 9090? …  · 2 replies · unresolved`.
 --- Expanded, it is a meta line and then every comment, author and date over its body,
 --- wrapped to the pane. A resolved thread is drawn entirely in `NvimDiffThreadResolved`
---- with a `✓`.
+--- with a `✓`, which a collapsed one also carries before the author
+--- (`▌ ▸ ✓ alice  why 9090? …`) so no pane is too narrow to show it.
 
 local M = {}
 
@@ -201,7 +202,10 @@ function M.collapsed_line(thread, opts)
   if opts.hint then
     meta = meta .. "  " .. opts.hint
   end
-  local head = M.BAR .. M.COLLAPSED .. author .. "  "
+  -- A resolved thread leads with its ✓ as well, so a narrow pane that cuts the meta short
+  -- still shows it.
+  local mark = thread.resolved and (M.RESOLVED .. " ") or ""
+  local head = M.BAR .. M.COLLAPSED .. mark .. author .. "  "
   local room = width - vim.fn.strdisplaywidth(head .. meta)
   local text = vim.trim(first and M.body_lines(first.body)[1] or "")
   -- The excerpt keeps at least `MIN_EXCERPT` cells in a narrow pane; the meta gives way.
@@ -212,7 +216,7 @@ function M.collapsed_line(thread, opts)
   end
   return {
     { M.BAR, hl(thread, "NvimDiffThreadBar") },
-    { M.COLLAPSED, hl(thread, "NvimDiffThreadMeta") },
+    { M.COLLAPSED .. mark, hl(thread, "NvimDiffThreadMeta") },
     { author, hl(thread, "NvimDiffThreadAuthor") },
     { "  ", "" },
     { text, hl(thread, "NvimDiffThreadBody") },

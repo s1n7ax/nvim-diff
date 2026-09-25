@@ -164,7 +164,7 @@ describe("review.threadview", function()
     local v = open()
     local tv = threadview.attach(v, { T("A", { resolved = true }) })
     local p = v.scene --[[@as NvimDiff.Pair]]
-    expect.matches("· ✓ reso…$", virt(p.bufs.new)[1])
+    expect.matches("▌ ▸ ✓ alice .*· ✓ re…$", virt(p.bufs.new)[1])
     expect.eq("hide", tv:toggle_resolved())
     expect.eq({}, virt(p.bufs.new))
     expect.eq({}, virt(p.bufs.old))

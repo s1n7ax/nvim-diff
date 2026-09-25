@@ -32,6 +32,11 @@
 --- pane, or on a visual selection; `keymaps.comment.reply` answers the thread on the
 --- cursor's line. After a post the threads are refetched and the new comment's thread shows
 --- expanded.
+---
+--- Threads are resolved on GitHub from the cursor's line: `keymaps.threads.resolve` at once,
+--- `reply_resolve` after a reply written in the same split, `unresolve` to undo. The thread
+--- is redrawn from GitHub's answer and stays on screen, dimmed with a ✓ — even while
+--- resolved threads are hidden, until the resolved mode is next flipped.
 
 local comment_mod = require("nvim-diff.review.comment")
 local comments_mod = require("nvim-diff.github.comments")
@@ -251,6 +256,7 @@ function Review:trap()
     if not self.closed and api.nvim_get_current_tabpage() == self.view.tab then
       self:map_keys(buf)
       self:map_comment_keys(buf)
+      self:map_resolve_keys(buf)
     end
   end)
 end
@@ -546,6 +552,233 @@ function Review:show_posted(posted)
     end
   end
   view:set_threads(list)
+end
+
+-- Resolving threads -----------------------------------------------------------------------
+
+--- Map the resolve keys in the diff pane buffer `buf`.
+---@param buf integer
+function Review:map_resolve_keys(buf)
+  local keys = config.get().keymaps.threads
+  local function map(lhs, fn, desc)
+    if type(lhs) == "string" then
+      vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, desc = "nvim-diff: " .. desc })
+    end
+  end
+  map(keys.resolve, function()
+    self:resolve()
+  end, "resolve the comment thread on this line")
+  map(keys.reply_resolve, function()
+    self:reply_and_resolve()
+  end, "reply to the comment thread on this line, then resolve it")
+  map(keys.unresolve, function()
+    self:unresolve()
+  end, "unresolve the comment thread on this line")
+end
+
+--- Hand a thread on the cursor's line that `keep` accepts to `start`: the one on the
+--- cursor's pane first, and with several still, the one the user picks.
+---@param keep fun(t: NvimDiff.GitHub.Thread): boolean
+---@param prompt string The picker's prompt.
+---@param none string The warning when the line has threads but none that `keep` accepts.
+---@param start fun(t?: NvimDiff.GitHub.Thread) Nil when the picker was dismissed.
+---@return boolean found False when there is no such thread.
+function Review:pick_thread(keep, prompt, none, start)
+  local tv = self.view.thread_view
+  local here = tv and not tv.detached and tv:at_cursor() or {}
+  local file = self.view.file
+  local side = file and not file:is_closed() and file:cursor().side
+  local list = vim.tbl_filter(keep, here)
+  local own = vim.tbl_filter(function(t)
+    return (t.side or "new") == side
+  end, list)
+  if #own > 0 then
+    list = own
+  end
+  if #list == 0 then
+    if #here > 0 then
+      log.warn(none)
+    else
+      local key = config.get().keymaps.threads.toggle_resolved
+      if tv and tv.state.resolved == "hide" and type(key) == "string" then
+        log.warn("no comment thread on this line (resolved ones are hidden; %s shows them)", key)
+      else
+        log.warn("no comment thread on this line")
+      end
+    end
+    return false
+  end
+  if #list == 1 then
+    start(list[1])
+  else
+    vim.ui.select(list, {
+      prompt = prompt,
+      format_item = function(t)
+        return (comment_mod.reply_header(t, 60):gsub("^Reply to ", ""))
+      end,
+    }, start)
+  end
+  return true
+end
+
+--- `thread` with a GitHub thread id to resolve by. A thread drawn from a post alone, while
+--- GitHub's threads could not be read back, has none: the threads are read again (and
+--- redrawn) and the same thread, found by its first comment, is returned from that.
+---@param thread NvimDiff.GitHub.Thread
+---@return NvimDiff.GitHub.Thread? thread
+---@return string? why Why there is none.
+function Review:with_thread_id(thread)
+  if not thread.local_only then
+    return thread
+  end
+  local list, err = threads_mod.fetch(self.pr.target, self.number)
+  if not list then
+    local why = "it was drawn from your comment alone, as GitHub's threads could not be read back, "
+      .. "so it has no thread id yet (%s)"
+    return nil, why:format(msg(err))
+  end
+  local first = thread.comments[1]
+  local found
+  for _, t in ipairs(list) do
+    for _, c in ipairs(t.comments) do
+      if first and c.id == first.id then
+        found = t
+      end
+    end
+  end
+  local state = self.view.thread_state
+  if found and state and state.expanded[thread.id] then
+    state.expanded[found.id] = true
+  end
+  self.view:set_threads(list)
+  if not found then
+    return nil, "GitHub no longer lists it"
+  end
+  return found
+end
+
+--- Record GitHub's answer on `thread`. A thread just resolved stays drawn while resolved
+--- threads are hidden, so the resolve can be seen and undone.
+---@param thread NvimDiff.GitHub.Thread
+---@param state NvimDiff.GitHub.ResolvedState
+function Review:apply_resolved(thread, state)
+  threads_mod.apply(thread, state)
+  local ts = self.view.thread_state
+  if ts then
+    ts.kept = ts.kept or {}
+    ts.kept[thread.id] = state.resolved or nil
+  end
+end
+
+--- Resolve (`resolved = true`) or unresolve `thread` on GitHub, then redraw the threads.
+---@param thread NvimDiff.GitHub.Thread
+---@param resolved boolean
+---@return boolean ok
+function Review:set_resolved(thread, resolved)
+  if not self:is_valid() then
+    return false
+  end
+  local verb = resolved and "resolve" or "unresolve"
+  local real, why = self:with_thread_id(thread)
+  if not real then
+    log.error("cannot %s this thread: %s", verb, why)
+    return false
+  end
+  if real.resolved == resolved then
+    return true
+  end
+  if not (resolved and real.can_resolve or not resolved and real.can_unresolve) then
+    log.warn("you cannot %s this thread", verb)
+    return false
+  end
+  local state, err = (resolved and threads_mod.resolve or threads_mod.unresolve)(self.pr.target.host, real)
+  if not state then
+    log.error("cannot %s this thread: %s", verb, post_error(err))
+    return false
+  end
+  self:apply_resolved(real, state)
+  self.view:set_threads(self.view.threads or {})
+  return true
+end
+
+---@param t NvimDiff.GitHub.Thread
+---@return boolean
+local function resolvable(t)
+  return not t.resolved and (t.can_resolve or t.local_only == true)
+end
+
+--- Resolve the thread on the cursor's line on GitHub.
+---@return boolean found False when there is no thread here to resolve.
+function Review:resolve()
+  if not self:is_valid() then
+    return false
+  end
+  return self:pick_thread(resolvable, "Resolve which thread?", "no thread on this line you can resolve", function(t)
+    if t then
+      self:set_resolved(t, true)
+    end
+  end)
+end
+
+--- Unresolve the resolved thread on the cursor's line on GitHub.
+---@return boolean found False when there is no resolved thread here.
+function Review:unresolve()
+  if not self:is_valid() then
+    return false
+  end
+  return self:pick_thread(
+    function(t)
+      return t.resolved and t.can_unresolve
+    end,
+    "Unresolve which thread?",
+    "no resolved thread on this line you can unresolve",
+    function(t)
+      if t then
+        self:set_resolved(t, false)
+      end
+    end
+  )
+end
+
+--- Reply to the thread on the cursor's line in the comment split; posting the reply also
+--- resolves the thread. The two are separate calls to GitHub: when the resolve fails, the
+--- reply is already public, so the split closes and the failure is reported, never retried.
+---@return boolean found False when there is no thread here to resolve, or a draft is open.
+function Review:reply_and_resolve()
+  if not self:is_valid() or self:resume_draft() then
+    return false
+  end
+  local function keep(t)
+    return t.can_reply and resolvable(t)
+  end
+  local none = "no thread on this line you can reply to and resolve"
+  return self:pick_thread(keep, "Reply to and resolve which thread?", none, function(t)
+    if not t or self:resume_draft() then
+      return
+    end
+    local thread, why = self:with_thread_id(t)
+    if not thread then
+      log.error("cannot resolve this thread: %s", why)
+      return
+    end
+    if thread.resolved or not (thread.can_reply and thread.can_resolve) then
+      log.warn(thread.resolved and "this thread is already resolved" or "you cannot reply to and resolve this thread")
+      return
+    end
+    self:open_compose(comment_mod.reply_header(thread) .. " — then resolve", function(text)
+      local posted, err = comments_mod.reply(self.pr, thread, text)
+      if not posted then
+        return nil, err
+      end
+      local state, rerr = threads_mod.resolve(self.pr.target.host, thread)
+      if state then
+        self:apply_resolved(thread, state)
+      else
+        log.error("reply posted, but the thread could not be resolved: %s", post_error(rerr))
+      end
+      return posted
+    end)
+  end)
 end
 
 --- Wipe every buffer on a file inside the worktree: the files are about to be deleted.
