@@ -172,6 +172,67 @@ describe("github comments", function()
     expect.eq("invalid", err.kind)
     _, err = comments.reply(PR, { comments = {} } --[[@as NvimDiff.GitHub.Thread]], "x")
     expect.eq("invalid", err.kind)
+    _, err = comments.edit(PR, { id = "PRRC_x" } --[[@as NvimDiff.GitHub.Comment]], "x")
+    expect.eq("invalid", err.kind)
+    _, err = comments.delete(PR, { id = "PRRC_x" } --[[@as NvimDiff.GitHub.Comment]])
+    expect.eq("invalid", err.kind)
+    _, err = comments.edit(PR, { id = "PRRC_x", database_id = "7" } --[[@as NvimDiff.GitHub.Comment]], " ")
+    expect.eq("invalid", err.kind)
+    _, err = comments.create_file(PR, "a", "")
+    expect.eq("invalid", err.kind)
     expect.eq(0, #calls())
+  end)
+
+  it("posts a file-level comment with no line", function()
+    local posted = vim.json.encode({
+      id = 556,
+      node_id = "PRRC_file",
+      body = "split this file",
+      user = { login = "me" },
+      path = "src/a.lua",
+      line = vim.NIL,
+      side = vim.NIL,
+      subject_type = "file",
+    })
+    local bin, calls = ghstub.new("  *pulls/42/comments*)\n" .. answer("201 Created", posted))
+    config.setup({ github = { bin = bin } })
+    local c = assert(comments.create_file(PR, "src/a.lua", "split this file"))
+    expect.eq("file", c.subject)
+    expect.eq(nil, c.line)
+    local sent = calls()[1]
+    expect.matches("%-%-method POST repos/octocat/hello%-world/pulls/42/comments ", sent)
+    expect.eq("0123abcd", field(sent, "commit_id"))
+    expect.eq("src/a.lua", field(sent, "path"))
+    expect.eq("file", field(sent, "subject_type"))
+    expect.falsy(sent:find("line=", 1, true))
+  end)
+
+  it("edits a comment by its REST id", function()
+    local edited = vim.json.encode({ id = 101, node_id = "PRRC_1", body = "better words", user = { login = "me" } })
+    local bin, calls = ghstub.new("  *pulls/comments/101*)\n" .. answer("200 OK", edited))
+    config.setup({ github = { bin = bin } })
+    local c = assert(
+      comments.edit(PR, { id = "PRRC_1", database_id = "101" } --[[@as NvimDiff.GitHub.Comment]], "better words")
+    )
+    expect.eq("better words", c.body)
+    local sent = calls()[1]
+    expect.matches("^api %-%-hostname ghe%.corp%.example %-i %-%-method PATCH ", sent)
+    expect.matches(" repos/octocat/hello%-world/pulls/comments/101 %-f body=better words$", sent)
+  end)
+
+  it("deletes a comment by its REST id, taking the empty 204 as success", function()
+    local bin, calls =
+      ghstub.new("  *pulls/comments/101*)\n    printf 'HTTP/2.0 204 No Content\\n\\n'\n    exit 0\n    ;;\n")
+    config.setup({ github = { bin = bin } })
+    expect.eq(true, comments.delete(PR, { id = "PRRC_1", database_id = "101" } --[[@as NvimDiff.GitHub.Comment]]))
+    expect.matches("%-%-method DELETE repos/octocat/hello%-world/pulls/comments/101$", calls()[1])
+  end)
+
+  it("passes a refused delete through", function()
+    local bin = ghstub.new("  *pulls/comments/101*)\n" .. answer("404 Not Found", '{"message":"Not Found"}'))
+    config.setup({ github = { bin = bin }, log = { level = "off" } })
+    local ok, err = comments.delete(PR, { id = "PRRC_1", database_id = "101" } --[[@as NvimDiff.GitHub.Comment]])
+    expect.falsy(ok)
+    expect.eq("not_found", err.kind)
   end)
 end)

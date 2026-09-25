@@ -116,6 +116,7 @@ end
 
 ---@class NvimDiff.GitHub.Response
 ---@field status? integer HTTP status code; nil when the header block did not parse.
+---@field reason? string The status line's reason phrase (`Unprocessable Entity`).
 ---@field headers table<string, string> Lower-cased header names.
 ---@field body any Decoded JSON, or the raw text when it did not parse as JSON.
 
@@ -129,6 +130,10 @@ end
 local function split_response(raw)
   local head, body = raw:match("^(.-)\r?\n\r?\n(.*)$")
   if not head then
+    -- A body-less reply (`204 No Content`) may end right after its headers.
+    if raw:match("^HTTP/[%d.]+%s+%d+") then
+      return (raw:gsub("\r?\n$", "")), ""
+    end
     return nil, raw
   end
   return head, body
@@ -137,13 +142,16 @@ end
 ---@param head string
 ---@return integer? status
 ---@return table<string, string> headers
+---@return string? reason
 local function parse_headers(head)
-  local status
+  local status, reason
   local headers = {}
   local first = true
   for line in (head .. "\n"):gmatch("(.-)\r?\n") do
     if first then
-      status = tonumber(line:match("^HTTP/[%d.]+%s+(%d+)"))
+      local code, phrase = line:match("^HTTP/[%d.]+%s+(%d+)%s*(.-)%s*$")
+      status = tonumber(code)
+      reason = phrase ~= "" and phrase or nil
       first = false
     else
       local name, value = line:match("^([^:]+):%s*(.*)$")
@@ -152,7 +160,7 @@ local function parse_headers(head)
       end
     end
   end
-  return status, headers
+  return status, headers, reason
 end
 
 --- `gh api --hostname <host> -i <endpoint>`, with `opts.vars` appended as `-f`/`-F` fields
@@ -193,9 +201,9 @@ function M.request(host, endpoint, opts)
         stderr = res.stderr,
       })
   end
-  local status, headers = parse_headers(head)
+  local status, headers, reason = parse_headers(head)
   local ok, decoded = pcall(vim.json.decode, body_text)
-  return { status = status, headers = headers, body = ok and decoded or body_text }
+  return { status = status, reason = reason, headers = headers, body = ok and decoded or body_text }
 end
 
 ---@param list table[]?
@@ -204,16 +212,63 @@ local function first_message(list)
   return list and list[1] and list[1].message or nil
 end
 
+--- What an error body's `errors` array says, joined. REST puts plain strings there ("Can
+--- not approve your own pull request") as often as objects — `{message}`, or only
+--- `{resource, field, code}` for a 422 on a named field.
+---@param list any
+---@return string?
+local function details(list)
+  if type(list) ~= "table" then
+    return nil
+  end
+  local parts = {}
+  for _, one in ipairs(list) do
+    if type(one) == "string" and one ~= "" then
+      parts[#parts + 1] = one
+    elseif type(one) == "table" then
+      if type(one.message) == "string" and one.message ~= "" then
+        parts[#parts + 1] = one.message
+      elseif type(one.field) == "string" and type(one.code) == "string" then
+        parts[#parts + 1] = ("%s %s"):format(one.field, one.code:gsub("_", " "))
+      end
+    end
+  end
+  return #parts > 0 and table.concat(parts, "; ") or nil
+end
+
+--- An error response's message: the top-level `message` and whatever the `errors` array
+--- adds, `Validation Failed: line must be part of the diff`. A top message that only
+--- repeats the status line's reason phrase (`Unprocessable Entity`) is dropped.
+---@param response NvimDiff.GitHub.Response
+---@return string
+local function error_message(response)
+  local body = response.body
+  local top = type(body.message) == "string" and body.message ~= "" and body.message or nil
+  if top and response.reason and top:lower() == response.reason:lower() then
+    top = nil
+  end
+  local more = details(body.errors)
+  if top and more then
+    return ("%s: %s"):format(top, more)
+  end
+  return top or more or ("gh api returned HTTP %s"):format(tostring(response.status))
+end
+
 --- Turn a response into `data, nil` or `nil, err`, covering both shapes `gh api` can hand
 --- back on failure: a GraphQL body (`{"data":..., "errors":[...]}`, HTTP 200 even on a
 --- schema or NOT_FOUND error) and a plain REST-style error body
 --- (`{"message":..., "status":"401"}`, a non-2xx HTTP status). Verified against the live
 --- API for each status this function branches on (auth, bad field, missing repository/PR).
+--- A 2xx with no body at all (a DELETE's `204`) is success with empty data.
 ---@param response NvimDiff.GitHub.Response
 ---@return table? data
 ---@return NvimDiff.GitHub.Error? err
 function M.classify(response)
   local status, headers, body = response.status, response.headers, response.body
+  if status and status >= 200 and status < 300 and type(body) == "string" and vim.trim(body) == "" then
+    -- `204 No Content`: a DELETE's whole answer.
+    return {}, nil
+  end
   if type(body) ~= "table" then
     return nil, errors.new("api_error", "gh returned a response this client could not parse", { status = status })
   end
@@ -232,7 +287,7 @@ function M.classify(response)
     return body.data or body, nil
   end
 
-  local message = body.message or first_message(body.errors) or ("gh api returned HTTP %s"):format(tostring(status))
+  local message = error_message(response)
   if status == 401 then
     return nil, errors.new("not_authenticated", message, { status = status })
   end

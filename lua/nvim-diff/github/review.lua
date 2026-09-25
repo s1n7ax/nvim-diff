@@ -46,25 +46,6 @@ end
 ---@field state string `APPROVED`, `CHANGES_REQUESTED` or `COMMENTED`.
 ---@field url? string `html_url`.
 
---- A 422's `errors` array holds plain strings ("Can not approve your own pull request") or
---- objects with a `message`; the top-level `message` is only "Unprocessable Entity".
----@param body any
----@return string?
-local function unprocessable(body)
-  if type(body) ~= "table" or type(body.errors) ~= "table" then
-    return nil
-  end
-  local parts = {}
-  for _, one in ipairs(body.errors) do
-    if type(one) == "string" then
-      parts[#parts + 1] = one
-    elseif type(one) == "table" and type(one.message) == "string" then
-      parts[#parts + 1] = one.message
-    end
-  end
-  return #parts > 0 and table.concat(parts, "; ") or nil
-end
-
 --- Submit a verdict on `pr`.
 ---@param pr NvimDiff.GitHub.PR
 ---@param event NvimDiff.GitHub.ReviewEvent
@@ -94,7 +75,7 @@ function M.submit(pr, event, body)
   local response, err = cmd.request(
     target.host,
     ("repos/%s/%s/pulls/%d/reviews"):format(target.owner, target.repo, pr.number),
-    { vars = vars }
+    { method = "POST", vars = vars }
   )
   if not response then
     return nil, err
@@ -102,11 +83,6 @@ function M.submit(pr, event, body)
   local data
   data, err = cmd.classify(response)
   if not data then
-    ---@cast err NvimDiff.GitHub.Error
-    local detail = response.status == 422 and unprocessable(response.body)
-    if detail then
-      err.message = detail
-    end
     return nil, err
   end
   if type(data.id) ~= "number" then
