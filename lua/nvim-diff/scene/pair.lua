@@ -34,6 +34,9 @@ local SIDES = { "old", "new" }
 ---@field header? string Full header text, replacing the one built from `label`.
 ---@field name? string Buffer name.
 ---@field lang? string Treesitter language.
+--- The side is a blob at a commit: its buffer may be kept for reuse after the scene
+--- closes (`scene/buffer.lua`, `buffers.lru_size`).
+---@field keep? boolean
 
 ---@class NvimDiff.PairSpec
 ---@field diff NvimDiff.Diff
@@ -114,6 +117,7 @@ function M.open(spec)
       trailer = map.trailer,
       name = s.name,
       lang = s.lang,
+      keep = s.keep,
     })
   end
   assert(
@@ -449,7 +453,8 @@ function Pair:remove_block(id)
   self:repaint_virt()
 end
 
---- Tear the pair down: stop syncing, close both panes, wipe both buffers. Idempotent.
+--- Tear the pair down: stop syncing, close both panes, release both buffers (wiped, or
+--- kept for reuse — `scene/buffer.lua`). Idempotent.
 --- `opts.keep` leaves that window open (the layout toggle reuses it), on an empty scratch
 --- buffer if it still shows a pane.
 ---@param opts? NvimDiff.SceneCloseOpts
@@ -477,9 +482,7 @@ function Pair:close(opts)
   end
   for _, side in ipairs(SIDES) do
     folds_scene.forget(self.bufs[side])
-    if api.nvim_buf_is_valid(self.bufs[side]) then
-      pcall(api.nvim_buf_delete, self.bufs[side], { force = true })
-    end
+    buffer.release(self.bufs[side])
   end
 end
 

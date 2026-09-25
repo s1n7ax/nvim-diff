@@ -21,7 +21,9 @@ local M = {}
 ---@field panel_entries integer Above this many changed files the panel shows a summary.
 
 ---@class NvimDiff.Config.Buffers
----@field lru_size integer Non-local diff buffers kept before the oldest is evicted.
+--- Diff buffers of blobs at a commit kept after their view moves on, for reuse; beyond
+--- this, the least recently used one not on screen is wiped. `0` keeps none.
+---@field lru_size integer
 
 ---@class NvimDiff.Config.Git
 ---@field bin string
@@ -328,7 +330,7 @@ local schema = {
   },
 
   buffers = {
-    lru_size = { type = "number", integer = true, min = 1 },
+    lru_size = { type = "number", integer = true, min = 0 },
   },
 
   git = {

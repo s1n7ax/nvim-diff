@@ -2,6 +2,7 @@ local t = require("tests.harness")
 local describe, it, before_each, after_each, expect = t.describe, t.it, t.before_each, t.after_each, t.expect
 
 local child_mod = require("tests.child")
+local buffer = require("nvim-diff.scene.buffer")
 local config = require("nvim-diff.config")
 local fileview = require("nvim-diff.scene.fileview")
 local line = require("nvim-diff.diff.line")
@@ -95,10 +96,15 @@ describe("scene.fileview", function()
     expect.truthy(u.closed)
     -- The left pane is the old side.
     expect.truthy(api.nvim_win_get_position(p.wins.old)[2] < api.nvim_win_get_position(p.wins.new)[2])
-    -- No stray buffers: exactly the two panes' and the tab's original one.
+    -- No stray buffers: exactly the two panes'. (Blobs other specs' views kept for reuse
+    -- are hidden and do not count.)
+    local kept = {}
+    for _, b in ipairs(buffer.kept()) do
+      kept[b] = true
+    end
     local names = {}
     for _, b in ipairs(api.nvim_list_bufs()) do
-      if vim.bo[b].buftype == "nofile" then
+      if vim.bo[b].buftype == "nofile" and not kept[b] then
         names[#names + 1] = b
       end
     end

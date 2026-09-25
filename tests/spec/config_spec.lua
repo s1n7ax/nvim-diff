@@ -115,9 +115,9 @@ describe("config", function()
         end)
       )
       expect.matches(
-        "expected at least 1",
+        "expected at least 0",
         expect.errors(function()
-          config.setup({ buffers = { lru_size = 0 } })
+          config.setup({ buffers = { lru_size = -1 } })
         end)
       )
     end)

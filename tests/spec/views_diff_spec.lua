@@ -2,6 +2,7 @@ local t = require("tests.harness")
 local describe, it, before_each, after_each, expect = t.describe, t.it, t.before_each, t.after_each, t.expect
 
 local child_mod = require("tests.child")
+local buffer = require("nvim-diff.scene.buffer")
 local config = require("nvim-diff.config")
 local event = require("nvim-diff.core.event")
 local gitrepo = require("tests.gitrepo")
@@ -396,10 +397,46 @@ describe("views.diff", function()
     off2()
     expect.eq(tabs, #api.nvim_list_tabpages())
     expect.eq({ { "opened", v, panel_buf }, { "closed", v, panel_buf } }, seen)
+    -- The old side is a blob at `base`: kept, hidden and scrubbed, for reuse. The work
+    -- tree side and the note are gone.
+    expect.truthy(vim.list_contains(buffer.kept(), bufs[1]))
+    expect.eq({}, vim.fn.win_findbuf(bufs[1]))
+    expect.eq({}, api.nvim_buf_get_keymap(bufs[1], "n"))
+    expect.eq({}, api.nvim_buf_get_extmarks(bufs[1], -1, 0, -1, {}))
+    for _, b in ipairs({ bufs[2], bufs[3], panel_buf }) do
+      expect.falsy(api.nvim_buf_is_valid(b), "buffer " .. b .. " survived")
+    end
+  end)
+
+  it("wipes every buffer on close when buffers.lru_size is 0", function()
+    config.setup({ thresholds = { defer_lines = 20 }, buffers = { lru_size = 0 } })
+    open()
+    view:next_file()
+    local bufs = { view.file.scene.bufs.old, view.file.scene.bufs.new }
+    view:close()
+    view = nil
     for _, b in ipairs(bufs) do
       expect.falsy(api.nvim_buf_is_valid(b), "buffer " .. b .. " survived")
     end
-    expect.falsy(api.nvim_buf_is_valid(panel_buf))
+  end)
+
+  it("takes a commit's blob buffer back when the file is shown again", function()
+    local head = r:commit("head")
+    open({ right = rev.commit(head, "head") })
+    local a = find(view, "lua/nvim-diff/scene/a.lua")
+    view:select(a)
+    local first = { old = view.file.scene.bufs.old, new = view.file.scene.bufs.new }
+    view:select(find(view, "README.md"))
+    for _, b in pairs(first) do
+      expect.truthy(api.nvim_buf_is_valid(b), "a.lua's buffer was wiped")
+      expect.eq({}, vim.fn.win_findbuf(b))
+    end
+    view:select(a)
+    expect.eq(first, { old = view.file.scene.bufs.old, new = view.file.scene.bufs.new })
+    expect.eq({ "a", "b", "c" }, api.nvim_buf_get_lines(first.old, 1, 4, false))
+    expect.eq({ "a", "B", "c" }, api.nvim_buf_get_lines(first.new, 1, 4, false))
+    -- The view's keys were mapped again in the reused buffers.
+    expect.truthy(#api.nvim_buf_get_keymap(first.new, "n") > 0)
   end)
 
   it("holds a fileview: the layout flips in place beside the panel, keys follow", function()

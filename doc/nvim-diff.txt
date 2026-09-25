@@ -419,8 +419,11 @@ thresholds.panel_entries               (default: `2000`)
 
                                            *nvim-diff-config.buffers.lru_size*
 buffers.lru_size                       (default: `64`)
-    Reserved for a cap on cached diff buffers. Accepted, but has no effect
-    yet.
+    How many diff buffers of committed files are kept after their view moves
+    on, so showing that file at that commit again reuses the buffer and its
+    treesitter parse. Past this many, the least recently used one that no
+    window shows is wiped; buffers on screen are never wiped. `0` keeps none.
+    Work-tree and index sides are never kept.
 
                                                     *nvim-diff-config.git.bin*
 git.bin                                (default: `"git"`)
