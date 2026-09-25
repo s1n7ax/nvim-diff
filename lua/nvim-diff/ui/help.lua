@@ -18,10 +18,15 @@ M.ns = api.nvim_create_namespace("nvim-diff.help")
 
 local PREFIX = "nvim-diff: "
 
+--- Section order in the menu; a group not listed here comes after these, by name.
+local GROUPS = { "Files", "Diff", "Review", "Comments", "Threads", "Conflicts", "Compose", "Folds", "General" }
+
 ---@class NvimDiff.HelpItem
----@field key string The key as shown: `<leader>` put back, special keys in `<>` notation.
+---@field group string The section it is listed under: the `Group: ` part of its description.
+---@field key string The keys as shown, `<leader>` put back, special keys in `<>` notation;
+--- several keys that do the same thing share one item.
 ---@field desc string
----@field lhsraw string The key as typed, to run it.
+---@field lhsraw string The first key as typed, to run it.
 
 --- `lhs` in `<>` notation, with the leader spelled `<leader>`.
 ---@param lhsraw string
@@ -39,12 +44,36 @@ local function show_key(lhsraw)
   return key
 end
 
---- The nvim-diff keys of `buf` in normal mode, sorted by what they do. Keys that only
---- block something (`<Nop>`) and the menu's own key are left out.
+---@param group string
+---@return integer
+local function group_rank(group)
+  return vim.fn.index(GROUPS, group) + 1
+end
+
+--- `desc` for sorting: a `Next x` and its `Previous x` sort together, under `x`.
+---@param desc string
+---@return string
+local function sort_key(desc)
+  local d = desc:lower()
+  local rest = d:match("^next (.+)")
+  if rest then
+    return rest .. " 1"
+  end
+  rest = d:match("^previous (.+)")
+  if rest then
+    return rest .. " 2"
+  end
+  return d
+end
+
+--- The nvim-diff keys of `buf` in normal mode, by section, then by what they do. A
+--- description reads `nvim-diff: Group: text`; one with no group goes under `General`.
+--- Keys that only block something (`<Nop>`) and the menu's own key are left out.
 ---@param buf integer
 ---@return NvimDiff.HelpItem[]
 function M.items(buf)
   local help = config.get().keymaps.help
+  local by_desc = {}
   local out = {}
   for _, m in ipairs(api.nvim_buf_get_keymap(buf, "n")) do
     local desc = m.desc
@@ -52,13 +81,49 @@ function M.items(buf)
     if desc and vim.startswith(desc, PREFIX) and not nop then
       local key = show_key(m.lhsraw or m.lhs)
       if key ~= help then
-        out[#out + 1] = { key = key, desc = desc:sub(#PREFIX + 1), lhsraw = m.lhsraw or m.lhs }
+        local text = desc:sub(#PREFIX + 1)
+        local group, rest = text:match("^(%u[%w ]-): (.+)$")
+        group, text = group or "General", rest or text
+        local id = group .. "\0" .. text
+        local it = by_desc[id]
+        if it then
+          it.keys[#it.keys + 1] = { key = key, lhsraw = m.lhsraw or m.lhs }
+        else
+          it = { group = group, desc = text, keys = { { key = key, lhsraw = m.lhsraw or m.lhs } } }
+          by_desc[id] = it
+          out[#out + 1] = it
+        end
       end
     end
   end
+  for _, it in ipairs(out) do
+    table.sort(it.keys, function(a, b)
+      local la, lb = a.key:lower(), b.key:lower()
+      if la ~= lb then
+        return la < lb
+      end
+      return a.key > b.key
+    end)
+    it.key = table.concat(
+      vim.tbl_map(function(k)
+        return k.key
+      end, it.keys),
+      " "
+    )
+    it.lhsraw = it.keys[1].lhsraw
+    it.keys = nil
+  end
   table.sort(out, function(a, b)
-    if a.desc ~= b.desc then
-      return a.desc < b.desc
+    if a.group ~= b.group then
+      local ra, rb = group_rank(a.group), group_rank(b.group)
+      if ra ~= rb then
+        return ra ~= 0 and (rb == 0 or ra < rb)
+      end
+      return a.group < b.group
+    end
+    local sa, sb = sort_key(a.desc), sort_key(b.desc)
+    if sa ~= sb then
+      return sa < sb
     end
     return a.key < b.key
   end)
@@ -69,7 +134,7 @@ end
 ---@field buf integer The menu's buffer.
 ---@field win integer The menu's float.
 ---@field from integer The window the menu was opened from; keys run there.
----@field items NvimDiff.HelpItem[]
+---@field items table<integer, NvimDiff.HelpItem> The item on each menu line; none on titles.
 ---@field closed? boolean
 local Help = {}
 Help.__index = Help
@@ -94,19 +159,39 @@ function M.open()
   for _, it in ipairs(items) do
     key_w = math.max(key_w, vim.fn.strdisplaywidth(it.key))
   end
-  local lines = {}
+  -- A section title, then its keys indented under it; a blank line between sections.
+  -- `at[lnum]` is the item on that line, nil on titles and blanks.
+  local lines, at, titles = {}, {}, {}
   local width = 0
-  for i, it in ipairs(items) do
-    lines[i] = (" %s%s  %s "):format(it.key, (" "):rep(key_w - vim.fn.strdisplaywidth(it.key)), it.desc)
-    width = math.max(width, vim.fn.strdisplaywidth(lines[i]))
+  local function add(line, item)
+    lines[#lines + 1] = line
+    at[#lines] = item
+    width = math.max(width, vim.fn.strdisplaywidth(line))
   end
-  width = math.min(width, vim.o.columns - 4)
+  local group
+  for _, it in ipairs(items) do
+    if it.group ~= group then
+      if group then
+        add("")
+      end
+      group = it.group
+      add(" " .. group)
+      titles[#lines] = true
+    end
+    add(("   %s%s   %s "):format(it.key, (" "):rep(key_w - vim.fn.strdisplaywidth(it.key)), it.desc), it)
+  end
+  width = math.min(math.max(width, 30), vim.o.columns - 4)
   local height = math.min(#lines, math.max(1, vim.o.lines - 6))
 
   local buf = api.nvim_create_buf(false, true)
   api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  for i, it in ipairs(items) do
-    api.nvim_buf_set_extmark(buf, M.ns, i - 1, 1, { end_col = 1 + #it.key, hl_group = "NvimDiffHelpKey" })
+  for lnum, line in ipairs(lines) do
+    if titles[lnum] then
+      api.nvim_buf_set_extmark(buf, M.ns, lnum - 1, 0, { end_col = #line, hl_group = "NvimDiffHelpGroup" })
+    elseif at[lnum] then
+      api.nvim_buf_set_extmark(buf, M.ns, lnum - 1, 3, { end_col = 3 + #at[lnum].key, hl_group = "NvimDiffHelpKey" })
+      api.nvim_buf_set_extmark(buf, M.ns, lnum - 1, 3 + key_w, { end_col = #line, hl_group = "NvimDiffHelpDesc" })
+    end
   end
   vim.bo[buf].modifiable = false
   vim.bo[buf].bufhidden = "wipe"
@@ -118,7 +203,7 @@ function M.open()
     height = height,
     style = "minimal",
     border = "rounded",
-    title = " nvim-diff keys ",
+    title = " Keys ",
     title_pos = "center",
     footer = " <CR> run · q close ",
     footer_pos = "center",
@@ -127,7 +212,31 @@ function M.open()
   vim.wo[win].wrap = false
   vim.wo[win].winhighlight = "FloatBorder:NvimDiffHelpBorder,FloatTitle:NvimDiffHelpTitle"
 
-  local self = setmetatable({ buf = buf, win = win, from = from, items = items }, Help)
+  local self = setmetatable({ buf = buf, win = win, from = from, items = at }, Help)
+  api.nvim_win_set_cursor(win, { 2, 0 })
+  -- Keep the cursor on keys: titles and blank lines are stepped over, in the direction
+  -- it was moving.
+  local last = 2
+  api.nvim_create_autocmd("CursorMoved", {
+    buffer = buf,
+    callback = function()
+      local lnum = api.nvim_win_get_cursor(win)[1]
+      if at[lnum] then
+        last = lnum
+        return
+      end
+      local step = lnum < last and -1 or 1
+      local n = lnum
+      while n >= 1 and n <= #lines and not at[n] do
+        n = n + step
+      end
+      if not at[n] then
+        n = last
+      end
+      last = n
+      api.nvim_win_set_cursor(win, { n, 0 })
+    end,
+  })
   current = self
   local function map(lhs, fn)
     vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true })
@@ -174,10 +283,10 @@ function Help:close()
   end
 end
 
---- Close the menu and press the key of item `i` in the window it was opened from.
----@param i integer
-function Help:run(i)
-  local it = self.items[i]
+--- Close the menu and press the key on menu line `lnum` in the window it was opened from.
+---@param lnum integer
+function Help:run(lnum)
+  local it = self.items[lnum]
   self:close()
   if it then
     api.nvim_feedkeys(it.lhsraw, "m", false)
@@ -192,7 +301,7 @@ function M.attach(buf)
     return
   end
   vim.b[buf].nvim_diff_help = true
-  vim.keymap.set("n", lhs, M.open, { buffer = buf, nowait = true, desc = PREFIX .. "list the keys that work here" })
+  vim.keymap.set("n", lhs, M.open, { buffer = buf, nowait = true, desc = PREFIX .. "General: Show keys" })
 end
 
 return M

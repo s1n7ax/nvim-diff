@@ -144,9 +144,22 @@ function M.attach(scene, bufs, augroup)
     end,
   }
   maps.zX = maps.zx
+  local descs = {
+    zo = "Expand one step",
+    zO = "Expand whole fold",
+    zv = "Expand whole fold",
+    za = "Toggle fold",
+    zA = "Toggle fold",
+    zc = "Collapse fold",
+    zC = "Collapse fold",
+    zR = "Expand all",
+    zM = "Collapse all",
+    zx = "Reset folds",
+    zX = "Reset folds",
+  }
   for _, buf in ipairs(bufs) do
     for lhs, rhs in pairs(maps) do
-      vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, desc = "nvim-diff: context folds" })
+      vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, desc = "nvim-diff: Folds: " .. descs[lhs] })
     end
     for _, lhs in ipairs({ "zE", "zd", "zD", "zf", "zF", "zn", "zN", "zi" }) do
       vim.keymap.set({ "n", "x" }, lhs, "<Nop>", { buffer = buf, desc = "nvim-diff: folds are mirrored" })

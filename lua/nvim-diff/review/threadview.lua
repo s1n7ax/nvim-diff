@@ -499,19 +499,19 @@ function ThreadView:map_keys()
           -- No thread here: the key does what it would have done.
           api.nvim_feedkeys(api.nvim_replace_termcodes(keys.toggle, true, false, true), "n", false)
         end
-      end, "expand or collapse the comment thread on this line")
+      end, "Threads: Expand / collapse")
       map(keys.next, function()
         self:jump(1)
-      end, "next comment thread")
+      end, "Threads: Next thread")
       map(keys.prev, function()
         self:jump(-1)
-      end, "previous comment thread")
+      end, "Threads: Previous thread")
       map(keys.toggle_resolved, function()
         local mode = self:toggle_resolved()
         log.info("resolved threads: %s", mode == "hide" and "hidden" or "shown, dimmed")
-      end, "hide or show resolved comment threads")
+      end, "Threads: Show / hide resolved")
       if self.opts.on_list then
-        map(keys.list, self.opts.on_list, "outdated and file-level comments")
+        map(keys.list, self.opts.on_list, "Threads: List outdated & file comments")
       end
     end
   end

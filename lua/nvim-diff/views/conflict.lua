@@ -48,6 +48,13 @@ M.ns = api.nvim_create_namespace("nvim-diff.conflict")
 
 local SIDES = merge_mod.SIDES
 local STAGE = { base = 1, ours = 2, theirs = 3 }
+local TAKE_DESC = {
+  ours = "Take ours",
+  base = "Take base",
+  theirs = "Take theirs",
+  both = "Take both (ours first)",
+  none = "Take none",
+}
 
 ---@class NvimDiff.ConflictViewOpts
 --- The conflicted file, absolute or relative to the cwd. Defaults to the current buffer's.
@@ -405,20 +412,20 @@ function View:map_keys(buf)
   for _, choice in ipairs({ "ours", "base", "theirs", "both", "none" }) do
     map(keys["take_" .. choice], function()
       self:take(choice)
-    end, "resolve the conflict with " .. (choice == "both" and "ours then theirs" or choice))
+    end, "Conflicts: " .. TAKE_DESC[choice])
   end
   map(keys.next_conflict, function()
     self:next_conflict()
-  end, "next conflict")
+  end, "Conflicts: Next conflict")
   map(keys.prev_conflict, function()
     self:prev_conflict()
-  end, "previous conflict")
+  end, "Conflicts: Previous conflict")
   map(view_keys.next_file, function()
     self:next_file()
-  end, "next conflicted file")
+  end, "Files: Next file")
   map(view_keys.prev_file, function()
     self:prev_file()
-  end, "previous conflicted file")
+  end, "Files: Previous file")
   help.attach(buf)
 end
 

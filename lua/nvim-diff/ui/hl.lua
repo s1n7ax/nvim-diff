@@ -88,6 +88,8 @@ M.groups = {
   NvimDiffHelpKey = { dark = { link = "Special" }, light = { link = "Special" } },
   NvimDiffHelpBorder = { dark = { link = "FloatBorder" }, light = { link = "FloatBorder" } },
   NvimDiffHelpTitle = { dark = { link = "Title" }, light = { link = "Title" } },
+  NvimDiffHelpGroup = { dark = { link = "Title" }, light = { link = "Title" } },
+  NvimDiffHelpDesc = { dark = { link = "NormalFloat" }, light = { link = "NormalFloat" } },
 
   -- The file panel.
   NvimDiffPanelTitle = { dark = { link = "Title" }, light = { link = "Title" } },

@@ -149,7 +149,7 @@ function M.open(spec)
   local self = setmetatable({ buf = buf, win = win, items = spec.items }, SideList)
   vim.keymap.set("n", "q", function()
     self:close()
-  end, { buffer = buf, nowait = true, desc = "nvim-diff: close the comment list" })
+  end, { buffer = buf, nowait = true, desc = "nvim-diff: General: Close list" })
   help.attach(buf)
   self:set(spec.items)
   return self
