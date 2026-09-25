@@ -31,6 +31,7 @@ local log = require("nvim-diff.core.log")
 local pair = require("nvim-diff.scene.pair")
 local structural = require("nvim-diff.diff.structural")
 local unified = require("nvim-diff.scene.unified")
+local unified_rows = require("nvim-diff.render.unified")
 local window = require("nvim-diff.scene.window")
 
 local api = vim.api
@@ -280,6 +281,35 @@ function View:cursor()
   local at, top = p.map:line_view(side, view.lnum), p.map:top_view(side, view.topline, view.topfill)
   local winline = at and top and at - top + 1 or api.nvim_win_call(win, vim.fn.winline)
   return { side = side, lnum = lnum, winline = winline }
+end
+
+--- The file line buffer line `bl` of scene window `win` shows, and its side. In
+--- side-by-side the side is the pane's; in unified a deleted line is `old` and every other
+--- line `new` (as GitHub's unified view anchors a comment on an unchanged line). Nil for a
+--- window that is not the scene's, the header, and the trailer.
+---@param win integer
+---@param bl integer
+---@return NvimDiff.Side?
+---@return integer?
+function View:line_at(win, bl)
+  if self.layout == "unified" then
+    local u = self.scene --[[@as NvimDiff.Unified]]
+    if u.win ~= win then
+      return nil, nil
+    end
+    local side, lnum = unified_rows.line_at(u.layout, bl)
+    if not lnum then
+      return nil, nil
+    end
+    return side, lnum
+  end
+  local p = self.scene --[[@as NvimDiff.Pair]]
+  local side = p:side_of(win)
+  local lnum = side and p.map:file_line(side, bl)
+  if not lnum then
+    return nil, nil
+  end
+  return side, lnum
 end
 
 --- Put a pair pane's cursor on buffer line `bl`, scrolled so it sits on screen row

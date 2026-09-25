@@ -108,6 +108,21 @@ local M = {}
 --- What a resolved thread looks like until toggled: drawn dimmed with a ✓, or not at all.
 ---@field resolved "dim"|"hide"
 
+--- `add` and `reply` are buffer-local to the diff panes of a PR review; `submit` and
+--- `cancel` to the comment split, in normal and insert mode. `:w` in the split posts too.
+---@class NvimDiff.Config.CommentKeymaps
+--- New comment on the cursor's line of the pane it is in (old or new); in visual mode, on
+--- the selected lines.
+---@field add NvimDiff.Config.Key
+--- Reply to the thread on the cursor's line.
+---@field reply NvimDiff.Config.Key
+---@field submit NvimDiff.Config.Key Post what the split holds.
+--- Close the split; asks first when it holds text.
+---@field cancel NvimDiff.Config.Key
+
+---@class NvimDiff.Config.Comment
+---@field height integer Rows of the comment split.
+
 ---@class NvimDiff.Config.Keymaps
 ---@field review NvimDiff.Config.ReviewKeymaps
 ---@field panel NvimDiff.Config.PanelKeymaps Buffer-local to the file panel.
@@ -115,6 +130,7 @@ local M = {}
 ---@field history NvimDiff.Config.HistoryKeymaps Buffer-local to the history panel.
 ---@field conflict NvimDiff.Config.ConflictKeymaps
 ---@field threads NvimDiff.Config.ThreadKeymaps
+---@field comment NvimDiff.Config.CommentKeymaps
 
 ---@class NvimDiff.Config
 ---@field layout "side_by_side"|"unified"
@@ -130,6 +146,7 @@ local M = {}
 ---@field panel NvimDiff.Config.Panel
 ---@field history NvimDiff.Config.History
 ---@field threads NvimDiff.Config.Threads
+---@field comment NvimDiff.Config.Comment
 ---@field keymaps NvimDiff.Config.Keymaps
 
 ---@type NvimDiff.Config
@@ -190,6 +207,10 @@ local defaults = {
     resolved = "dim",
   },
 
+  comment = {
+    height = 10,
+  },
+
   keymaps = {
     panel = {
       select = "<CR>",
@@ -227,6 +248,14 @@ local defaults = {
       prev = "[t",
       toggle_resolved = "gR",
       list = "gC",
+    },
+    -- `<C-s>` may freeze a terminal with flow control on (`stty -ixon` frees it); `:w`
+    -- posts as well.
+    comment = {
+      add = "<leader>cc",
+      reply = "<leader>cr",
+      submit = "<C-s>",
+      cancel = "<C-c>",
     },
   },
 
@@ -295,6 +324,10 @@ local schema = {
     resolved = { type = "string", one_of = { "dim", "hide" } },
   },
 
+  comment = {
+    height = { type = "number", integer = true, min = 1 },
+  },
+
   keymaps = {
     panel = {
       select = KEY,
@@ -330,6 +363,12 @@ local schema = {
       prev = KEY,
       toggle_resolved = KEY,
       list = KEY,
+    },
+    comment = {
+      add = KEY,
+      reply = KEY,
+      submit = KEY,
+      cancel = KEY,
     },
   },
 
