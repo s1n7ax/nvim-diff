@@ -115,6 +115,10 @@ query($id: ID!, $cursor: String) {
 ---@field can_unresolve boolean
 ---@field resolved_by? string Login.
 ---@field comments NvimDiff.GitHub.Comment[] Oldest first; the first one opened the thread.
+--- Built locally from a posted comment when the threads could not be refetched
+--- (`review/comment.lua` `thread_of`): `id` is then a comment's id, not a thread's, and the
+--- thread cannot be resolved until the threads are read again.
+---@field local_only? boolean
 
 local SIDES = { LEFT = "old", RIGHT = "new" }
 
@@ -271,6 +275,95 @@ function M.fetch(target, number)
     cursor = nxt
   until not cursor
   return threads
+end
+
+-- Resolving -------------------------------------------------------------------------------
+--
+-- GraphQL-only: REST has no resolved state. Both mutations take the thread's node id, as
+-- read above. `resolutionReason` is never sent — it is recent, and GHES may not know it.
+-- Each mutation returns the thread's state as GitHub now has it, so the caller updates what
+-- it shows from GitHub's answer rather than assuming.
+
+local RESOLVE = [[
+mutation($id: ID!) {
+  resolveReviewThread(input: { threadId: $id }) {
+    thread { id isResolved viewerCanResolve viewerCanUnresolve resolvedBy { login } }
+  }
+}
+]]
+
+local UNRESOLVE = [[
+mutation($id: ID!) {
+  unresolveReviewThread(input: { threadId: $id }) {
+    thread { id isResolved viewerCanResolve viewerCanUnresolve resolvedBy { login } }
+  }
+}
+]]
+
+--- A thread's resolved state, as a mutation returned it.
+---@class NvimDiff.GitHub.ResolvedState
+---@field resolved boolean
+---@field can_resolve boolean
+---@field can_unresolve boolean
+---@field resolved_by? string
+
+---@param mutation string
+---@param field string The mutation's name, which keys its payload.
+---@param host string
+---@param thread NvimDiff.GitHub.Thread
+---@return NvimDiff.GitHub.ResolvedState? state
+---@return NvimDiff.GitHub.Error? err
+local function set_resolved(mutation, field, host, thread)
+  if thread.local_only or type(thread.id) ~= "string" or thread.id == "" then
+    return nil, errors.new("invalid", "this thread has no GitHub thread id yet")
+  end
+  local data, err = cmd.graphql(host, mutation, { { flag = "-f", name = "id", value = thread.id } })
+  if not data then
+    return nil, err
+  end
+  local payload = value(data[field])
+  local node = type(payload) == "table" and value(payload.thread)
+  if type(node) ~= "table" or type(node.isResolved) ~= "boolean" then
+    return nil, errors.new("api_error", "GitHub's reply did not describe the thread")
+  end
+  local by = value(node.resolvedBy)
+  return {
+    resolved = node.isResolved,
+    can_resolve = node.viewerCanResolve == true,
+    can_unresolve = node.viewerCanUnresolve == true,
+    resolved_by = type(by) == "table" and value(by.login) or nil,
+  }
+end
+
+--- Resolve a thread on GitHub.
+---@param host string
+---@param thread NvimDiff.GitHub.Thread
+---@return NvimDiff.GitHub.ResolvedState? state GitHub's view of the thread afterwards.
+---@return NvimDiff.GitHub.Error? err `invalid` for a thread with no GitHub id
+---(`local_only`); otherwise what GitHub said.
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function M.resolve(host, thread)
+  return set_resolved(RESOLVE, "resolveReviewThread", host, thread)
+end
+
+--- Unresolve a thread on GitHub.
+---@param host string
+---@param thread NvimDiff.GitHub.Thread
+---@return NvimDiff.GitHub.ResolvedState? state
+---@return NvimDiff.GitHub.Error? err
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function M.unresolve(host, thread)
+  return set_resolved(UNRESOLVE, "unresolveReviewThread", host, thread)
+end
+
+--- Copy a mutation's answer onto the thread.
+---@param thread NvimDiff.GitHub.Thread
+---@param state NvimDiff.GitHub.ResolvedState
+function M.apply(thread, state)
+  thread.resolved = state.resolved
+  thread.can_resolve = state.can_resolve
+  thread.can_unresolve = state.can_unresolve
+  thread.resolved_by = state.resolved_by
 end
 
 return M
