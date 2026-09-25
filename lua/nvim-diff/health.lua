@@ -32,6 +32,8 @@ local PROBE_LANGS = {
 }
 
 local MIN_GIT = { 2, 25, 0 }
+--- `--diff-merges=first-parent`, which file history needs to list a merge commit's files.
+local FIRST_PARENT_GIT = { 2, 31, 0 }
 
 --- Run a command and return its result, or nil when the executable is missing or the run
 --- failed outright.
@@ -119,19 +121,59 @@ local function check_git()
   end
 
   local found = { tonumber(major), tonumber(minor), tonumber(patch) or 0 }
+  local shown = ("git %d.%d.%d"):format(found[1], found[2], found[3])
   if vim.version.lt(found, MIN_GIT) then
     vim.health.warn(
-      ("git %d.%d.%d is older than the supported %d.%d"):format(found[1], found[2], found[3], MIN_GIT[1], MIN_GIT[2])
+      ("%s is older than the supported %d.%d"):format(shown, MIN_GIT[1], MIN_GIT[2]),
+      { "upgrade git; options the plugin passes may be missing or behave differently" }
     )
   else
-    vim.health.ok(("git %d.%d.%d"):format(found[1], found[2], found[3]))
+    vim.health.ok(shown)
   end
+  if vim.version.lt(found, FIRST_PARENT_GIT) then
+    vim.health.warn(
+      ("%s has no `--diff-merges=first-parent` (git %d.%d)"):format(shown, FIRST_PARENT_GIT[1], FIRST_PARENT_GIT[2]),
+      { "file history lists no files for merge commits; everything else works" }
+    )
+  end
+end
+
+--- The GitHub host the cwd's repository reviews against, resolved as `:NvimDiffPR` does:
+--- `github.host`, else `$GH_HOST`, else the `origin` remote's host.
+---@return NvimDiff.GitHub.Target? target
+---@return string? why Why there is none.
+local function repo_target()
+  local repo = require("nvim-diff.git.repo").discover()
+  if not repo then
+    return nil, "not inside a git repository"
+  end
+  local target, err = require("nvim-diff.github.host").resolve(repo)
+  if not target then
+    if err and err.kind == "no_remote" then
+      return nil, "the repository has no `origin` remote"
+    end
+    return nil, err and err.message or "no GitHub remote"
+  end
+  return target
+end
+
+---@return string
+local function host_source()
+  local config = require("nvim-diff.config").get()
+  if config.github.host and config.github.host ~= "" then
+    return "`github.host`"
+  end
+  if vim.env.GH_HOST and vim.env.GH_HOST ~= "" then
+    return "`$GH_HOST`"
+  end
+  return "the `origin` remote"
 end
 
 local function check_gh()
   vim.health.start("gh (GitHub PR review)")
   local config = require("nvim-diff.config").get()
-  local status = require("nvim-diff.github.auth").status()
+  local auth = require("nvim-diff.github.auth")
+  local status = auth.status()
   if not status.installed then
     vim.health.warn(("`%s` not found on PATH"):format(config.github.bin), {
       "PR review is unavailable; diff, file history and merge conflicts are not affected",
@@ -144,13 +186,34 @@ local function check_gh()
   local authenticated = {}
   for _, host in ipairs(status.hosts) do
     if host.authenticated then
-      authenticated[#authenticated + 1] = host.host
+      authenticated[#authenticated + 1] = host.login and ("%s (%s)"):format(host.host, host.login) or host.host
+    else
+      vim.health.warn(("`gh` has a token for %s, but GitHub rejects it"):format(host.host), {
+        ("run `gh auth refresh --hostname %s`, or `gh auth login --hostname %s`"):format(host.host, host.host),
+      })
     end
   end
   if #authenticated > 0 then
     vim.health.ok("authenticated to " .. table.concat(authenticated, ", "))
-  else
+  elseif #status.hosts == 0 then
     vim.health.warn("`gh auth status` reports no authenticated host", { "run `gh auth login`" })
+  end
+
+  -- The host that matters is the one this repository's PRs live on, which may be a GitHub
+  -- Enterprise Server host `gh` was never logged in to.
+  local target, why = repo_target()
+  if not target then
+    vim.health.info(("no PR host to check for the cwd: %s"):format(why))
+    return
+  end
+  local where = ("%s/%s on %s (host from %s)"):format(target.owner, target.repo, target.host, host_source())
+  if auth.is_authenticated(status, target.host) then
+    vim.health.ok("`:NvimDiffPR` here reviews " .. where)
+  else
+    vim.health.warn(("`gh` is not authenticated to %s"):format(target.host), {
+      "`:NvimDiffPR` here reviews " .. where,
+      ("run `gh auth login --hostname %s`"):format(target.host),
+    })
   end
 end
 
@@ -258,7 +321,7 @@ local function check_worktrees()
     vim.health.ok("no leftover PR worktrees")
     return
   end
-  local advice = { "close the review, or remove them by hand:" }
+  local advice = { "no running Neovim owns them; the next Neovim started here prunes them at `setup()`, or by hand:" }
   for _, path in ipairs(paths) do
     advice[#advice + 1] = ("  git worktree remove --force %s"):format(path)
   end
