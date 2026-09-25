@@ -131,27 +131,24 @@ end
 local function check_gh()
   vim.health.start("gh (GitHub PR review)")
   local config = require("nvim-diff.config").get()
-  local result = run({ config.github.bin, "--version" }, config.github.timeout_ms)
-  if not result then
+  local status = require("nvim-diff.github.auth").status()
+  if not status.installed then
     vim.health.warn(("`%s` not found on PATH"):format(config.github.bin), {
       "PR review is unavailable; diff, file history and merge conflicts are not affected",
       "install the GitHub CLI: https://cli.github.com",
     })
     return
   end
-  vim.health.ok(vim.split(output(result), "\n")[1])
+  vim.health.ok(status.version or config.github.bin)
 
-  local auth = run({ config.github.bin, "auth", "status" }, config.github.timeout_ms)
-  if auth and auth.code == 0 then
-    local hosts = {}
-    for host in output(auth):gmatch("Logged in to ([%w%.%-]+)") do
-      hosts[#hosts + 1] = host
+  local authenticated = {}
+  for _, host in ipairs(status.hosts) do
+    if host.authenticated then
+      authenticated[#authenticated + 1] = host.host
     end
-    if #hosts > 0 then
-      vim.health.ok("authenticated to " .. table.concat(hosts, ", "))
-    else
-      vim.health.ok("authenticated")
-    end
+  end
+  if #authenticated > 0 then
+    vim.health.ok("authenticated to " .. table.concat(authenticated, ", "))
   else
     vim.health.warn("`gh auth status` reports no authenticated host", { "run `gh auth login`" })
   end
