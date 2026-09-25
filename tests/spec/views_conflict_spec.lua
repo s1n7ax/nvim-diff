@@ -1,5 +1,5 @@
 local t = require("tests.harness")
-local describe, it, after_each, expect = t.describe, t.it, t.after_each, t.expect
+local describe, it, before_each, after_each, expect = t.describe, t.it, t.before_each, t.after_each, t.expect
 
 local child_mod = require("tests.child")
 local config = require("nvim-diff.config")
@@ -52,6 +52,29 @@ local function fixture(style)
   r:commit("theirs")
   r:git({ "checkout", "-q", "main" })
   r:write("f.txt", text(40, { [5] = "l5 ours", [15] = "l15 ours", [30] = "l30 ours" }, { [30] = { "ours extra" } }))
+  r:commit("ours")
+  local res = vim.system({ "git", "merge", "-q", "feature" }, { cwd = r.root }):wait()
+  assert(res.code ~= 0, "the merge should conflict")
+  return r
+end
+
+--- Like `fixture`, but with a second conflicted file, `g.txt` (one conflict, l1), and a
+--- clean file `h.txt` that only ours touched — so `f.txt` and `g.txt` are the `U` entries.
+---@return Test.Repo
+local function two_files_fixture()
+  local r = gitrepo.new()
+  r:write("f.txt", text(40, {}))
+  r:write("g.txt", "g1\n")
+  r:write("h.txt", "h\n")
+  r:commit("base")
+  r:git({ "checkout", "-q", "-b", "feature" })
+  r:write("f.txt", text(40, { [15] = "l15 theirs" }))
+  r:write("g.txt", "g-theirs\n")
+  r:commit("theirs")
+  r:git({ "checkout", "-q", "main" })
+  r:write("f.txt", text(40, { [15] = "l15 ours" }))
+  r:write("g.txt", "g-ours\n")
+  r:write("h.txt", "h-ours\n")
   r:commit("ours")
   local res = vim.system({ "git", "merge", "-q", "feature" }, { cwd = r.root }):wait()
   assert(res.code ~= 0, "the merge should conflict")
@@ -282,6 +305,73 @@ describe("views.conflict", function()
     end, "not in a conflicted state")
   end)
 
+  it("lists every conflicted file by default, or takes an explicit list", function()
+    local r = two_files_fixture()
+    view = views.open({ path = r.root .. "/f.txt" })
+    expect.eq({ "f.txt", "g.txt" }, view.files)
+    view:close()
+
+    view = views.open({ path = r.root .. "/f.txt", files = { "g.txt", "f.txt" } })
+    expect.eq({ "g.txt", "f.txt" }, view.files)
+  end)
+
+  it("steps to the next/previous conflicted file in place, keeping the tab and windows", function()
+    local r = two_files_fixture()
+    view = views.open({ path = r.root .. "/f.txt" })
+    local tab, wins = view.tab, vim.deepcopy(view.wins)
+    local conflict = require("nvim-diff.git.conflict")
+
+    expect.truthy(view:next_file())
+    expect.eq("g.txt", view.git_path)
+    expect.eq(tab, view.tab)
+    expect.eq(wins, view.wins)
+    expect.eq(r.root .. "/g.txt", api.nvim_buf_get_name(view.result_buf))
+    expect.eq(view.wins.result, api.nvim_get_current_win())
+    expect.eq(1, #conflict.parse(lines(view.result_buf)))
+    -- The view still works on the new file: take, undo, paint.
+    expect.truthy(view:take("theirs"))
+    expect.eq("g-theirs", lines(view.result_buf)[1])
+    expect.eq(0, #conflict.parse(lines(view.result_buf)))
+
+    expect.truthy(view:prev_file())
+    expect.eq("f.txt", view.git_path)
+    expect.eq(tab, view.tab)
+    expect.eq(wins, view.wins)
+    expect.eq(1, #conflict.parse(lines(view.result_buf)))
+
+    -- Wraps: prev from the first goes to the last.
+    expect.truthy(view:prev_file())
+    expect.eq("g.txt", view.git_path)
+  end)
+
+  it("warns instead of stepping when only one file is conflicted", function()
+    config.setup({ log = { level = "off" } }) -- the warning
+    local r = fixture()
+    view = views.open({ path = r.root .. "/f.txt" })
+    expect.eq({ "f.txt" }, view.files)
+    expect.falsy(view:next_file())
+    expect.eq("f.txt", view.git_path)
+    expect.falsy(view:prev_file())
+  end)
+
+  it("maps next_file/prev_file (keymaps.view) in all four windows", function()
+    local r = two_files_fixture()
+    view = views.open({ path = r.root .. "/f.txt" })
+    local function mapped(buf, lhs)
+      return api.nvim_buf_call(buf, function()
+        return vim.fn.maparg(lhs, "n") ~= ""
+      end)
+    end
+    for _, buf in ipairs({ view.bufs.ours, view.bufs.base, view.bufs.theirs, view.result_buf }) do
+      expect.truthy(mapped(buf, "<Tab>"))
+      expect.truthy(mapped(buf, "<S-Tab>"))
+    end
+
+    api.nvim_set_current_win(view.wins.result)
+    api.nvim_feedkeys(api.nvim_replace_termcodes("<Tab>", true, false, true), "x", false)
+    expect.eq("g.txt", view.git_path)
+  end)
+
   it("keeps the three panes on the same rows through real scrolling", function()
     local r = fixture()
     child = child_mod.spawn()
@@ -378,5 +468,80 @@ describe("views.conflict", function()
     end
     io.stdout:write(("       measured: %d/%d ops misaligned\n"):format(misaligned, ops))
     expect.eq(0, misaligned, table.concat(failures, "\n      "))
+  end)
+end)
+
+describe("views.conflict command", function()
+  local event = require("nvim-diff.core.event")
+  local cwd
+  local notified
+  local opened
+  local off
+
+  before_each(function()
+    cwd = vim.uv.cwd()
+    vim.g.loaded_nvim_diff = nil
+    vim.cmd.runtime("plugin/nvim-diff.lua")
+    notified = {}
+    local notify = vim.notify
+    vim.notify = function(msg, level) -- luacheck: ignore 122
+      notified[#notified + 1] = { msg, level }
+    end
+    notified.restore = function()
+      vim.notify = notify -- luacheck: ignore 122
+    end
+    opened = {}
+    off = event.on(event.events.VIEW_OPENED, function(v)
+      opened[#opened + 1] = v
+    end)
+  end)
+
+  after_each(function()
+    off()
+    for _, v in ipairs(opened) do
+      pcall(function()
+        v:close()
+      end)
+    end
+    notified.restore()
+    vim.cmd.cd(cwd)
+    vim.cmd("silent! %bwipeout!")
+    gitrepo.cleanup()
+    config.reset()
+  end)
+
+  it(":NvimDiffConflict opens the current file when it is conflicted", function()
+    local r = fixture()
+    vim.cmd.cd(r.root)
+    vim.cmd("edit f.txt")
+    local tabs = #api.nvim_list_tabpages()
+    vim.cmd("NvimDiffConflict")
+    expect.eq(tabs + 1, #api.nvim_list_tabpages())
+    expect.eq(1, #opened)
+    expect.eq("f.txt", opened[1].git_path)
+    expect.eq({}, { unpack(notified) })
+  end)
+
+  it(":NvimDiffConflict path opens that file", function()
+    local r = fixture()
+    vim.cmd.cd(r.root)
+    local tabs = #api.nvim_list_tabpages()
+    vim.cmd("NvimDiffConflict f.txt")
+    expect.eq(tabs + 1, #api.nvim_list_tabpages())
+    expect.eq(1, #opened)
+    expect.eq("f.txt", opened[1].git_path)
+    expect.eq({}, { unpack(notified) })
+  end)
+
+  it(":NvimDiffConflict reports a file that is not conflicted, and opens nothing", function()
+    local r = fixture()
+    vim.cmd.cd(r.root)
+    local tabs = #api.nvim_list_tabpages()
+    vim.cmd("NvimDiffConflict clean.txt")
+    expect.eq(tabs, #api.nvim_list_tabpages())
+    expect.eq(0, #opened)
+    expect.eq(1, #notified)
+    expect.matches("not in a conflicted state", notified[1][1])
+    expect.eq(vim.log.levels.ERROR, notified[1][2])
   end)
 end)
