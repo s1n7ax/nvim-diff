@@ -110,11 +110,12 @@ describe("review verdict", function()
     local bar = vim.wo[win].winbar
     expect.matches("Request changes PR #7", bar)
     expect.matches("summary required", bar)
-    expect.matches("<C%-s> post · <C%-c> cancel", bar)
+    expect.matches("<C%-s> post · q cancel", bar)
     for _, mode in ipairs({ "n", "i" }) do
       expect.eq("<C-S>", maps(v.buf, mode)["nvim-diff: post the review verdict"], mode)
-      expect.eq("<C-C>", maps(v.buf, mode)["nvim-diff: cancel the review verdict"], mode)
     end
+    expect.eq("q", maps(v.buf, "n")["nvim-diff: cancel the review verdict"])
+    expect.eq(nil, maps(v.buf, "i")["nvim-diff: cancel the review verdict"])
     expect.eq(nil, maps(v.buf, "n")["nvim-diff: insert a suggestion of the commented lines"])
     expect.truthy(api.nvim_win_is_valid(left))
   end)
@@ -175,7 +176,8 @@ describe("review verdict", function()
       return false
     end
     local v = verdict.open(fake_review(), "APPROVE")
-    api.nvim_feedkeys(api.nvim_replace_termcodes("<C-c>", true, false, true), "x", false)
+    vim.cmd.stopinsert()
+    api.nvim_feedkeys("q", "x", false)
     expect.falsy(asked)
     expect.falsy(api.nvim_buf_is_valid(v.buf))
   end)

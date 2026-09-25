@@ -83,18 +83,21 @@ describe("review.sidelist", function()
       "Outdated and file-level comments · 3",
       "",
       "a.lua",
-      "▌ ▾ outdated · L7 · 1 comment · unresolved",
-      "▌ alice  2026-09-01",
-      "▌   about O",
+      "╭─▾ outdated · L7 · 1 comment ──────────────  UNRESOLVED  ─╮",
+      "│ alice  2026-09-01                                        │",
+      "│   about O                                                │",
+      "╰──────────────────────────────────────────────────────────╯",
       "",
-      "▌ ▾ file comment · 1 comment · unresolved",
-      "▌ alice  2026-09-01",
-      "▌   about F",
+      "╭─▾ file comment · 1 comment ───────────────  UNRESOLVED  ─╮",
+      "│ alice  2026-09-01                                        │",
+      "│   about F                                                │",
+      "╰──────────────────────────────────────────────────────────╯",
       "",
       "b.lua",
-      "▌ ▾ file comment · 1 comment · unresolved",
-      "▌ alice  2026-09-01",
-      "▌   about B",
+      "╭─▾ file comment · 1 comment ───────────────  UNRESOLVED  ─╮",
+      "│ alice  2026-09-01                                        │",
+      "│   about B                                                │",
+      "╰──────────────────────────────────────────────────────────╯",
     }, text.lines)
     local m = text.marks[1]
     expect.eq({ 0, 0, #text.lines[1], "NvimDiffPanelTitle" }, { m.row, m.col, m.end_col, m.group })
@@ -165,20 +168,28 @@ describe("review.sidelist", function()
     local tv = assert(view.thread_view)
     expect.eq(1, virt_count(view.file.scene.bufs.new), "A shows at once on the diff showing")
     tv:expand("A")
-    expect.eq(3, virt_count(view.file.scene.bufs.new))
+    expect.eq(4, virt_count(view.file.scene.bufs.new))
 
     view:toggle_thread_list()
     local list = assert(view.thread_list)
     local lines = api.nvim_buf_get_lines(list.buf, 0, -1, false)
     expect.eq("Outdated and file-level comments · 2", lines[1])
-    expect.truthy(vim.tbl_contains(lines, "▌ ▾ outdated · L9 · 1 comment · unresolved"))
-    expect.truthy(vim.tbl_contains(lines, "▌ ▾ not in this diff · L50 · 1 comment · unresolved"))
+    local function has(prefix)
+      for _, l in ipairs(lines) do
+        if vim.startswith(l, prefix) then
+          return true
+        end
+      end
+      return false
+    end
+    expect.truthy(has("╭─▾ outdated · L9 · 1 comment ─"))
+    expect.truthy(has("╭─▾ not in this diff · L50 "))
 
     view:select(find("b.lua"))
     expect.eq(1, virt_count(view.file.scene.bufs.old), "B on the old side of b.lua")
     expect.eq("Outdated and file-level comments · 1", api.nvim_buf_get_lines(list.buf, 0, 1, false)[1])
     view:select(find("a.lua"))
-    expect.eq(3, virt_count(view.file.scene.bufs.new), "A is still expanded")
+    expect.eq(4, virt_count(view.file.scene.bufs.new), "A is still expanded")
 
     -- The list key toggles it; the view closes it with itself.
     local keys = {}

@@ -6,6 +6,7 @@
 --- while the reviewer steps through files, and `q` closes it. The text is ordinary buffer
 --- text (read-only), so it scrolls, searches and yanks like any buffer.
 
+local help = require("nvim-diff.ui.help")
 local thread_mod = require("nvim-diff.review.thread")
 
 local api = vim.api
@@ -149,6 +150,7 @@ function M.open(spec)
   vim.keymap.set("n", "q", function()
     self:close()
   end, { buffer = buf, nowait = true, desc = "nvim-diff: close the comment list" })
+  help.attach(buf)
   self:set(spec.items)
   return self
 end

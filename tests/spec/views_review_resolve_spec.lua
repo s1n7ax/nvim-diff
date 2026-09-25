@@ -243,7 +243,7 @@ local function drawn(review)
   local buf = review.view.file.scene.bufs.new
   for _, m in ipairs(api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })) do
     for _, vl in ipairs(m[4].virt_lines or {}) do
-      if thread_mod.text(vl):find(thread_mod.BAR, 1, true) then
+      if thread_mod.text(vl):find(thread_mod.COLLAPSED, 1, true) then
         out[#out + 1] = vl
       end
     end
@@ -329,9 +329,12 @@ describe("views review resolve", function()
     for _, vl in ipairs(drawn(review)) do
       local text = thread_mod.text(vl)
       if text:find("why?", 1, true) then
-        found = text:find("^▌ ▸ ✓ alice") ~= nil
+        found = text:find("^╶▸ ✓ alice") ~= nil
+        -- Dimmed, but for the green badge where the pane has room for it.
         for _, chunk in ipairs(vl) do
-          expect.eq("NvimDiffThreadResolved", chunk[1]:match("^%s*$") and "NvimDiffThreadResolved" or chunk[2])
+          if not chunk[1]:match("^%s*$") and chunk[2] ~= "NvimDiffThreadBadgeResolved" then
+            expect.eq("NvimDiffThreadResolved", chunk[2])
+          end
         end
       end
     end

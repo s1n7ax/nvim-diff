@@ -80,7 +80,8 @@ Every view opens in its own tabpage. History and conflict views close with `:tab
 ## Keys
 
 All buffer-local, all configurable under `keymaps` / `layout_keymaps`; set one to `false`
-to drop it.
+to drop it. Don't want to remember them? `?` in any nvim-diff buffer opens a menu of the
+keys that work there — `<CR>` on one runs it.
 
 **File panel**
 
@@ -156,12 +157,12 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | `<leader>cR` | reply, then resolve |
 | `<leader>cu` | unresolve |
 
-**Comment and verdict split** (normal and insert mode)
+**Comment and verdict split**
 
 | Key | Action |
 | --- | --- |
-| `<C-s>` | post (`:w` posts a comment too, but never a verdict) |
-| `<C-c>` | cancel; asks first if text would be lost |
+| `<C-s>` | post (`:w` posts a comment too, but never a verdict); the header spins until GitHub answers |
+| `q` | normal mode only: cancel; asks first if text would be lost |
 | `<C-g>s` | insert a ```` ```suggestion ```` block with the commented lines (new side only) |
 
 A failed post leaves the split open with your text and the error. Closing it with `:q`
@@ -225,6 +226,7 @@ require("nvim-diff").setup({
   },
 
   keymaps = {
+    help = "?",
     panel = { select = "<CR>", toggle_listing = "i", refresh = "R" },
     view = { next_file = "<Tab>", prev_file = "<S-Tab>", toggle_range = "gm", line_history = "gL" },
     history = { mark = "m", compare = "M" },
@@ -252,12 +254,12 @@ require("nvim-diff").setup({
       add = "<leader>cc",
       reply = "<leader>cr",
       submit = "<C-s>",
-      cancel = "<C-c>",
+      cancel = "q",
       edit = "<leader>ce",
       delete = "<leader>cd",
       suggest = "<C-g>s",
     },
-    verdict = { post = "<C-s>", cancel = "<C-c>" },
+    verdict = { post = "<C-s>", cancel = "q" },
   },
 
   log = { level = "warn" }, -- "trace" | "debug" | "info" | "warn" | "error" | "off"
@@ -283,8 +285,9 @@ highlights = {
 | Where | Groups |
 | --- | --- |
 | Diff panes | `NvimDiffDelLine` `NvimDiffAddLine` `NvimDiffDelToken` `NvimDiffAddToken` `NvimDiffContextSeparator` `NvimDiffReformatSeparator` `NvimDiffFiller` `NvimDiffHeader` |
-| Comment threads | `NvimDiffThreadBar` `NvimDiffThreadAuthor` `NvimDiffThreadBody` `NvimDiffThreadMeta` `NvimDiffThreadResolved` |
-| Comment split | `NvimDiffCommentHeader` `NvimDiffCommentHint` `NvimDiffCommentError` |
+| Comment threads | `NvimDiffThreadBorder` `NvimDiffThreadBadgeUnresolved` `NvimDiffThreadBadgeResolved` `NvimDiffThreadAuthor` `NvimDiffThreadBody` `NvimDiffThreadMeta` `NvimDiffThreadResolved` |
+| Comment split | `NvimDiffCommentHeader` `NvimDiffCommentHint` `NvimDiffCommentError` `NvimDiffCommentPosting` |
+| Key menu | `NvimDiffHelpKey` `NvimDiffHelpBorder` `NvimDiffHelpTitle` |
 | File panel | `NvimDiffPanelTitle` `NvimDiffPanelDir` `NvimDiffPanelPath` `NvimDiffPanelOldPath` `NvimDiffPanelInsertions` `NvimDiffPanelDeletions` `NvimDiffPanelSelected` `NvimDiffPanelViewed` `NvimDiffPanelRechanged` `NvimDiffPanelDeferred` `NvimDiffPanelStatusAdded` `NvimDiffPanelStatusModified` `NvimDiffPanelStatusDeleted` `NvimDiffPanelStatusConflicted` |
 | Conflict result | `NvimDiffConflictMarker` `NvimDiffConflictOurs` `NvimDiffConflictBase` `NvimDiffConflictTheirs` |
 | History panel | `NvimDiffHistoryHash` `NvimDiffHistoryDate` `NvimDiffHistoryAuthor` `NvimDiffHistoryRename` `NvimDiffHistoryError` `NvimDiffHistoryMarked` `NvimDiffHistoryLineRange` |

@@ -27,6 +27,8 @@
 --- Knows nothing about GitHub: the caller's `on_submit` does the posting.
 
 local config = require("nvim-diff.config")
+local help = require("nvim-diff.ui.help")
+local job = require("nvim-diff.core.job")
 local log = require("nvim-diff.core.log")
 
 local api = vim.api
@@ -35,6 +37,11 @@ local M = {}
 
 --- Namespace of the error drawn under the text.
 M.ns = api.nvim_create_namespace("nvim-diff.compose")
+
+--- Frames of the spinner the header shows while a post is on its way.
+M.SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+--- Milliseconds between spinner frames.
+M.SPIN_MS = 80
 
 --- Asks whether to throw away a draft. Replaceable, so specs can answer without a prompt.
 ---@param prompt string
@@ -84,6 +91,7 @@ end
 ---@field done boolean `on_done` has been called.
 ---@field closed? boolean The split is gone.
 ---@field orphaned boolean Its review ended; the text is kept, posting is off.
+---@field posting? integer The spinner frame, while a post is on its way.
 ---@field private opts NvimDiff.ComposeOpts
 ---@field private initial string The text it opened with.
 ---@field private group integer
@@ -245,6 +253,14 @@ function Compose:draw_header()
   end
   local keys = self:keys()
   local hints = {}
+  if self.posting then
+    vim.wo[self.win].winbar = ("%%#NvimDiffCommentHeader# %s %%#NvimDiffCommentPosting#  %s posting the %s…"):format(
+      statusline_escape(self.header),
+      M.SPINNER[(self.posting - 1) % #M.SPINNER + 1],
+      statusline_escape(self:noun())
+    )
+    return
+  end
   if self.orphaned then
     hints[#hints + 1] = "review ended — not posted"
   else
@@ -272,21 +288,23 @@ end
 
 function Compose:map_keys()
   local keys = self:keys()
-  local function map(lhs, fn, desc)
+  local function map(modes, lhs, fn, desc)
     if type(lhs) == "string" then
-      vim.keymap.set({ "n", "i" }, lhs, fn, { buffer = self.buf, nowait = true, desc = "nvim-diff: " .. desc })
+      vim.keymap.set(modes, lhs, fn, { buffer = self.buf, nowait = true, desc = "nvim-diff: " .. desc })
     end
   end
-  map(keys.submit, function()
+  map({ "n", "i" }, keys.submit, function()
     vim.cmd.stopinsert()
     self:submit()
   end, "post the " .. self:noun())
-  map(keys.cancel, function()
-    vim.cmd.stopinsert()
+  -- Normal mode only: insert mode's keys (`<C-c>`, `<Esc>`) are how many leave it, and
+  -- leaving insert mode must never throw the text away.
+  map("n", keys.cancel, function()
     self:cancel()
   end, "cancel the " .. self:noun())
+  help.attach(self.buf)
   if self.opts.suggestion then
-    map(config.get().keymaps.comment.suggest, function()
+    map({ "n", "i" }, config.get().keymaps.comment.suggest, function()
       self:insert_suggestion()
     end, "insert a suggestion of the commented lines")
   end
@@ -407,8 +425,11 @@ function Compose:submit()
     self:set_error(("the %s is empty"):format(self:noun()))
     return false
   end
+  if self.posting then
+    return false
+  end
   self:set_error(nil)
-  local ok, message = self.opts.on_submit(text)
+  local ok, message = self:run_submit(text)
   if not ok then
     message = message or "unknown error"
     self:set_error(message)
@@ -420,6 +441,49 @@ function Compose:submit()
   end
   self:close("posted")
   return true
+end
+
+--- Run `on_submit` as a task, so the GitHub calls it makes yield rather than freeze the
+--- editor, and spin the header until it is done. Blocks until then: the post's answer
+--- decides whether the split stays.
+---@param text string
+---@return boolean ok
+---@return string? message
+function Compose:run_submit(text)
+  local finished, ok, message = false, false, nil
+  job.task(function()
+    return self.opts.on_submit(text)
+  end, function(err, posted, why)
+    finished = true
+    if err then
+      ok, message = false, type(err) == "table" and err.message or tostring(err)
+    else
+      ok, message = posted, why
+    end
+  end)
+  if finished then
+    return ok, message
+  end
+  self.posting = 1
+  self:draw_header()
+  vim.cmd.redraw()
+  local last = vim.uv.now()
+  -- `vim.wait` runs the event loop, so the task's processes finish under it; the condition
+  -- runs on the main loop, where the header may be redrawn.
+  while not finished do
+    vim.wait(M.SPIN_MS, function()
+      if vim.uv.now() - last >= M.SPIN_MS then
+        last = vim.uv.now()
+        self.posting = self.posting + 1
+        self:draw_header()
+        vim.cmd.redraw()
+      end
+      return finished
+    end, 20)
+  end
+  self.posting = nil
+  self:draw_header()
+  return ok, message
 end
 
 --- Cancel: close the split, asking first when there is anything to lose.

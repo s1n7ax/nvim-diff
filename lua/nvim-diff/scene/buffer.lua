@@ -34,6 +34,11 @@ local M = {}
 --- `release`, for reuse. Only honoured for a named buffer.
 ---@field keep? boolean
 
+--- Buffer variable (`b:nvim_diff_pane`) set on every pane buffer, before any window shows
+--- it, so other plugins can leave the pane alone — e.g. nvim-ufo's `provider_selector`
+--- returning `''` for it, or ufo's folds would replace the context folds.
+M.VAR = "nvim_diff_pane"
+
 --- Options every pane buffer carries. `modifiable` is set last, after the content.
 local BUF_OPTIONS = {
   buftype = "nofile",
@@ -172,6 +177,7 @@ function M.create(opts)
   for option, value in pairs(BUF_OPTIONS) do
     api.nvim_set_option_value(option, value, { buf = buf })
   end
+  vim.b[buf][M.VAR] = true
   if name then
     api.nvim_buf_set_name(buf, name)
     if opts.keep then

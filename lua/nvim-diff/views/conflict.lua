@@ -27,6 +27,7 @@ local config = require("nvim-diff.config")
 local conflict = require("nvim-diff.git.conflict")
 local event = require("nvim-diff.core.event")
 local files_mod = require("nvim-diff.git.files")
+local help = require("nvim-diff.ui.help")
 local hl = require("nvim-diff.ui.hl")
 local log = require("nvim-diff.core.log")
 local merge_mod = require("nvim-diff.diff.merge")
@@ -418,6 +419,7 @@ function View:map_keys(buf)
   map(view_keys.prev_file, function()
     self:prev_file()
   end, "previous conflicted file")
+  help.attach(buf)
 end
 
 ---@return string[]

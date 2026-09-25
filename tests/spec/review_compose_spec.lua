@@ -84,6 +84,34 @@ describe("review compose", function()
     expect.eq({ "leaf", c.win }, layout[2][#layout[2]])
   end)
 
+  it("spins in the header while the post is on its way, and runs the post as a task", function()
+    local during, c
+    c = start({
+      on_submit = function()
+        require("nvim-diff.core.job").await({ "sleep", "0.2" })
+        during = { posting = c.posting, winbar = vim.wo[c.win].winbar }
+        return true
+      end,
+    })
+    type_text(c, { "slow" })
+    expect.eq(true, c:submit())
+    expect.truthy(during.posting, "the spinner was running")
+    expect.matches("posting the comment…", during.winbar)
+    expect.eq(nil, c.posting)
+  end)
+
+  it("keeps the split with the error when the post raises", function()
+    local c = start({
+      on_submit = function()
+        error("boom", 0)
+      end,
+    })
+    type_text(c, { "x" })
+    expect.eq(false, c:submit())
+    expect.matches("boom", errors_shown(c.buf)[1])
+    expect.eq(nil, c.posting)
+  end)
+
   it("posts the text on submit, closes and returns focus", function()
     local c, seen = start()
     type_text(c, { "first line", "", "second", "", "" })
@@ -154,16 +182,18 @@ describe("review compose", function()
     expect.falsy(api.nvim_buf_is_valid(c.buf))
   end)
 
-  it("maps submit and cancel in normal and insert mode", function()
+  it("maps submit in normal and insert mode, cancel in normal mode only", function()
     local c = start()
+    local descs = {}
     for _, mode in ipairs({ "n", "i" }) do
-      local descs = {}
+      descs[mode] = {}
       for _, m in ipairs(api.nvim_buf_get_keymap(c.buf, mode)) do
-        descs[m.desc or ""] = m.lhs
+        descs[mode][m.desc or ""] = m.lhs
       end
-      expect.eq("<C-S>", descs["nvim-diff: post the comment"], mode)
-      expect.eq("<C-C>", descs["nvim-diff: cancel the comment"], mode)
+      expect.eq("<C-S>", descs[mode]["nvim-diff: post the comment"], mode)
     end
+    expect.eq("q", descs.n["nvim-diff: cancel the comment"])
+    expect.eq(nil, descs.i["nvim-diff: cancel the comment"], "typing never cancels")
   end)
 
   it("keeps a draft whose window was closed some other way, and shows it again", function()
