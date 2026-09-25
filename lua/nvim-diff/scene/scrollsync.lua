@@ -257,7 +257,7 @@ function M.attach(panes)
   for _, p in ipairs(panes) do
     local buf = api.nvim_win_get_buf(p.win)
     for _, lhs in ipairs(M.SCROLL_KEYS) do
-      vim.keymap.set({ "n", "x" }, lhs, lhs, { buffer = buf, desc = "nvim-diff: native scroll, kept in sync" })
+      vim.keymap.set({ "n", "x" }, lhs, lhs, { buffer = buf, desc = "nvim-diff (scroll sync)" })
     end
     api.nvim_create_autocmd("CursorMoved", {
       group = self.augroup,

@@ -296,17 +296,17 @@ function Compose:map_keys()
   map({ "n", "i" }, keys.submit, function()
     vim.cmd.stopinsert()
     self:submit()
-  end, "post the " .. self:noun())
+  end, "Compose: Post " .. self:noun())
   -- Normal mode only: insert mode's keys (`<C-c>`, `<Esc>`) are how many leave it, and
   -- leaving insert mode must never throw the text away.
   map("n", keys.cancel, function()
     self:cancel()
-  end, "cancel the " .. self:noun())
+  end, "Compose: Cancel " .. self:noun())
   help.attach(self.buf)
   if self.opts.suggestion then
     map({ "n", "i" }, config.get().keymaps.comment.suggest, function()
       self:insert_suggestion()
-    end, "insert a suggestion of the commented lines")
+    end, "Compose: Insert suggestion")
   end
 end
 

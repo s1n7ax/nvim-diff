@@ -279,15 +279,15 @@ function Review:map_comment_keys(buf)
   end
   map("n", keys.add, function()
     self:comment()
-  end, "comment on this line on GitHub")
+  end, "Comments: Comment on line")
   map("x", keys.add, function()
     local first, last = vim.fn.line("v"), vim.fn.line(".")
     api.nvim_feedkeys(api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
     self:comment({ first = first, last = last })
-  end, "comment on the selected lines on GitHub")
+  end, "Comments: Comment on selection")
   map("n", keys.reply, function()
     self:reply()
-  end, "reply to the comment thread on this line")
+  end, "Comments: Reply")
   self:map_own_comment_keys(buf)
 end
 
@@ -303,10 +303,10 @@ function Review:map_own_comment_keys(buf)
   end
   map(keys.edit, function()
     self:edit()
-  end, "edit your comment in this thread")
+  end, "Comments: Edit my comment")
   map(keys.delete, function()
     self:delete()
-  end, "delete your comment in this thread")
+  end, "Comments: Delete my comment")
 end
 
 --- Map the file-level comment key in the file panel `buf`.
@@ -316,7 +316,7 @@ function Review:map_panel_comment_keys(buf)
   if type(lhs) == "string" then
     vim.keymap.set("n", lhs, function()
       self:file_comment()
-    end, { buffer = buf, nowait = true, desc = "nvim-diff: comment on the file under the cursor on GitHub" })
+    end, { buffer = buf, nowait = true, desc = "nvim-diff: Comments: Comment on file" })
   end
 end
 
@@ -331,10 +331,10 @@ function Review:map_keys(buf)
   end
   map(keys.mark_viewed, function()
     self:mark_viewed()
-  end, "mark the file viewed on GitHub and jump to the next unviewed file")
+  end, "Review: Mark viewed, go to next")
   map(keys.unmark_viewed, function()
     self:unmark_viewed()
-  end, "clear the file's viewed mark on GitHub")
+  end, "Review: Unmark viewed")
 end
 
 --- The file a viewed key acts on: the file row under the cursor in the panel, else the file
@@ -802,13 +802,13 @@ function Review:map_resolve_keys(buf)
   end
   map(keys.resolve, function()
     self:resolve()
-  end, "resolve the comment thread on this line")
+  end, "Threads: Resolve")
   map(keys.reply_resolve, function()
     self:reply_and_resolve()
-  end, "reply to the comment thread on this line, then resolve it")
+  end, "Threads: Reply and resolve")
   map(keys.unresolve, function()
     self:unresolve()
-  end, "unresolve the comment thread on this line")
+  end, "Threads: Unresolve")
 end
 
 --- Hand a thread on the cursor's line that `keep` accepts to `start`: the one on the
