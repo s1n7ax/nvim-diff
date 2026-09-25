@@ -1,68 +1,688 @@
 *nvim-diff.txt*   Diff, file history, merge conflicts and GitHub PR review
 
 ==============================================================================
-CONTENTS                                                    *nvim-diff-contents*
+CONTENTS                                                  *nvim-diff-contents*
 
   1. Introduction ......................... |nvim-diff-introduction|
   2. Requirements ......................... |nvim-diff-requirements|
   3. Setup ................................ |nvim-diff-setup|
-  4. Configuration ........................ |nvim-diff-config|
-  5. Highlight groups ..................... |nvim-diff-highlights|
-  6. Health ............................... |nvim-diff-health|
+  4. Commands ............................. |nvim-diff-commands|
+  5. Views ................................ |nvim-diff-views|
+  6. Keys ................................. |nvim-diff-keys|
+  7. Configuration ........................ |nvim-diff-config|
+  8. Highlight groups ..................... |nvim-diff-highlights|
+  9. Health ............................... |nvim-diff-health|
+ 10. Limitations .......................... |nvim-diff-limitations|
 
 ==============================================================================
-1. INTRODUCTION                                         *nvim-diff-introduction*
+1. INTRODUCTION                           *nvim-diff* *nvim-diff-introduction*
 
-nvim-diff renders diffs itself rather than delegating to Neovim's diff mode: it
-computes hunks and paints both panes with extmarks, so 'diff' stays off in every
-window it owns.
+nvim-diff is a replacement for diffview.nvim plus a GitHub pull request review
+mode. It covers:
 
-This plugin is a skeleton at the moment. Only |nvim-diff-setup|,
-|nvim-diff-config| and |nvim-diff-health| exist; the diff engine, the renderer
-and the review layer are being built on top of them.
+  - working-tree, index and branch-to-branch diffs      |:NvimDiffOpen|
+  - file, folder, repository and line history          |:NvimDiffHistory|
+  - three-way merge conflict resolution                |:NvimDiffConflict|
+  - reviewing a GitHub PR: viewed marks, comment
+    threads, comments, replies, resolve, verdict       |:NvimDiffPR|
+
+The plugin renders diffs itself instead of using Neovim's diff mode: it
+computes the hunks and paints both panes with extmarks, so 'diff' stays off in
+every window it owns and the built-in |hl-DiffAdd| family is never used.
+
+What a diff looks like:
+
+  - Structural diff is the default. With a treesitter parser for the file's
+    language, only the syntax nodes that changed are highlighted, and a hunk
+    that only reformats code collapses into one separator row reading
+    "reformatted into N lines — no semantic change". Without a parser, the
+    view falls back to a line diff. `gs` flips between the two.
+  - A changed line is red in the old pane and green in the new one, with the
+    changed tokens brighter. A wholly added line is plain green.
+  - Unchanged stretches fold into a separator band (pale text on dark blue,
+    `·` to the window edge) naming the enclosing scope. `zo` opens 10 more
+    lines, `zO` all of them. See |nvim-diff-keys-folds|.
+  - Side-by-side is the default layout; `g<C-x>` flips the current file to
+    unified. A file that exists on one side only opens unified.
+  - Both panes carry their own revision's line numbers and scroll together.
+
+The plugin keeps no state on disk. A PR review re-reads everything from
+GitHub each time it opens.
 
 ==============================================================================
-2. REQUIREMENTS                                         *nvim-diff-requirements*
+2. REQUIREMENTS                                       *nvim-diff-requirements*
 
-  - Neovim 0.12+
-  - git 2.25+
-  - gh, authenticated, for PR review only
-  - treesitter parsers for structural diff
+  - Neovim 0.12 or newer (`vim.text.diff`, `vim.system`, 'winfixbuf').
+  - git 2.25 or newer. Git 2.31 or newer for merge commits in file history
+    (`--diff-merges=first-parent`); older git lists no files for them.
+  - `gh`, the GitHub CLI, logged in to the PR's host (github.com or a GitHub
+    Enterprise Server host). Only PR review needs it.
+  - Treesitter parsers for the languages you want structural diffs in.
+    Optional: without one, a file gets a line diff.
+
+|:checkhealth| `nvim-diff` checks all of it. See |nvim-diff-health|.
 
 ==============================================================================
-3. SETUP                                                       *nvim-diff-setup*
+3. SETUP                                                     *nvim-diff-setup*
 
-                                                            *nvim-diff.setup()*
+                                                           *nvim-diff.setup()*
 >lua
     require("nvim-diff").setup({})
 <
-Optional: every module reads the defaults when `setup()` has not been called.
-An unknown or wrongly-typed option is reported by `setup()` itself, naming the
-full path of the offending key.
+`setup()` is optional: every module reads the defaults when it has not been
+called. An unknown option or a value of the wrong type makes `setup()` raise,
+naming the full path of each offending key, and the previous configuration
+stays active. Each call starts from the defaults again; calls do not
+accumulate.
+
+`setup()` also defines the highlight groups and, in the background, removes
+PR worktrees left behind in the cwd's repository by a Neovim that crashed.
+
+                                                            *nvim-diff.open()*
+>lua
+    require("nvim-diff").open({ range = "main...feature", paths = { "lua" } })
+<
+The Lua form of |:NvimDiffOpen|. Fields: `range` (a string such as
+`"main...feature"`, or a list of two revisions), `cached` (boolean),
+`imply_local` (boolean), `paths` (list of paths relative to the cwd). Returns
+the view, or `nil` and a message.
 
 ==============================================================================
-4. CONFIGURATION                                              *nvim-diff-config*
+4. COMMANDS                                               *nvim-diff-commands*
 
-See the README, or `:lua vim.print(require("nvim-diff.config").get_defaults())`
-for the defaults as they actually ship.
+                                                               *:NvimDiffOpen*
+:NvimDiffOpen [{rev} | {a}...{b} | {a}..{b} | {a} {b}]
+             [--cached] [--imply-local] [-- {paths}]
+    Open a diff view in a new tabpage: a file panel on the left, the selected
+    file's diff beside it.
+
+      :NvimDiffOpen                   `HEAD` against the worktree, untracked
+                                      files included
+      :NvimDiffOpen --cached          `HEAD` against the index (`--staged`
+                                      is the same)
+      :NvimDiffOpen main              main against the worktree
+      :NvimDiffOpen main...feature    from the merge-base to feature: what
+                                      a PR from feature into main shows
+      :NvimDiffOpen main..feature     main against feature, tip to tip
+      :NvimDiffOpen main feature      as main...feature; as main..feature
+                                      with |nvim-diff-config.revs.merge_base|
+                                      off
+      :NvimDiffOpen main -- lua/ a.txt  only these paths
+
+    `--imply-local` shows the files on disk when the right side is `HEAD`'s
+    commit. The repository is the one around the cwd, else the one around the
+    current file. A view against the worktree or the index re-lists its files
+    when its tabpage is entered or Neovim regains focus.
+
+                                                              *:NvimDiffClose*
+:NvimDiffClose
+    Close the diff view in the current tabpage. In a PR review this ends the
+    review. History and conflict views close with |:tabclose|.
+
+                                                            *:NvimDiffHistory*
+:NvimDiffHistory [{path}]
+    The commits that touched {path} (a file or a directory; `%` is the current
+    file), or the whole repository without one. See |nvim-diff-history|.
+
+                                                        *:NvimDiffLineHistory*
+:NvimDiffLineHistory
+    The history of the line under the cursor in the current file, as of
+    `HEAD` (`git log -L`). From inside a diff, use
+    |nvim-diff-config.keymaps.view.line_history| instead, which asks about the
+    revision the pane shows.
+
+                                                           *:NvimDiffConflict*
+:NvimDiffConflict [{path}]
+    Resolve the merge conflicts in {path}, or in the current file, in a
+    three-way layout. See |nvim-diff-conflict|.
+
+                                                                 *:NvimDiffPR*
+:NvimDiffPR {number}
+    Review GitHub pull request {number} (`42` or `#42`). See
+    |nvim-diff-review|.
+
+                                                            *:NvimDiffVerdict*
+:NvimDiffVerdict [approve | request-changes | comment]
+    Submit the review verdict of the PR review in this tabpage, with a summary
+    written in a split. Without an argument, asks which. Request changes and
+    Comment need a summary; GitHub refuses them empty. Approve does not. The
+    review is posted with no inline comments, since those were posted as they
+    were written. Never submitted automatically.
 
 ==============================================================================
-5. HIGHLIGHT GROUPS                                       *nvim-diff-highlights*
+5. VIEWS                                                     *nvim-diff-views*
 
-The plugin never uses `DiffAdd`, `DiffChange`, `DiffText` or `DiffDelete`. It
-defines its own groups with `default`, so a colorscheme that already defines one
-keeps it, and `highlights` in the config overrides any of them.
+DIFF VIEW                                                 *nvim-diff-diffview*
 
-  `:lua vim.print(vim.tbl_keys(require("nvim-diff.ui.hl").groups))`
+A tabpage with the file panel on the left and the diff of the selected file
+beside it. The panel shows each file's status letter, its name, `+`/`-` line
+counts, `← oldpath` for a rename and `bin` for a binary file.
+
+A file over |nvim-diff-config.thresholds.defer_lines| lines is listed with
+`[deferred: N lines]` and shows a note instead of its diff; selecting it again
+loads it. Above |nvim-diff-config.thresholds.panel_entries| files, every
+directory in the panel starts folded.
+
+Selecting a conflicted (`U`) file opens the conflict view in its own tabpage.
+
+The layout (side-by-side or unified) and the mode (structural or line) are
+remembered per file for as long as the view is open.
+
+FILE HISTORY                                               *nvim-diff-history*
+
+A tabpage with the commit panel along the bottom and, above it, the diff of a
+file in the selected commit against the commit's first parent. The history is
+read in the background; the first commit's file opens as soon as it arrives.
+
+  - A single file: one row per commit. Renames are followed
+    (|nvim-diff-config.history.follow|); a marker row sits under the commit
+    where the file's name changed.
+  - A directory or the repository: one foldable row per commit, its files
+    under it.
+
+Range compare: mark two commits with `m`, then `M` opens a diff view between
+them, older on the left, in a new tabpage.
+
+Line history (|:NvimDiffLineHistory|, or `gL` in a diff pane) uses the same
+panel, listing the commits that touched the line; selecting one jumps the
+diff to the line.
+
+MERGE CONFLICTS                                           *nvim-diff-conflict*
+
+A tabpage with three read-only panes across the top, ours | base | theirs,
+and the real file below them as the editable result, with LSP, |:w| and undo.
+The top panes are aligned with each other and colored relative to base. Moving
+into a conflict in the result scrolls the top panes to it.
+
+Each take key replaces the conflict under the result's cursor, as one undoable
+change. Nothing is written or staged for you: |:w| the result and `git add` it
+yourself. Taking base needs a base section in the conflict markers, which git
+writes with `merge.conflictStyle=diff3` (or `zdiff3`).
+
+PR REVIEW                                                   *nvim-diff-review*
+
+|:NvimDiffPR| fetches the PR from GitHub through `gh`, checks its head out,
+detached, into a separate git worktree at `<git dir>/nvim-diff/pr-<n>`, and
+opens a diff view of it in a new tabpage whose |:tcd| is that worktree. LSP,
+tests and debugging see the PR's code; your branch and uncommitted changes
+are never touched. The diff is computed locally from the merge-base.
+
+Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
+buffers on the worktree's files and removes the worktree.
+
+Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
+one GitHub un-marked because new commits changed it, and an `n/m viewed`
+count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
+file that is not; `<leader><BS>` clears the mark.
+
+Comment threads show as a one-line summary under the commented line (author,
+first line, replies, resolved state). `<CR>` expands a thread in place, under
+the line, with every reply. Resolved threads are dimmed with a `✓`
+(|nvim-diff-config.threads.resolved|). Outdated threads, threads outside the
+shown diff and file-level comments go to a side list (`gC`).
+
+Writing: `<leader>cc` comments on the cursor's line, in either pane, or on a
+visual selection of lines inside one hunk. In the file panel it writes a
+file-level comment. `<leader>cr` replies to the thread on the line. Both open
+a split under the diff (|nvim-diff-compose|). Comments post at once, one at a
+time, as standalone comments, never batched into a pending review.
+
+`<leader>ce` and `<leader>cd` edit and delete your own comments, in a diff
+pane or the side list; delete asks first. `<leader>cx` resolves the thread on
+the line, `<leader>cR` replies and then resolves it, `<leader>cu` unresolves
+it. A thread resolved during the review stays on screen, dimmed, until `gR`
+next flips resolved threads between dimmed and hidden.
+
+Nothing is refetched while a review is open: another reviewer's new comment
+shows once the PR is reopened.
+
+THE COMMENT SPLIT                                          *nvim-diff-compose*
+
+A real buffer under the diff, with a header naming the file and line or the
+thread being answered. Write markdown in it, then `<C-s>` or |:w| to post;
+`<C-c>` cancels, asking first when text would be lost. A failed post leaves
+the split open with your text and the error. Nothing is written to disk.
+
+`<C-g>s` (normal and insert mode) inserts a GitHub suggestion block, a
+"```suggestion" fence holding the commented lines as the PR has them. It works
+for a comment or reply on the new side only, not on the old side, a
+file-level comment or an outdated thread.
+
+Closing the split with |:q| keeps the draft; `<leader>cc` brings it back.
+There is one draft per review.
+
+The verdict split of |:NvimDiffVerdict| is the same split: `<C-s>` posts,
+`<C-c>` cancels, and |:w| does not post.
+
+`<C-s>` can freeze a terminal with flow control on; `stty -ixon` frees it, or
+use |:w|.
 
 ==============================================================================
-6. HEALTH                                                     *nvim-diff-health*
+6. KEYS                                                       *nvim-diff-keys*
 
-                                                      *:checkhealth-nvim-diff*
+Every key is buffer-local and can be changed or disabled (set to `false`)
+under `keymaps` or `layout_keymaps`, see |nvim-diff-config|. The defaults:
+
+FILE PANEL (diff view and PR review)                    *nvim-diff-keys-panel*
+
+  `<CR>`             open the file, or fold the directory; on a deferred
+                   file showing its note, load it
+  `i`                switch between tree and flat listing
+  `R`                refresh the file list
+  `<Tab>` `<S-Tab>`    next / previous file
+  `gm`               flip a branch diff between merge-base (`a...b`) and tip
+                   to tip (`a..b`)
+
+HISTORY PANEL                                         *nvim-diff-keys-history*
+
+  `<CR>`             open the commit or file; on a directory or repository
+                   commit, fold / unfold its files
+  `R`                read the history again
+  `m`                mark the commit for range compare (at most two)
+  `M`                diff the two marked commits
+  `<Tab>` `<S-Tab>`    next / previous file, across commits
+
+DIFF PANES                                               *nvim-diff-keys-diff*
+
+  `g<C-x>`           flip the file between side-by-side and unified
+  `gs`               flip the file between structural and line diff
+  `<Tab>` `<S-Tab>`    next / previous file
+  `gm`               flip merge-base / tip to tip, as in the panel
+  `gL`               history of the line under the cursor, at the pane's
+                   revision
+
+FOLDS (diff panes)                                      *nvim-diff-keys-folds*
+
+The separator bands are real folds, mirrored across both panes.
+
+  `zo`               open 10 more lines (a count multiplies)
+  `zO` `zv`            open the whole fold
+  `zc` `zC`            close it again
+  `za` `zA`            toggle
+  `zR` `zM`            open / close every fold
+  `zx` `zX`            reapply the folds
+
+`zE` `zd` `zD` `zf` `zF` `zn` `zN` `zi` do nothing in the panes.
+
+PR REVIEW                                              *nvim-diff-keys-review*
+
+In the file panel and the diff panes:
+
+  `<leader><space>`  mark the file viewed on GitHub, jump to the next one not
+                   viewed
+  `<leader><BS>`     clear the file's viewed mark
+
+In the file panel:
+
+  `<leader>cc`       write a file-level comment on the file under the cursor
+
+In the diff panes:
+
+  `<CR>`             expand / collapse the thread on the line (elsewhere
+                   `<CR>` does what it always does)
+  `]t` `[t`            next / previous thread
+  `gR`               resolved threads: dimmed or hidden
+  `gC`               open / close the side list
+  `<leader>cc`       comment on the line, or the visual selection
+  `<leader>cr`       reply to the thread on the line
+  `<leader>ce`       edit your comment in the thread on the line
+  `<leader>cd`       delete your comment in the thread on the line
+  `<leader>cx`       resolve the thread on the line
+  `<leader>cR`       reply, then resolve
+  `<leader>cu`       unresolve
+
+In the side list:
+
+  `<leader>ce`       edit your comment in the thread under the cursor
+  `<leader>cd`       delete your comment in the thread under the cursor
+  `q`                close the list (not configurable)
+
+When a line holds more than one thread, the one on the cursor's pane wins;
+otherwise the key asks which.
+
+COMMENT SPLIT                                         *nvim-diff-keys-compose*
+
+Normal and insert mode:
+
+  `<C-s>`            post (|:w| also posts)
+  `<C-c>`            cancel
+  `<C-g>s`           insert a suggestion block
+
+VERDICT SPLIT                                         *nvim-diff-keys-verdict*
+
+Normal and insert mode:
+
+  `<C-s>`            submit the verdict
+  `<C-c>`            cancel
+
+CONFLICT VIEW (all four windows)                     *nvim-diff-keys-conflict*
+
+  `<leader>co`       take ours
+  `<leader>cb`       take base
+  `<leader>ct`       take theirs
+  `<leader>ca`       take both, ours then theirs
+  `dx`               take none: delete the conflict
+  `]x` `[x`            next / previous conflict
+  `<Tab>` `<S-Tab>`    next / previous conflicted file
+
+==============================================================================
+7. CONFIGURATION                                            *nvim-diff-config*
+
+Pass any subset to |nvim-diff.setup()|. Every default below is the one that
+ships; `:lua vim.print(require("nvim-diff.config").get_defaults())` prints
+them all.
+
+                                                     *nvim-diff-config.layout*
+layout                                 (default: `"side_by_side"`)
+    The layout a file opens in: `"side_by_side"` or `"unified"`.
+
+                                      *nvim-diff-config.layout_keymaps.toggle*
+layout_keymaps.toggle                  (default: `"g<C-x>"`)
+    In diff panes: flip the file between side-by-side and unified.
+
+                           *nvim-diff-config.layout_keymaps.toggle_structural*
+layout_keymaps.toggle_structural       (default: `"gs"`)
+    In diff panes: flip the file between structural and line diff. Says why
+    when structural diff is not available for it.
+
+                                            *nvim-diff-config.diff.structural*
+diff.structural                        (default: `true`)
+    Open files in structural diff. `false` opens them in line diff.
+
+                                             *nvim-diff-config.diff.algorithm*
+diff.algorithm                         (default: `"histogram"`)
+    `"myers"`, `"minimal"`, `"patience"` or `"histogram"`, as in
+    |vim.text.diff()|. A histogram diff that would be slow falls back to
+    myers on its own.
+
+                          *nvim-diff-config.diff.normalize_comment_whitespace*
+diff.normalize_comment_whitespace      (default: `true`)
+    In structural diff, compare comments word by word, so rewrapping a comment
+    counts as formatting only.
+
+                                            *nvim-diff-config.revs.merge_base*
+revs.merge_base                        (default: `true`)
+    `:NvimDiffOpen a b` means `a...b` (from the merge-base). `false`: `a..b`.
+
+                                     *nvim-diff-config.thresholds.defer_lines*
+thresholds.defer_lines                 (default: `50000`)
+    A file with more lines than this on either side is listed but not loaded
+    until selected twice.
+
+                                *nvim-diff-config.thresholds.structural_lines*
+thresholds.structural_lines            (default: `5000`)
+    Above this many lines on a side, structural diff falls back to line diff.
+
+                                   *nvim-diff-config.thresholds.panel_entries*
+thresholds.panel_entries               (default: `2000`)
+    Above this many files, the panel starts with every directory folded.
+
+                                           *nvim-diff-config.buffers.lru_size*
+buffers.lru_size                       (default: `64`)
+    Reserved for a cap on cached diff buffers. Accepted, but has no effect
+    yet.
+
+                                                    *nvim-diff-config.git.bin*
+git.bin                                (default: `"git"`)
+    The git executable.
+
+                                             *nvim-diff-config.git.timeout_ms*
+git.timeout_ms                         (default: `15000`)
+    Milliseconds before a git command is killed. File history is streamed and
+    has no timeout; fetching a PR's commits has a fixed 120 s one.
+
+                                                 *nvim-diff-config.github.bin*
+github.bin                             (default: `"gh"`)
+    The GitHub CLI executable.
+
+                                          *nvim-diff-config.github.timeout_ms*
+github.timeout_ms                      (default: `20000`)
+    Milliseconds before a `gh` call is killed.
+
+                                                *nvim-diff-config.github.host*
+github.host                            (default: unset)
+    The host `gh` talks to for PR review. Unset: `$GH_HOST`, else the host of
+    the `origin` remote. Set it when the remote names an alias `gh` was not
+    logged in to. The owner and repository always come from the remote.
+
+                                                 *nvim-diff-config.highlights*
+highlights                             (default: `{}`)
+    Group name to attributes (as |nvim_set_hl()| takes them), or to the name
+    of a group to link to. Applied over the plugin's own definitions. See
+    |nvim-diff-highlights|.
+>lua
+    highlights = {
+      NvimDiffAddLine = { bg = "#12351f" },
+      NvimDiffThreadResolved = "NonText",
+    }
+<
+                                                  *nvim-diff-config.log.level*
+log.level                              (default: `"warn"`)
+    `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"` or `"off"`. Errors
+    from a command you typed show whatever the level.
+
+                                              *nvim-diff-config.panel.listing*
+panel.listing                          (default: `"tree"`)
+    `"tree"` or `"flat"`. `i` switches it per view.
+
+                                                *nvim-diff-config.panel.width*
+panel.width                            (default: `35`)
+    Columns of the file panel.
+
+                                             *nvim-diff-config.history.follow*
+history.follow                         (default: `true`)
+    A single file's history follows it across renames.
+
+                                             *nvim-diff-config.history.height*
+history.height                         (default: `16`)
+    Rows of the history panel.
+
+                                           *nvim-diff-config.threads.resolved*
+threads.resolved                       (default: `"dim"`)
+    How resolved threads show when a review opens: `"dim"` or `"hide"`. `gR`
+    flips it.
+
+                                             *nvim-diff-config.comment.height*
+comment.height                         (default: `10`)
+    Rows of the comment and verdict split.
+
+KEYMAPS                                             *nvim-diff-config.keymaps*
+
+Each key is a string in |key-notation|, or `false` for no mapping. Where each
+one works is in |nvim-diff-keys|.
+
+                                       *nvim-diff-config.keymaps.panel.select*
+keymaps.panel.select                   (default: `"<CR>"`)
+                               *nvim-diff-config.keymaps.panel.toggle_listing*
+keymaps.panel.toggle_listing           (default: `"i"`)
+                                      *nvim-diff-config.keymaps.panel.refresh*
+keymaps.panel.refresh                  (default: `"R"`)
+    File panel and history panel (`toggle_listing`: file panel only).
+
+                                     *nvim-diff-config.keymaps.view.next_file*
+keymaps.view.next_file                 (default: `"<Tab>"`)
+                                     *nvim-diff-config.keymaps.view.prev_file*
+keymaps.view.prev_file                 (default: `"<S-Tab>"`)
+                                  *nvim-diff-config.keymaps.view.toggle_range*
+keymaps.view.toggle_range              (default: `"gm"`)
+                                  *nvim-diff-config.keymaps.view.line_history*
+keymaps.view.line_history              (default: `"gL"`)
+    Panels and diff panes (`line_history`: diff panes). `next_file` and
+    `prev_file` also step across the conflicted files in a conflict view.
+
+                                       *nvim-diff-config.keymaps.history.mark*
+keymaps.history.mark                   (default: `"m"`)
+                                    *nvim-diff-config.keymaps.history.compare*
+keymaps.history.compare                (default: `"M"`)
+    History panel.
+
+                                 *nvim-diff-config.keymaps.conflict.take_ours*
+keymaps.conflict.take_ours             (default: `"<leader>co"`)
+                                 *nvim-diff-config.keymaps.conflict.take_base*
+keymaps.conflict.take_base             (default: `"<leader>cb"`)
+                               *nvim-diff-config.keymaps.conflict.take_theirs*
+keymaps.conflict.take_theirs           (default: `"<leader>ct"`)
+                                 *nvim-diff-config.keymaps.conflict.take_both*
+keymaps.conflict.take_both             (default: `"<leader>ca"`)
+                                 *nvim-diff-config.keymaps.conflict.take_none*
+keymaps.conflict.take_none             (default: `"dx"`)
+                             *nvim-diff-config.keymaps.conflict.next_conflict*
+keymaps.conflict.next_conflict         (default: `"]x"`)
+                             *nvim-diff-config.keymaps.conflict.prev_conflict*
+keymaps.conflict.prev_conflict         (default: `"[x"`)
+    The four windows of a conflict view.
+
+                                 *nvim-diff-config.keymaps.review.mark_viewed*
+keymaps.review.mark_viewed             (default: `"<leader><space>"`)
+                               *nvim-diff-config.keymaps.review.unmark_viewed*
+keymaps.review.unmark_viewed           (default: `"<leader><BS>"`)
+    File panel and diff panes of a PR review.
+
+                                     *nvim-diff-config.keymaps.threads.toggle*
+keymaps.threads.toggle                 (default: `"<CR>"`)
+                                       *nvim-diff-config.keymaps.threads.next*
+keymaps.threads.next                   (default: `"]t"`)
+                                       *nvim-diff-config.keymaps.threads.prev*
+keymaps.threads.prev                   (default: `"[t"`)
+                            *nvim-diff-config.keymaps.threads.toggle_resolved*
+keymaps.threads.toggle_resolved        (default: `"gR"`)
+                                       *nvim-diff-config.keymaps.threads.list*
+keymaps.threads.list                   (default: `"gC"`)
+                                    *nvim-diff-config.keymaps.threads.resolve*
+keymaps.threads.resolve                (default: `"<leader>cx"`)
+                              *nvim-diff-config.keymaps.threads.reply_resolve*
+keymaps.threads.reply_resolve          (default: `"<leader>cR"`)
+                                  *nvim-diff-config.keymaps.threads.unresolve*
+keymaps.threads.unresolve              (default: `"<leader>cu"`)
+    Diff panes of a PR review.
+
+                                        *nvim-diff-config.keymaps.comment.add*
+keymaps.comment.add                    (default: `"<leader>cc"`)
+                                      *nvim-diff-config.keymaps.comment.reply*
+keymaps.comment.reply                  (default: `"<leader>cr"`)
+                                       *nvim-diff-config.keymaps.comment.edit*
+keymaps.comment.edit                   (default: `"<leader>ce"`)
+                                     *nvim-diff-config.keymaps.comment.delete*
+keymaps.comment.delete                 (default: `"<leader>cd"`)
+    Diff panes of a PR review; `add` also in its file panel (file-level
+    comment), and `edit`/`delete` also in the side list.
+
+                                     *nvim-diff-config.keymaps.comment.submit*
+keymaps.comment.submit                 (default: `"<C-s>"`)
+                                     *nvim-diff-config.keymaps.comment.cancel*
+keymaps.comment.cancel                 (default: `"<C-c>"`)
+                                    *nvim-diff-config.keymaps.comment.suggest*
+keymaps.comment.suggest                (default: `"<C-g>s"`)
+    The comment split, normal and insert mode.
+
+                                       *nvim-diff-config.keymaps.verdict.post*
+keymaps.verdict.post                   (default: `"<C-s>"`)
+                                     *nvim-diff-config.keymaps.verdict.cancel*
+keymaps.verdict.cancel                 (default: `"<C-c>"`)
+    The verdict split, normal and insert mode.
+
+==============================================================================
+8. HIGHLIGHT GROUPS                                     *nvim-diff-highlights*
+
+Every group is defined with `default`, so a colorscheme that defines one keeps
+it; |nvim-diff-config.highlights| overrides any of them. They are redefined on
+|ColorScheme| and when 'background' changes, with separate dark and light
+colors. Diff groups set a background only, so syntax colors show through.
+
+Inside plugin windows, |hl-Folded| is linked to `NvimDiffContextSeparator`.
+
+Diff panes ~
+  *NvimDiffDelLine*            changed line, old pane
+  *NvimDiffAddLine*            changed line, new pane
+  *NvimDiffDelToken*           changed token inside a line, old pane
+  *NvimDiffAddToken*           changed token inside a line, new pane
+                          *NvimDiffContextSeparator*   the folded-context band
+  *NvimDiffReformatSeparator*  the "reformatted" band
+     *NvimDiffFiller*             filler: a line exists on the other side only
+             *NvimDiffHeader*             the header line at the top of a pane
+
+Comment threads and the comment split ~
+  *NvimDiffThreadBar*          the bar before a thread's lines
+                                   *NvimDiffThreadAuthor*       comment author
+                                     *NvimDiffThreadBody*         comment text
+  *NvimDiffThreadMeta*         dates, reply counts
+                                *NvimDiffThreadResolved*     a resolved thread
+  *NvimDiffCommentHeader*      the comment split's header
+                     *NvimDiffCommentHint*        the key hints in that header
+  *NvimDiffCommentError*       a failed post's error
+
+File panel ~
+                                    *NvimDiffPanelTitle*         the title row
+                                      *NvimDiffPanelDir*           a directory
+                                      *NvimDiffPanelPath*          a file name
+  *NvimDiffPanelOldPath*       a renamed file's old path
+  *NvimDiffPanelInsertions*    `+N`
+  *NvimDiffPanelDeletions*     `-N`
+                                 *NvimDiffPanelSelected*      the file showing
+                          *NvimDiffPanelViewed*        a file viewed on GitHub
+         *NvimDiffPanelRechanged*     a file changed again since it was viewed
+                              *NvimDiffPanelDeferred*      the deferred marker
+  *NvimDiffPanelStatusAdded*       status letter: added, copied, untracked
+  *NvimDiffPanelStatusModified*    status letter: modified, renamed, type
+                       *NvimDiffPanelStatusDeleted*     status letter: deleted
+                    *NvimDiffPanelStatusConflicted*  status letter: conflicted
+
+Conflict view result buffer ~
+                                     *NvimDiffConflictMarker*     marker lines
+                                     *NvimDiffConflictOurs*       ours section
+                                     *NvimDiffConflictBase*       base section
+                                   *NvimDiffConflictTheirs*     theirs section
+
+History panel ~
+                            *NvimDiffHistoryHash*        abbreviated commit id
+                                      *NvimDiffHistoryDate*        author date
+                                           *NvimDiffHistoryAuthor*      author
+                         *NvimDiffHistoryRename*      the row marking a rename
+                                    *NvimDiffHistoryError*       a failed walk
+                *NvimDiffHistoryMarked*      a commit marked for range compare
+           *NvimDiffHistoryLineRange*   the tracked line range in line history
+
+==============================================================================
+9. HEALTH                                                   *nvim-diff-health*
+
 >vim
     :checkhealth nvim-diff
 <
-Reports the Neovim version, git, gh and its authentication, treesitter parser
-availability, and PR worktrees left behind by a crash.
+Reports:
+
+  - Neovim: the version, `vim.text.diff` and 'winfixbuf'.
+  - Configuration: whether |nvim-diff.setup()| ran, and the main settings.
+  - git: missing is an error; older than 2.25 is a warning; older than 2.31
+    warns that history lists no files for merge commits.
+  - gh: missing or logged out is a warning, since only PR review needs it.
+    Lists each host `gh` is logged in to, warns about a token GitHub rejects,
+    and checks the host the cwd's repository reviews against (from
+    |nvim-diff-config.github.host|, `$GH_HOST` or the `origin` remote), so a
+    GitHub Enterprise Server host you never logged in to shows up here rather
+    than when |:NvimDiffPR| fails.
+  - treesitter: which of a list of common languages have a parser.
+  - PR worktrees left behind by a Neovim that crashed or was killed, with the
+    command to remove each one.
+
+==============================================================================
+10. LIMITATIONS                                        *nvim-diff-limitations*
+
+  - PR review is GitHub only (github.com and GitHub Enterprise Server).
+    GitLab and other forges are not supported.
+  - The GitHub write paths (comments, replies, edits, deletes, resolve,
+    verdict, viewed marks) are tested against a stub `gh`, not a live PR.
+  - File-level comments need a GitHub Enterprise Server new enough to accept
+    `subject_type=file`; an older one's error is shown as is.
+  - Nothing is refetched while a review is open.
+  - Opening the same PR in two Neovim instances: the second takes the
+    worktree over from the first.
+  - Structural diff ignores injected languages (a code fence in markdown, a
+    script in HTML), and a moved block reads as a delete plus an add.
+  - Structural diff runs synchronously when a file opens.
+  - There is no staging of hunks or files; use git or gitsigns for that.
+  - A diff against the worktree lists `HEAD` against the worktree as one
+    list, with no staged/unstaged split.
+  - Side list threads can be edited and deleted, not replied to or resolved.
+  - |:NvimDiffClose| does not close history or conflict views.
 
 vim:tw=78:ts=8:ft=help:norl:
