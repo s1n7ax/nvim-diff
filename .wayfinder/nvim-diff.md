@@ -122,6 +122,10 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - History: no "unfold all" key in folder/repo mode; no uncommitted pseudo-commit at the top; commit rows show no large-file marker until selected.
 - Merges in history need `--diff-merges=first-parent` (git 2.31, above the 2.25 minimum); older git lists no files for merges. Raise the minimum?
 
+- `:NvimDiffClose` ends the review even when the verdict split holds unsent text (`View:close` swallows the failed `tabclose`); the split survives but posting says "review has ended". Should ending a review ask first when any draft (comment or verdict) has text?
+- A reply can only be started from the thread's anchor line, not from inside the expanded thread's virtual lines. Acceptable?
+- Closing the tab with a comment draft open warns twice (window close, then review end).
+
 ## Map
 
 - [x] grill: requirements sweep — [result](#result-grill-requirements-sweep)
@@ -149,8 +153,8 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - [x] implement: PR review mode — worktree checkout, viewed marks, jump to next unviewed — [result](#result-implement-pr-review-mode)
 - [x] implement: reading comment threads — collapsed virtual line, expand in place, side list — [result](#result-implement-reading-comment-threads)
 - [x] grill: how the user writes a comment or a reply — inside the expanded virtual lines, or a separate prompt buffer — [result](#result-grill-how-the-user-writes-a-comment-or-a-reply)
-- [ ] implement: comment split and posting — new line and range comments on either pane, replies, failed-post and cancel handling
-- [ ] implement: review verdict command
+- [x] implement: comment split and posting — new line and range comments on either pane, replies, failed-post and cancel handling — [result](#result-implement-comment-split-and-posting)
+- [x] implement: review verdict command — [result](#result-implement-review-verdict-command)
 - [ ] implement: edit and delete own comments, suggestion pre-fill, file-level comments from the panel — needs: comment split and posting
 - [ ] implement: resolve, reply-and-resolve, unresolve — needs: comment split and posting
 - [ ] implement: README, docs, and health check polish — needs: resolve, reply-and-resolve, unresolve; edit and delete own comments, suggestion pre-fill, file-level comments from the panel
@@ -298,6 +302,15 @@ or context colors) and structural, difftastic-style diffs rather than line dumps
 - `:NvimDiffPR <n>` (or `#<n>`) opens a review; keys `<leader><space>` mark viewed + jump, `<leader><BS>` unmark (octo's viewed key). A mark waits for GitHub's reply before the panel changes; a refusal leaves the panel as it was. Next-unviewed walks panel order, wraps, and treats re-changed as unviewed. Everything is fetched before the tab opens, so a failure leaves no tab and no worktree. Ending a review force-wipes buffers on worktree files, warning with the names of any that had unsaved changes.
 - PR commits are fetched with `--refmap=` so fetching `refs/heads/<base>` never moves the user's `refs/remotes/origin/*`; only `FETCH_HEAD` is written. Fixed 120 s timeout, no config key.
 - Thread keys: `<CR>` expand/collapse (falls through on a line with no thread), `]t`/`[t` next/prev, `gR` dim ↔ hide resolved, `gC` side list. Resolved threads default to **dimmed** (`threads.resolved = "dim"`), matching the resolve requirement. Every outdated thread goes to the side list even when GitHub still gives it a line; a thread past the end of the shown file goes there as "not in this diff". A multi-line comment hangs under its last line. Expanded state is per view, never persisted. Markdown shows raw. Side list is a 50-column right split, no jump-to-file yet.
+- Merging the comment-split / verdict wave: one additive `config.lua` conflict (`keymaps.comment` and `keymaps.verdict`), resolved keeping both. `make check`: 555/555.
+- Comments: `<leader>cc` (normal = line, visual = range) on either pane, `<leader>cr` reply; in the split `<C-s>` or `:w` posts, `<C-c>` cancels (asks if non-empty). Config `comment.height = 10`, `keymaps.comment = {add, reply, submit, cancel}`. Modules `github/comments.lua`, `review/compose.lua`, `review/comment.lua`; `View:line_at(win, bl)` on the fileview. The comment target is checked against `commentable_ranges` before the split opens, and a range must sit inside one hunk (GitHub refuses otherwise). Unified: a deleted line is `old`, everything else `new`.
+- After every post the threads are refetched, because the REST reply carries no thread id (resolve needs it). If the refetch fails, a local thread is built from the reply — replyable, not resolvable.
+- A draft closed by `:q`/`:q!`/`:tabclose` is kept hidden and `<leader>cc` brings it back; one draft per review; a review ending with an unsent draft leaves it as a listed buffer with posting off, plus a warning. Posts block, like marking viewed. Several threads on one line: the cursor's pane wins, then a picker.
+- Verdict: `:NvimDiffVerdict [approve|request-changes|comment]` (no arg = picker), command only, no default key. `github/review.lua` `submit` posts `POST …/pulls/{n}/reviews` with `event`, `commit_id` = the head the review opened at, `body` if any, never `comments`. Summary split `review/verdict.lua`, `buftype=acwrite`, winbar header, `keymaps.verdict = {post = "<C-s>", cancel = "q"}`; `:w` warns and never posts; `:q` on unsent text fails with E37.
+- GitHub refuses Request changes and Comment with an empty body (422), so the summary is enforced for those two and optional only for Approve; the header says so.
+- `review/verdict.lua` and `review/compose.lua` each have their own editor split. They should become one module, and the two cancel keys (`q` vs `<C-c>`) should agree — owed by the edit/delete step, which reuses the split.
+- `github/cmd.lua` `classify` drops REST 422 messages (they are plain strings, not `{message}`); both new modules work around it locally. The fix belongs in `classify` — owed by the edit/delete step.
+- Both write paths were run only against the `gh` stub; a live run would post to a real PR.
 
 ## Results
 
@@ -1571,3 +1584,19 @@ Six answers, all recorded under Requirements → Reviewing a PR:
 - **File-level comments** from a key on a file panel row, shown in the side list.
 
 Map change: the scope grew past one context, so "writing inline comments and replies" is split into "comment split and posting" and "edit and delete own comments, suggestion pre-fill, file-level comments from the panel". Resolve now needs only the first. The verdict command was always unblocked.
+
+### result: implement: comment split and posting
+
+Merged to `main` in `2884d7e` (branch `worktree-agent-afa48d9a1ac14aff3`, commits `7ae6eed`, `5f97181`). `make check` on the branch: 535/535 (35 new).
+
+Built `github/comments.lua` (new line/range comment and reply over REST; `github/cmd.lua` requests can now name the HTTP method), `review/comment.lua` (cursor or selection → path, side, line range; checked against the diff; header text such as `Comment on a.txt L1–4` / `Reply to alice on a.txt L1: why?`), `review/compose.lua` (the bottom split: markdown, spell, undo, opens in insert mode, error shown under the text on failure), plus the actions and keys in `views/review.lua` and three groups `NvimDiffComment{Header,Hint,Error}`. After a post the threads are refetched and the new thread shows expanded. Tests: `github_comments`, `review_compose`, `review_comment`, `views_review_comment` specs, `gh` stubbed.
+
+Found: GitHub only accepts comments inside the shown diff (a change plus 3 lines), and a range must stay in one hunk — checked locally from the line hunks, so structural mode never changes it. The REST reply has no thread id, hence the refetch. `<C-s>` can freeze a terminal with flow control, so `:w` posts too. Decisions are under Implementation notes.
+
+### result: implement: review verdict command
+
+Merged to `main` in `7baad62` (branch `worktree-agent-ae12bb1b4e656c447`, commits `9895e57`, `2ba2088`). `make check` on the branch: 520/520 (20 new).
+
+Built `github/review.lua` (`submit(pr, event, body)` — one REST review with no inline comments; refuses an unknown event, which would create a pending review, and an empty body where GitHub requires one; surfaces a 422's real reason such as "Can not approve your own pull request"), `review/verdict.lua` (summary split; reuses an open split and keeps its text when the command runs again with another verdict), and `:NvimDiffVerdict` with completion, valid only in a review tab. Tests: `github_review` and `review_verdict` specs.
+
+Found: the requirement's "optional summary" is optional only for Approve — GitHub 422s the other two without one. `cmd.classify` loses REST 422 messages. `:NvimDiffClose` with unsent verdict text ends the review and leaves the split behind (now an open question).
