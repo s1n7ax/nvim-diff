@@ -18,7 +18,9 @@
 --- (`review/sidelist.lua`).
 ---
 --- Resolved threads are dimmed by default, or hidden (`threads.resolved = "hide"`), and a
---- key flips between the two. Which threads are expanded, and whether resolved ones show,
+--- key flips between the two. A thread resolved during the review (`state.kept`) stays
+--- drawn, dimmed, while resolved ones are hidden, until the mode next changes, so a resolve
+--- can be seen and undone. Which threads are expanded, and whether resolved ones show,
 --- live in a state table the caller may share between the files of one review, so a
 --- thread stays open when the reviewer steps to another file and back. Nothing is stored
 --- beyond that table's life.
@@ -40,6 +42,9 @@ local BLOCK = "nvim-diff.threads:"
 ---@class NvimDiff.ThreadState
 ---@field expanded table<string, boolean> Thread id to expanded.
 ---@field resolved "dim"|"hide"
+--- Threads resolved during this review: drawn dimmed even while resolved ones are hidden,
+--- so a resolve can be seen and undone. Cleared when the resolved mode changes.
+---@field kept? table<string, boolean>
 
 ---@class NvimDiff.ThreadViewOpts
 --- Expanded threads and the resolved mode; share one table across a review's files.
@@ -69,7 +74,7 @@ ThreadView.__index = ThreadView
 --- A fresh state table: nothing expanded, resolved threads as the config says.
 ---@return NvimDiff.ThreadState
 function M.new_state()
-  return { expanded = {}, resolved = config.get().threads.resolved }
+  return { expanded = {}, resolved = config.get().threads.resolved, kept = {} }
 end
 
 --- The threads of `list` on `path`.
@@ -150,7 +155,7 @@ end
 ---@param t NvimDiff.GitHub.Thread
 ---@return boolean
 function ThreadView:visible(t)
-  return not (t.resolved and self.state.resolved == "hide")
+  return not (t.resolved and self.state.resolved == "hide" and not (self.state.kept and self.state.kept[t.id]))
 end
 
 --- The block for display row `row`, or nil when none of its threads shows.
@@ -378,6 +383,7 @@ end
 ---@param mode "dim"|"hide"
 function ThreadView:set_resolved(mode)
   self.state.resolved = mode
+  self.state.kept = {}
   self:render()
 end
 

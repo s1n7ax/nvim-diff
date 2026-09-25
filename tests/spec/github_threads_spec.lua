@@ -203,3 +203,76 @@ describe("github threads", function()
     expect.eq({}, assert(threads.fetch(TARGET, 7)))
   end)
 end)
+
+describe("github threads resolve", function()
+  before_each(function()
+    config.reset()
+  end)
+
+  after_each(function()
+    config.reset()
+    ghstub.cleanup()
+  end)
+
+  local RESOLVED = [[{"data":{"resolveReviewThread":{"thread":{"id":"PRRT_1","isResolved":true,
+    "viewerCanResolve":false,"viewerCanUnresolve":true,"resolvedBy":{"login":"me"}}}}}]]
+  local UNRESOLVED = [[{"data":{"unresolveReviewThread":{"thread":{"id":"PRRT_1","isResolved":false,
+    "viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null}}}}]]
+
+  it("resolves by thread id, without a resolution reason, and returns GitHub's state", function()
+    local bin, calls = ghstub.new(arm([[*resolveReviewThread*]], RESOLVED))
+    config.setup({ github = { bin = bin } })
+    local state = assert(threads.resolve("ghe.corp.example", { id = "PRRT_1", comments = {} }))
+    expect.eq({ resolved = true, can_resolve = false, can_unresolve = true, resolved_by = "me" }, state)
+    local sent = calls()
+    expect.eq(1, #sent)
+    expect.matches("%-%-hostname ghe%.corp%.example", sent[1])
+    expect.matches("resolveReviewThread%(input: { threadId: %$id }%)", sent[1])
+    expect.matches("%-f id=PRRT_1", sent[1])
+    expect.falsy(sent[1]:find("unresolve", 1, true))
+    expect.falsy(sent[1]:find("resolutionReason", 1, true))
+  end)
+
+  it("unresolves, and applies the answer to a thread", function()
+    local bin, calls = ghstub.new(arm([[*unresolveReviewThread*]], UNRESOLVED))
+    config.setup({ github = { bin = bin } })
+    local th = { id = "PRRT_1", resolved = true, can_resolve = false, can_unresolve = true, resolved_by = "me" }
+    local state = assert(threads.unresolve("github.com", th))
+    threads.apply(th, state)
+    expect.eq(false, th.resolved)
+    expect.eq(true, th.can_resolve)
+    expect.eq(false, th.can_unresolve)
+    expect.eq(nil, th.resolved_by)
+    expect.matches("unresolveReviewThread", calls()[1])
+  end)
+
+  it("refuses a locally built thread without calling gh", function()
+    local bin, calls = ghstub.new([[
+  *) exit 0 ;;
+]])
+    config.setup({ github = { bin = bin } })
+    local state, err = threads.resolve("github.com", { id = "PRRC_1", local_only = true, comments = {} })
+    expect.eq(nil, state)
+    expect.truthy(errors.is(err, "invalid"), tostring(err))
+    expect.eq({}, calls())
+  end)
+
+  it("passes GitHub's refusal through, and rejects an answer with no thread", function()
+    local bin = ghstub.new(
+      arm(
+        [[*resolveReviewThread*]],
+        [[{"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}]]
+      )
+    )
+    config.setup({ github = { bin = bin } })
+    local state, err = threads.resolve("github.com", { id = "PRRT_1" })
+    expect.eq(nil, state)
+    expect.matches("not accessible", err.message)
+
+    bin = ghstub.new(arm([[*resolveReviewThread*]], [[{"data":{"resolveReviewThread":null}}]]))
+    config.setup({ github = { bin = bin } })
+    state, err = threads.resolve("github.com", { id = "PRRT_1" })
+    expect.eq(nil, state)
+    expect.truthy(errors.is(err, "api_error"), tostring(err))
+  end)
+end)

@@ -103,6 +103,12 @@ local M = {}
 ---@field prev NvimDiff.Config.Key
 ---@field toggle_resolved NvimDiff.Config.Key Flip resolved threads between dimmed and hidden.
 ---@field list NvimDiff.Config.Key Open or close the side list of outdated and file-level comments.
+--- In a PR review only, on the thread on the cursor's line: resolve it on GitHub at once.
+---@field resolve NvimDiff.Config.Key
+--- Open the comment split for a reply; posting it resolves the thread too.
+---@field reply_resolve NvimDiff.Config.Key
+--- Unresolve the resolved thread on the cursor's line.
+---@field unresolve NvimDiff.Config.Key
 
 --- Buffer-local to the review verdict split (`:NvimDiffVerdict`), in normal and insert mode.
 ---@class NvimDiff.Config.VerdictKeymaps
@@ -263,6 +269,10 @@ local defaults = {
       prev = "[t",
       toggle_resolved = "gR",
       list = "gC",
+      -- The comment family: `cr` replies, so `cR` replies and resolves.
+      resolve = "<leader>cx",
+      reply_resolve = "<leader>cR",
+      unresolve = "<leader>cu",
     },
     -- `<C-s>` may freeze a terminal with flow control on (`stty -ixon` frees it); `:w`
     -- posts as well.
@@ -387,6 +397,9 @@ local schema = {
       prev = KEY,
       toggle_resolved = KEY,
       list = KEY,
+      resolve = KEY,
+      reply_resolve = KEY,
+      unresolve = KEY,
     },
     comment = {
       add = KEY,

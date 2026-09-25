@@ -247,6 +247,7 @@ function M.thread_of(c)
     can_reply = true,
     can_resolve = false,
     can_unresolve = false,
+    local_only = true,
     comments = { c },
   }
 end
