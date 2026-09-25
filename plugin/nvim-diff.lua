@@ -53,3 +53,13 @@ end, {
   nargs = 1,
   desc = "nvim-diff: review a GitHub PR by number, checked out into its own worktree and tabpage",
 })
+
+vim.api.nvim_create_user_command("NvimDiffVerdict", function(args)
+  require("nvim-diff.review.verdict").command(args.args)
+end, {
+  nargs = "?",
+  complete = function(arglead)
+    return require("nvim-diff.review.verdict").complete(arglead)
+  end,
+  desc = "nvim-diff: submit the review verdict (approve, request-changes, comment) with an optional summary",
+})
