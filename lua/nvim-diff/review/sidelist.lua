@@ -47,13 +47,14 @@ end
 ---@class NvimDiff.SideListText
 ---@field lines string[]
 ---@field marks { row: integer, col: integer, end_col: integer, group: string }[] 0-based rows, byte columns.
+---@field threads table<integer, NvimDiff.GitHub.Thread> 1-based line to the thread drawn there.
 
 --- The list's text, grouped by path (in order of first appearance), each thread expanded.
 ---@param items NvimDiff.SideListItem[]
 ---@param width integer Display cells to wrap bodies to.
 ---@return NvimDiff.SideListText
 function M.render(items, width)
-  local lines, marks = {}, {}
+  local lines, marks, threads = {}, {}, {}
   local function add(chunks)
     local col = 0
     local parts = {}
@@ -72,7 +73,7 @@ function M.render(items, width)
   if #items == 0 then
     add({})
     add({ { "  None.", "NvimDiffThreadMeta" } })
-    return { lines = lines, marks = marks }
+    return { lines = lines, marks = marks, threads = threads }
   end
 
   local order, groups = {}, {}
@@ -94,10 +95,11 @@ function M.render(items, width)
       local vls = thread_mod.expanded_lines(item.thread, { width = width, label = PLACE[item.place] })
       for _, vl in ipairs(vls) do
         add(vl)
+        threads[#lines] = item.thread
       end
     end
   end
-  return { lines = lines, marks = marks }
+  return { lines = lines, marks = marks, threads = threads }
 end
 
 ---@class NvimDiff.SideListSpec
@@ -110,6 +112,7 @@ end
 ---@field buf integer
 ---@field win integer
 ---@field items NvimDiff.SideListItem[]
+---@field threads? table<integer, NvimDiff.GitHub.Thread> Buffer line to the thread drawn there.
 local SideList = {}
 SideList.__index = SideList
 
@@ -159,6 +162,7 @@ function SideList:set(items)
   end
   local width = self:is_open() and api.nvim_win_get_width(self.win) - 1 or 50
   local text = M.render(items, math.max(20, width))
+  self.threads = text.threads
   vim.bo[self.buf].modifiable = true
   api.nvim_buf_set_lines(self.buf, 0, -1, false, text.lines)
   vim.bo[self.buf].modifiable = false
@@ -166,6 +170,15 @@ function SideList:set(items)
   for _, m in ipairs(text.marks) do
     api.nvim_buf_set_extmark(self.buf, M.ns, m.row, m.col, { end_col = m.end_col, hl_group = m.group })
   end
+end
+
+--- The thread drawn on the cursor's line of the list, if any.
+---@return NvimDiff.GitHub.Thread?
+function SideList:thread_at_cursor()
+  if not self:is_open() then
+    return nil
+  end
+  return (self.threads or {})[api.nvim_win_get_cursor(self.win)[1]]
 end
 
 ---@return boolean

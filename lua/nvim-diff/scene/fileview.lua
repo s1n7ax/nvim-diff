@@ -145,6 +145,13 @@ function View:diff()
   return self.diffs[self.mode] or self.diffs.line
 end
 
+--- The file lines of one side, as diffed. Not a copy: do not change them.
+---@param side NvimDiff.Side
+---@return string[]
+function View:lines(side)
+  return self.spec[side].lines
+end
+
 --- Tell the owner a scene is up, then every watcher, in the order they were added.
 function View:notify()
   if self.spec.on_scene then

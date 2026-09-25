@@ -187,6 +187,61 @@ describe("github cmd", function()
       expect.truthy(errors.is(err, "not_found"))
     end)
 
+    it("keeps a REST 422's reasons, whether plain strings or objects", function()
+      local bodies = {
+        strings = { message = "Validation Failed", errors = { "line must be part of the diff", "one more" } },
+        objects = {
+          message = "Validation Failed",
+          errors = {
+            { resource = "PullRequestReviewComment", field = "body", code = "missing_field" },
+            { message = "no" },
+          },
+        },
+        phrase = { message = "Unprocessable Entity", errors = { "Can not approve your own pull request" } },
+      }
+      local arms = {}
+      for name, body in pairs(bodies) do
+        local printf = "printf 'HTTP/2.0 422 Unprocessable Entity\\n\\n%%s\\n' '%s'"
+        arms[#arms + 1] = ("  *%s*)\n    " .. printf .. "\n    exit 1 ;;"):format(name, vim.json.encode(body))
+      end
+      local bin = ghstub.new(table.concat(arms, "\n"))
+      config.setup({ github = { bin = bin } })
+      local cases = {
+        strings = "Validation Failed: line must be part of the diff; one more",
+        objects = "Validation Failed: body missing field; no",
+        phrase = "Can not approve your own pull request",
+      }
+      for endpoint, want in pairs(cases) do
+        local response = assert(cmd.request("github.com", endpoint, { method = "POST" }))
+        local data, err = cmd.classify(response)
+        expect.eq(nil, data)
+        expect.eq(422, err.status)
+        expect.eq("api_error", err.kind)
+        expect.eq(want, err.message, endpoint)
+      end
+    end)
+
+    it("takes a 204 with no body as success", function()
+      local bin = ghstub.new([[
+  *blank*)
+    printf 'HTTP/2.0 204 No Content\nX-A: 1\n\n'
+    exit 0
+    ;;
+  *bare*)
+    printf 'HTTP/2.0 204 No Content\n'
+    exit 0
+    ;;
+]])
+      config.setup({ github = { bin = bin } })
+      for _, endpoint in ipairs({ "blank", "bare" }) do
+        local response = assert(cmd.request("github.com", endpoint, { method = "DELETE" }))
+        expect.eq(204, response.status, endpoint)
+        local data, err = cmd.classify(response)
+        expect.eq({}, data, endpoint)
+        expect.eq(nil, err)
+      end
+    end)
+
     it("reports a connection failure (no response at all) as request_failed", function()
       local bin = ghstub.new([[
   *"graphql"*)

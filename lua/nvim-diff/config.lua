@@ -104,28 +104,35 @@ local M = {}
 ---@field toggle_resolved NvimDiff.Config.Key Flip resolved threads between dimmed and hidden.
 ---@field list NvimDiff.Config.Key Open or close the side list of outdated and file-level comments.
 
---- Buffer-local to the review verdict split (`:NvimDiffVerdict`).
+--- Buffer-local to the review verdict split (`:NvimDiffVerdict`), in normal and insert mode.
 ---@class NvimDiff.Config.VerdictKeymaps
---- Submit the verdict and summary to GitHub. Normal and insert mode.
+--- Submit the verdict and summary to GitHub.
 ---@field post NvimDiff.Config.Key
---- Close the split; asks first when a summary was typed. Normal mode.
+--- Close the split; asks first when a summary was typed.
 ---@field cancel NvimDiff.Config.Key
 
 ---@class NvimDiff.Config.Threads
 --- What a resolved thread looks like until toggled: drawn dimmed with a ✓, or not at all.
 ---@field resolved "dim"|"hide"
 
---- `add` and `reply` are buffer-local to the diff panes of a PR review; `submit` and
---- `cancel` to the comment split, in normal and insert mode. `:w` in the split posts too.
+--- `add`, `reply`, `edit` and `delete` are buffer-local to the diff panes of a PR review;
+--- `submit`, `cancel` and `suggest` to the comment split, in normal and insert mode. `:w` in
+--- the split posts too.
 ---@class NvimDiff.Config.CommentKeymaps
 --- New comment on the cursor's line of the pane it is in (old or new); in visual mode, on
---- the selected lines.
+--- the selected lines; in the file panel, a file-level comment on the file under the cursor.
 ---@field add NvimDiff.Config.Key
 --- Reply to the thread on the cursor's line.
 ---@field reply NvimDiff.Config.Key
+--- Edit your comment in the thread on the cursor's line (also in the side list).
+---@field edit NvimDiff.Config.Key
+--- Delete your comment in the thread on the cursor's line, after asking (also in the side list).
+---@field delete NvimDiff.Config.Key
 ---@field submit NvimDiff.Config.Key Post what the split holds.
 --- Close the split; asks first when it holds text.
 ---@field cancel NvimDiff.Config.Key
+--- Insert a ```` ```suggestion ```` block holding the commented lines as they are.
+---@field suggest NvimDiff.Config.Key
 
 ---@class NvimDiff.Config.Comment
 ---@field height integer Rows of the comment split.
@@ -264,10 +271,15 @@ local defaults = {
       reply = "<leader>cr",
       submit = "<C-s>",
       cancel = "<C-c>",
+      edit = "<leader>ce",
+      delete = "<leader>cd",
+      -- `<C-g>` is insert mode's own prefix for small commands; `s` is free there.
+      suggest = "<C-g>s",
     },
+    -- The same editor split as a comment, so the same keys.
     verdict = {
       post = "<C-s>",
-      cancel = "q",
+      cancel = "<C-c>",
     },
   },
 
@@ -381,6 +393,9 @@ local schema = {
       reply = KEY,
       submit = KEY,
       cancel = KEY,
+      edit = KEY,
+      delete = KEY,
+      suggest = KEY,
     },
     verdict = {
       post = KEY,

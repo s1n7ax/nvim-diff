@@ -29,9 +29,12 @@
 ---
 --- Comments are written in a bottom split (`review/compose.lua`) and post immediately, one
 --- at a time (`github/comments.lua`): `keymaps.comment.add` on the cursor's line of either
---- pane, or on a visual selection; `keymaps.comment.reply` answers the thread on the
---- cursor's line. After a post the threads are refetched and the new comment's thread shows
---- expanded.
+--- pane, or on a visual selection, or — in the file panel — on the whole file under the
+--- cursor; `keymaps.comment.reply` answers the thread on the cursor's line;
+--- `keymaps.comment.edit` reopens one of the user's own comments there in the split, and
+--- `keymaps.comment.delete` deletes one after asking. Edit and delete work in the side list
+--- too, on the thread under its cursor. After every change the threads are refetched; a new
+--- comment's thread shows expanded, and a file-level one opens the side list.
 
 local comment_mod = require("nvim-diff.review.comment")
 local comments_mod = require("nvim-diff.github.comments")
@@ -208,6 +211,10 @@ function M.open(opts)
   self:trap()
   self:map_keys(view.panel.buf)
   self:map_keys(view.note_buf)
+  self:map_panel_comment_keys(view.panel.buf)
+  view.on_thread_list = function(list)
+    self:map_own_comment_keys(list.buf)
+  end
 
   local first = self:next_unviewed(nil) or view.tree.order[1]
   if first then
@@ -275,6 +282,36 @@ function Review:map_comment_keys(buf)
   map("n", keys.reply, function()
     self:reply()
   end, "reply to the comment thread on this line")
+  self:map_own_comment_keys(buf)
+end
+
+--- Map the keys that edit and delete the user's own comments in `buf`: a diff pane, or the
+--- side list.
+---@param buf integer
+function Review:map_own_comment_keys(buf)
+  local keys = config.get().keymaps.comment
+  local function map(lhs, fn, desc)
+    if type(lhs) == "string" then
+      vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, desc = "nvim-diff: " .. desc })
+    end
+  end
+  map(keys.edit, function()
+    self:edit()
+  end, "edit your comment in this thread")
+  map(keys.delete, function()
+    self:delete()
+  end, "delete your comment in this thread")
+end
+
+--- Map the file-level comment key in the file panel `buf`.
+---@param buf integer
+function Review:map_panel_comment_keys(buf)
+  local lhs = config.get().keymaps.comment.add
+  if type(lhs) == "string" then
+    vim.keymap.set("n", lhs, function()
+      self:file_comment()
+    end, { buffer = buf, nowait = true, desc = "nvim-diff: comment on the file under the cursor on GitHub" })
+  end
 end
 
 --- Map the review keys in `buf`.
@@ -405,13 +442,24 @@ function Review:resume_draft()
   return true
 end
 
+---@class NvimDiff.ReviewComposeOpts
+---@field lines? string[] Initial text (an edited comment's body).
+---@field suggestion? NvimDiff.ComposeSuggestion
+---@field what? string What happened, for messages. Default `"comment posted"`.
+---@field after? fun(posted: NvimDiff.GitHub.PostedComment) Once the threads are redrawn.
+
 ---@param header string
 ---@param post fun(text: string): NvimDiff.GitHub.PostedComment?, NvimDiff.GitHub.Error?
+---@param opts? NvimDiff.ReviewComposeOpts
 ---@return NvimDiff.Compose
-function Review:open_compose(header, post)
+function Review:open_compose(header, post, opts)
+  opts = opts or {}
+  local what = opts.what or "comment posted"
   local c
   c = compose.open({
     header = header,
+    lines = opts.lines,
+    suggestion = opts.suggestion,
     on_submit = function(text)
       local posted, err = post(text)
       if not posted then
@@ -419,9 +467,14 @@ function Review:open_compose(header, post)
       end
       -- It is on GitHub now: a redraw that fails must not leave the split open to be
       -- posted a second time.
-      local ok, redraw_err = pcall(self.show_posted, self, posted)
+      local ok, redraw_err = pcall(function()
+        self:show_posted(posted, what)
+        if opts.after then
+          opts.after(posted)
+        end
+      end)
       if not ok then
-        log.error("comment posted, but redrawing the threads failed: %s", tostring(redraw_err))
+        log.error("%s, but redrawing the threads failed: %s", what, tostring(redraw_err))
       end
       return true
     end,
@@ -465,7 +518,170 @@ function Review:comment(range)
       start_line = target.start_line,
       body = text,
     })
+  end, { suggestion = comment_mod.suggestion_for_target(view.file, target) })
+end
+
+--- Start a file-level comment on the file row under the file panel's cursor (or `entry`).
+--- Once posted it shows in the side list, which opens.
+---@param entry? NvimDiff.FileEntry
+---@return NvimDiff.Compose? compose Nil when there is no file there, or a draft is open.
+function Review:file_comment(entry)
+  if not self:is_valid() or self:resume_draft() then
+    return nil
+  end
+  if not entry then
+    local row = self.view.panel:cursor_row()
+    entry = row and row.kind ~= "dir" and row.entry or nil
+  end
+  if not entry then
+    log.warn("no file under the cursor to comment on")
+    return nil
+  end
+  local p = entry.path
+  return self:open_compose(comment_mod.file_header(p), function(text)
+    return comments_mod.create_file(self.pr, p, text)
+  end, {
+    suggestion = { reason = "a file comment has no lines" },
+    after = function()
+      if self:is_valid() then
+        self.view:open_thread_list()
+      end
+    end,
+  })
+end
+
+--- The suggestion for a reply to, or an edit in, `thread`.
+---@param thread NvimDiff.GitHub.Thread
+---@return NvimDiff.ComposeSuggestion
+function Review:thread_suggestion(thread)
+  local view = self.view
+  return comment_mod.suggestion_for_thread(view.file, view.current and view.current.path, thread)
+end
+
+--- The user's own comments where the cursor is: in the thread under the side list's cursor,
+--- or in the threads on the cursor's line of a diff pane (the cursor's pane first).
+---@return { thread: NvimDiff.GitHub.Thread, comment: NvimDiff.GitHub.Comment }[] own
+---@return boolean any Whether there is any thread there at all.
+function Review:own_here()
+  local view = self.view
+  local list = view.thread_list
+  if list and list:is_open() and api.nvim_get_current_win() == list.win then
+    local t = list:thread_at_cursor()
+    return t and comment_mod.own({ t }) or {}, t ~= nil
+  end
+  local tv = view.thread_view
+  local here = tv and not tv.detached and tv:at_cursor() or {}
+  local side = view.file and not view.file:is_closed() and view.file:cursor().side
+  local mine = comment_mod.own(vim.tbl_filter(function(t)
+    return (t.side or "new") == side
+  end, here))
+  if #mine == 0 then
+    mine = comment_mod.own(here)
+  end
+  return mine, #here > 0
+end
+
+--- Call `fn` with the one comment of `own`, or the one the user picks from several.
+---@param own { thread: NvimDiff.GitHub.Thread, comment: NvimDiff.GitHub.Comment }[]
+---@param verb string
+---@param fn fun(pick: { thread: NvimDiff.GitHub.Thread, comment: NvimDiff.GitHub.Comment })
+local function choose(own, verb, fn)
+  if #own == 1 then
+    fn(own[1])
+    return
+  end
+  vim.ui.select(own, {
+    prompt = verb .. " which of your comments?",
+    format_item = function(x)
+      return comment_mod.label(x.thread, x.comment)
+    end,
+  }, function(pick)
+    if pick then
+      fn(pick)
+    end
   end)
+end
+
+---@param any boolean
+local function none_here(any)
+  log.warn(any and "none of the comments here is yours" or "no comment thread here")
+end
+
+--- Edit one of the user's own comments where the cursor is, in the comment split.
+---@return boolean started False when there is none, or a draft is open.
+function Review:edit()
+  if not self:is_valid() or self:resume_draft() then
+    return false
+  end
+  local own, any = self:own_here()
+  if #own == 0 then
+    none_here(any)
+    return false
+  end
+  choose(own, "Edit", function(pick)
+    if not self:is_valid() or self:resume_draft() then
+      return
+    end
+    local c = pick.comment
+    self:open_compose(comment_mod.edit_header(pick.thread), function(text)
+      return comments_mod.edit(self.pr, c, text)
+    end, {
+      lines = vim.split(c.body, "\n", { plain = true }),
+      suggestion = self:thread_suggestion(pick.thread),
+      what = "comment edited",
+    })
+  end)
+  return true
+end
+
+--- Asks whether to delete a comment. Replaceable, so specs can answer without a prompt.
+---@param prompt string
+---@return boolean delete
+function M.confirm_delete(prompt)
+  return vim.fn.confirm(prompt, "&Delete\n&Keep", 2) == 1
+end
+
+--- Delete one of the user's own comments where the cursor is, after asking.
+---@return boolean deleted False when nothing was deleted — or not yet, when several of the
+---user's comments are here and a picker asks which.
+function Review:delete()
+  if not self:is_valid() then
+    return false
+  end
+  local own, any = self:own_here()
+  if #own == 0 then
+    none_here(any)
+    return false
+  end
+  local deleted = false
+  choose(own, "Delete", function(pick)
+    local c = pick.comment
+    local prompt = ("Delete your comment on %s?\n%s"):format(comment_mod.where(pick.thread), comment_mod.excerpt(c, 60))
+    if not self:is_valid() or not M.confirm_delete(prompt) then
+      return
+    end
+    local ok, err = comments_mod.delete(self.pr, c)
+    if not ok then
+      log.error("comment not deleted: %s", post_error(err))
+      return
+    end
+    deleted = true
+    local redrawn, redraw_err = pcall(self.reload_threads, self, "comment deleted", function(list)
+      for i = #list, 1, -1 do
+        local t = list[i]
+        t.comments = vim.tbl_filter(function(x)
+          return x.id ~= c.id
+        end, t.comments)
+        if #t.comments == 0 then
+          table.remove(list, i)
+        end
+      end
+    end)
+    if not redrawn then
+      log.error("comment deleted, but redrawing the threads failed: %s", tostring(redraw_err))
+    end
+  end)
+  return deleted
 end
 
 --- Start a reply to the thread on the cursor's line. With threads on both sides of a
@@ -495,7 +711,7 @@ function Review:reply()
     end
     self:open_compose(comment_mod.reply_header(thread), function(text)
       return comments_mod.reply(self.pr, thread, text)
-    end)
+    end, { suggestion = self:thread_suggestion(thread) })
   end
   if #list == 1 then
     start(list[1])
@@ -510,22 +726,50 @@ function Review:reply()
   return true
 end
 
---- Redraw the threads after a post: refetched from GitHub, the only source of truth, with
---- the thread holding the new comment expanded. When the refetch fails, the comment is
---- added to what is already showing, and the user told.
----@param posted NvimDiff.GitHub.PostedComment
-function Review:show_posted(posted)
+--- Redraw the threads after a change: refetched from GitHub, the only source of truth. When
+--- the refetch fails, `patch` applies the change to what is already showing instead, and
+--- the user is told.
+---@param what string What happened, `comment posted`.
+---@param patch fun(list: NvimDiff.GitHub.Thread[])
+---@param expand? string Node id of a comment whose thread to show expanded.
+function Review:reload_threads(what, patch, expand)
   if not self:is_valid() then
     return
   end
   local view = self.view
   local list, err = threads_mod.fetch(self.pr.target, self.number)
   if not list then
-    log.warn("comment posted, but the threads could not be reloaded: %s", msg(err))
+    log.warn("%s, but the threads could not be reloaded: %s", what, msg(err))
     list = view.threads or {}
-    local parent
+    patch(list)
+  end
+  view.thread_state = view.thread_state or require("nvim-diff.review.threadview").new_state()
+  if expand then
     for _, t in ipairs(list) do
       for _, c in ipairs(t.comments) do
+        if c.id == expand then
+          view.thread_state.expanded[t.id] = true
+        end
+      end
+    end
+  end
+  view:set_threads(list)
+end
+
+--- Redraw the threads after a post or an edit, with the thread holding the comment
+--- expanded. When the refetch fails, the comment is put into what is already showing.
+---@param posted NvimDiff.GitHub.PostedComment
+---@param what? string Default `"comment posted"`.
+function Review:show_posted(posted, what)
+  self:reload_threads(what or "comment posted", function(list)
+    local parent
+    for _, t in ipairs(list) do
+      for i, c in ipairs(t.comments) do
+        if c.id == posted.id then
+          -- An edit: the comment is already here; only its text changed.
+          t.comments[i] = vim.tbl_extend("force", c, { body = posted.body })
+          return
+        end
         if posted.in_reply_to and c.database_id == posted.in_reply_to then
           parent = t
         end
@@ -536,16 +780,7 @@ function Review:show_posted(posted)
     else
       list[#list + 1] = comment_mod.thread_of(posted)
     end
-  end
-  view.thread_state = view.thread_state or require("nvim-diff.review.threadview").new_state()
-  for _, t in ipairs(list) do
-    for _, c in ipairs(t.comments) do
-      if c.id == posted.id then
-        view.thread_state.expanded[t.id] = true
-      end
-    end
-  end
-  view:set_threads(list)
+  end, posted.id)
 end
 
 --- Wipe every buffer on a file inside the worktree: the files are about to be deleted.
@@ -588,6 +823,12 @@ function Review:close(opts)
     self.compose = nil
     if kept then
       log.warn("PR #%d review ended with a comment not posted; its text is kept in %s", self.number, kept)
+    end
+  end
+  if windows then
+    local kept = require("nvim-diff.review.verdict").orphan(self)
+    if kept then
+      log.warn("PR #%d review ended with its verdict not posted; the summary is kept in %s", self.number, kept)
     end
   end
   if windows then
