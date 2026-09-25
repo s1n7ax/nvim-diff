@@ -23,6 +23,10 @@
 local M = {}
 
 M.COLLAPSED_CAP = "╶"
+--- Leads a collapsed thread hung under a line: the bubble's tail, pointing up at it.
+M.COLLAPSED_TAIL = "╰"
+--- In the top border of an expanded thread hung under a line: the bubble's tail.
+M.TAIL = "┴"
 M.COLLAPSED = "▸ "
 M.EXPANDED = "▾ "
 M.RESOLVED = "✓"
@@ -189,6 +193,14 @@ local function hl(thread, group)
   return thread.resolved and "NvimDiffThreadResolved" or group
 end
 
+--- The border group: lit while the cursor is on the thread's lines, else as `hl` says.
+---@param thread NvimDiff.GitHub.Thread
+---@param opts NvimDiff.ThreadLineOpts
+---@return string
+local function border_hl(thread, opts)
+  return opts.active and "NvimDiffThreadBorderActive" or hl(thread, "NvimDiffThreadBorder")
+end
+
 --- The state badge, a coloured chip: ` ✓ RESOLVED ` or ` UNRESOLVED `. Never dimmed, so a
 --- resolved thread still reads as resolved at a glance.
 ---@param thread NvimDiff.GitHub.Thread
@@ -211,6 +223,10 @@ end
 ---@field width? integer
 ---@field hint? string Shown dim at the end of the collapsed line, e.g. the expand key.
 ---@field label? string Leads the expanded meta line, e.g. `outdated` in the side list.
+--- Draw the bubble's tail, pointing up at the line the thread hangs under.
+---@field tail? boolean
+--- The cursor is on the thread's lines: the border is drawn in `NvimDiffThreadBorderActive`.
+---@field active? boolean
 
 --- Cells a bubble takes in a pane `width` wide: all of it, up to `MAX_WIDTH`.
 ---@param width integer
@@ -220,7 +236,8 @@ function M.bubble_width(width)
 end
 
 --- The one-line summary: author, the first line of the first comment, the reply count and
---- the state badge, as a folded bubble: `╶▸ alice  why 9090?  · 1 reply ──── UNRESOLVED `.
+--- the state badge, as a folded bubble: `╶▸ alice  why 9090?  · 1 reply ──── UNRESOLVED `;
+--- `╰▸ …` with `tail`, pointing up at the line it hangs under.
 ---@param thread NvimDiff.GitHub.Thread
 ---@param opts? NvimDiff.ThreadLineOpts
 ---@return NvimDiff.VirtLine
@@ -237,7 +254,7 @@ function M.collapsed_line(thread, opts)
   -- A resolved thread leads with its ✓ as well, so a narrow pane that cuts the badge off
   -- still shows it.
   local mark = thread.resolved and (M.RESOLVED .. " ") or ""
-  local cap = M.COLLAPSED_CAP .. M.COLLAPSED .. mark
+  local cap = (opts.tail and M.COLLAPSED_TAIL or M.COLLAPSED_CAP) .. M.COLLAPSED .. mark
   local head = cap .. author .. "  "
   local text = vim.trim(first and M.body_lines(first.body)[1] or "")
   local want = math.min(M.MIN_EXCERPT, dw(text))
@@ -250,7 +267,7 @@ function M.collapsed_line(thread, opts)
   text = M.truncate(text, math.max(want, room - (kind == "full" and full or kind == "badge" and tail or 0)))
   room = room - dw(text)
   local line = {
-    { cap, hl(thread, "NvimDiffThreadBorder") },
+    { cap, border_hl(thread, opts) },
     { author, hl(thread, "NvimDiffThreadAuthor") },
     { "  ", "" },
     { text, hl(thread, "NvimDiffThreadBody") },
@@ -258,7 +275,7 @@ function M.collapsed_line(thread, opts)
   if kind == "full" then
     vim.list_extend(line, {
       { meta, hl(thread, "NvimDiffThreadMeta") },
-      { " " .. M.RULE:rep(room - full + 1) .. " ", hl(thread, "NvimDiffThreadBorder") },
+      { " " .. M.RULE:rep(room - full + 1) .. " ", border_hl(thread, opts) },
       badge,
     })
   elseif kind == "badge" then
@@ -277,7 +294,8 @@ end
 
 --- The whole thread as a bubble: a top border carrying the meta (range, comment count) and
 --- the state badge, then each comment as an author line over its body, wrapped to fit,
---- comments parted by a dotted rule, and a bottom border.
+--- comments parted by a dotted rule, and a bottom border. With `tail`, the top border
+--- points up at the line the thread hangs under: `╭┴▾ L12 …`.
 ---
 ---     ╭─▾ L12 · 2 comments ─────── UNRESOLVED ─╮
 ---     │ alice  2026-09-01                       │
@@ -292,7 +310,7 @@ end
 function M.expanded_lines(thread, opts)
   opts = opts or {}
   local width = M.bubble_width(opts.width or 80)
-  local border = hl(thread, "NvimDiffThreadBorder")
+  local border = border_hl(thread, opts)
   local inner = width - 4
   local n = #thread.comments
   local parts = { opts.label }
@@ -308,7 +326,7 @@ function M.expanded_lines(thread, opts)
 
   -- Top: `╭─▾ meta ─── BADGE ─╮`; the meta gives way to the badge, then the badge to the
   -- border.
-  local lead = "╭" .. M.RULE .. M.EXPANDED
+  local lead = "╭" .. (opts.tail and M.TAIL or M.RULE) .. M.EXPANDED
   local close = " " .. M.RULE .. "╮"
   local show_badge = width - dw(lead) - dw(close) - dw(badge[1]) - 2 >= 8
   local meta_room = width - dw(lead) - dw(close) - 2 - (show_badge and dw(badge[1]) + 1 or 0)

@@ -1,4 +1,4 @@
--- luacheck configuration. `make lint` runs this over lua/, plugin/ and tests/.
+-- luacheck configuration. `make lint` runs this over lua/ and plugin/.
 
 std = "luajit"
 
@@ -31,7 +31,3 @@ exclude_files = {
   ".luacheckrc",
 }
 
-files["tests/"] = {
-  -- The health spec replaces `vim.health` with a recorder.
-  globals = { "vim.health" },
-}

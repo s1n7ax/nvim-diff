@@ -44,6 +44,18 @@ M.OPTIONS = {
 function M.pane(win, buf, opts)
   api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
   api.nvim_win_set_buf(win, buf)
+  -- nvim-ufo attaches on `BufWinEnter` and replaces a window's manual folds with ones from
+  -- its providers, which hides changed rows and unmirrors the panes. Keep it attached, so
+  -- its `foldtext` still draws the folds, but with no providers: what its own
+  -- `provider_selector` returning `''` does.
+  if package.loaded["ufo"] then
+    pcall(function()
+      local fb = require("ufo.fold").get(buf)
+      if fb then
+        fb.providers = { "" }
+      end
+    end)
+  end
   for name, value in pairs(M.OPTIONS) do
     api.nvim_set_option_value(name, value, { win = win, scope = "local" })
   end

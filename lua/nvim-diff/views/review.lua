@@ -882,8 +882,8 @@ function Review:with_thread_id(thread)
     end
   end
   local state = self.view.thread_state
-  if found and state and state.expanded[thread.id] then
-    state.expanded[found.id] = true
+  if found and state and state.expanded[thread.id] ~= nil then
+    state.expanded[found.id] = state.expanded[thread.id]
   end
   self.view:set_threads(list)
   if not found then

@@ -65,7 +65,6 @@ local SIDES = { "old", "new" }
 ---@field fold_base NvimDiff.Fold[] The folds the pair opened with; collapsing restores them.
 ---@field fold_step integer
 ---@field fold_opts false|NvimDiff.FoldOpts The spec's `fold`: false when folding is off.
----@field scopes { old?: integer[], new?: integer[] } Scope-line index per side, built lazily.
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[] Ids in insertion order, so equal rows keep it.
 ---@field private augroup integer
@@ -106,7 +105,6 @@ function M.open(spec)
     fold_base = base,
     fold_step = fold_opts and fold_opts.step or fold.STEP,
     fold_opts = fold_opts,
-    scopes = {},
   }, Pair)
 
   for _, side in ipairs(SIDES) do
@@ -481,7 +479,6 @@ function Pair:close(opts)
     end
   end
   for _, side in ipairs(SIDES) do
-    folds_scene.forget(self.bufs[side])
     buffer.release(self.bufs[side])
   end
 end

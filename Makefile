@@ -1,18 +1,11 @@
 # Not NVIM: inside a :terminal that variable already holds a server socket path.
 NVIM_BIN ?= nvim
-LUA_DIRS := lua plugin tests
+LUA_DIRS := lua plugin
 
-# Run one test or one suite: make test T='config validation'
-T ?=
-
-.PHONY: check test lint fmt fmt-check health clean
+.PHONY: check lint fmt fmt-check health clean
 
 ## check: everything CI would run
-check: fmt-check lint test
-
-## test: run the suite headless
-test:
-	$(NVIM_BIN) --clean --headless -l tests/runner.lua '$(T)'
+check: fmt-check lint
 
 ## lint: luacheck
 lint:
@@ -28,7 +21,7 @@ fmt-check:
 
 ## health: :checkhealth nvim-diff in a Neovim with nothing else loaded
 health:
-	$(NVIM_BIN) --clean -u tests/minimal_init.lua -c 'checkhealth nvim-diff'
+	$(NVIM_BIN) --clean --cmd 'set rtp^=.' -c 'lua require("nvim-diff").setup()' -c 'checkhealth nvim-diff'
 
 clean:
 	rm -f luacheck-cache

@@ -53,7 +53,6 @@ local M = {}
 ---@field fold_opts false|NvimDiff.FoldOpts The spec's `fold`: false when folding is off.
 ---@field fold_step integer
 ---@field ranges NvimDiff.UnifiedFoldRange[] `folds` as buffer lines of the pane.
----@field scopes { new?: integer[] } Scope-line index of the new file, built lazily.
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[]
 ---@field private augroup integer
@@ -92,7 +91,6 @@ function M.open(spec)
     fold_step = fold_opts and fold_opts.step or fold.STEP,
     fold_opts = fold_opts,
     ranges = {},
-    scopes = {},
   }, Unified)
 
   self.buf = buffer.create({
@@ -239,18 +237,7 @@ end
 --- Rebuild the window's folds from `folds`. Moves the view: callers restore it.
 function Unified:apply_folds()
   self.ranges = unified.fold_ranges(self.layout, self.folds)
-  local list = {}
-  for i, f in ipairs(self.folds) do
-    local _, last = fold.side_lines(self.diff, f, "new")
-    list[i] = {
-      first = self.ranges[i].first,
-      last = self.ranges[i].last,
-      -- Unchanged lines show the new side's text, so the scope is named from it.
-      text = folds_scene.label(self.diff, f, self.lines.new, last or 0, self.scopes, "new"),
-      group = fold.group(f),
-    }
-  end
-  folds_scene.build(self.win, self.buf, list)
+  folds_scene.build(self.win, self.ranges)
 end
 
 --- The side and file line under the cursor, when the current window is the pane.
@@ -412,7 +399,6 @@ function Unified:close(opts)
       api.nvim_win_set_buf(self.win, api.nvim_create_buf(true, false))
     end
   end
-  folds_scene.forget(self.buf)
   buffer.release(self.buf)
 end
 

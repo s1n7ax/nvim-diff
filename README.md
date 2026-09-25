@@ -285,15 +285,15 @@ highlights = {
 | Where | Groups |
 | --- | --- |
 | Diff panes | `NvimDiffDelLine` `NvimDiffAddLine` `NvimDiffDelToken` `NvimDiffAddToken` `NvimDiffContextSeparator` `NvimDiffReformatSeparator` `NvimDiffFiller` `NvimDiffHeader` |
-| Comment threads | `NvimDiffThreadBorder` `NvimDiffThreadBadgeUnresolved` `NvimDiffThreadBadgeResolved` `NvimDiffThreadAuthor` `NvimDiffThreadBody` `NvimDiffThreadMeta` `NvimDiffThreadResolved` |
+| Comment threads | `NvimDiffThreadBorder` `NvimDiffThreadBorderActive` `NvimDiffThreadBadgeUnresolved` `NvimDiffThreadBadgeResolved` `NvimDiffThreadAuthor` `NvimDiffThreadBody` `NvimDiffThreadMeta` `NvimDiffThreadResolved` |
 | Comment split | `NvimDiffCommentHeader` `NvimDiffCommentHint` `NvimDiffCommentError` `NvimDiffCommentPosting` |
 | Key menu | `NvimDiffHelpKey` `NvimDiffHelpBorder` `NvimDiffHelpTitle` |
 | File panel | `NvimDiffPanelTitle` `NvimDiffPanelDir` `NvimDiffPanelPath` `NvimDiffPanelOldPath` `NvimDiffPanelInsertions` `NvimDiffPanelDeletions` `NvimDiffPanelSelected` `NvimDiffPanelViewed` `NvimDiffPanelRechanged` `NvimDiffPanelDeferred` `NvimDiffPanelStatusAdded` `NvimDiffPanelStatusModified` `NvimDiffPanelStatusDeleted` `NvimDiffPanelStatusConflicted` |
 | Conflict result | `NvimDiffConflictMarker` `NvimDiffConflictOurs` `NvimDiffConflictBase` `NvimDiffConflictTheirs` |
 | History panel | `NvimDiffHistoryHash` `NvimDiffHistoryDate` `NvimDiffHistoryAuthor` `NvimDiffHistoryRename` `NvimDiffHistoryError` `NvimDiffHistoryMarked` `NvimDiffHistoryLineRange` |
 
-Diff groups set a background only, so syntax colours show through. Inside plugin windows
-`Folded` links to `NvimDiffContextSeparator`. `:h nvim-diff-highlights` says what each one
+Diff groups set a background only, so syntax colours show through. `NvimDiffContextSeparator`
+links to your colorscheme's `Folded`. `:h nvim-diff-highlights` says what each one
 colours.
 
 ## PR review in short
@@ -324,17 +324,11 @@ and only when you run it.
 ## Development
 
 ```
-make check           # format check, lint, tests
-make test            # nvim --clean --headless -l tests/runner.lua
-make test T=config   # only tests whose name matches
+make check           # format check, lint
 make health          # :checkhealth nvim-diff with nothing else loaded
 ```
 
-Tests need only `nvim` on `$PATH`; `make lint` and `make fmt` need `luacheck` and
-`stylua`. Scrolling is tested in a second Neovim driven over RPC (`tests/child.lua`); keep
-test screens at or below 80x24, since a headless Neovim with no UI segfaults on redraw
-when larger. `tests/spec/doc_spec.lua` checks this README's defaults block and the help
-file's tags against the code.
+`make lint` and `make fmt` need `luacheck` and `stylua`.
 
 ## Licence
 
