@@ -187,6 +187,7 @@ function M.open(opts)
       left = left,
       right = head,
       title = ("#%d %s"):format(number, pr.title or ""),
+      review = true,
     })
   end
   if not wt_repo or not view_ok then

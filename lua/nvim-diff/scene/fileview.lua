@@ -61,6 +61,10 @@ local M = {}
 ---@field on_scene? fun(view: NvimDiff.FileView)
 --- Context folding, as `NvimDiff.PairSpec.fold`, for both layouts.
 ---@field fold? false|{ context?: integer, step?: integer }
+--- Side-by-side only, as `NvimDiff.PairSpec.winbar` and `.signs`; unified keeps its header
+--- line and has no sign column.
+---@field winbar? boolean
+---@field signs? boolean
 
 ---@class NvimDiff.FileView
 ---@field layout NvimDiff.Layout
@@ -210,7 +214,16 @@ end
 ---@param folds? NvimDiff.Fold[] Folds to carry over from the scene being replaced.
 function View:open_pair(wins, folds)
   local s = self.spec
-  self.scene = pair.open({ diff = self:diff(), old = s.old, new = s.new, wins = wins, fold = s.fold, folds = folds })
+  self.scene = pair.open({
+    diff = self:diff(),
+    old = s.old,
+    new = s.new,
+    wins = wins,
+    fold = s.fold,
+    folds = folds,
+    winbar = s.winbar,
+    signs = s.signs,
+  })
   self:after_open({ self.scene.bufs.old, self.scene.bufs.new })
 end
 
@@ -283,7 +296,7 @@ function View:cursor()
   end)
   if closed > 0 then
     lnum = p.map:file_line(side, closed)
-  elseif not lnum and api.nvim_win_get_cursor(win)[1] > 1 then
+  elseif not lnum and api.nvim_win_get_cursor(win)[1] == p.map:trailer_line(side) then
     lnum = p.diff[side .. "_count"] -- the trailer: the side's last line
   end
   local view = api.nvim_win_call(win, vim.fn.winsaveview)
@@ -329,7 +342,7 @@ end
 ---@param winline integer
 local function place_pair(p, side, bl, winline)
   local win = p.wins[side]
-  local v = math.max(0, math.min((p.map:line_view(side, bl) or 0) - (winline - 1), p.map:max_top()))
+  local v = math.max(0, math.min((p.map:line_view(side, bl) or 0) - (winline - 1), p:max_top()))
   local tl, tf = p.map:view_top(side, v)
   api.nvim_win_call(win, function()
     vim.fn.winrestview({ topline = tl or 1, topfill = tf or 0, lnum = bl, col = 0, curswant = 0 })

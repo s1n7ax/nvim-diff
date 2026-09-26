@@ -2,18 +2,26 @@
 --- pane sits on screen, measured in rows from the top of the pane.
 ---
 --- Both panes have the same view rows, which is what alignment *means*: view row `v` holds
---- the header (`v = 0`), a line of the file, a filler row, a row of an inserted block
---- (a comment thread and the blank padding opposite it), or a separator row standing for a
---- whole fold (`render/fold.lua`), on each side. Every display row inside a fold has the
---- fold's view row, so view rows ascend with display rows but not strictly. The scroll corrector
---- reads one pane's `topline`/`topfill`, turns it into a view row, and asks where the other
---- pane must put its top to show the same view row.
+--- the header (`v = 0`, when there is one), a line of the file, a filler row, a row of an
+--- inserted block (a comment thread and the blank padding opposite it), or a separator row
+--- standing for a whole fold (`render/fold.lua`), on each side. Every display row inside a
+--- fold has the fold's view row, so view rows ascend with display rows but not strictly. The
+--- scroll corrector reads one pane's `topline`/`topfill`, turns it into a view row, and asks
+--- where the other pane must put its top to show the same view row.
 ---
 --- Buffer layout, both panes: line 1 is the header, line `n + 1` is the file's line `n`,
---- and when `trailer` is set there is one more, empty, line at the end. The trailer exists
---- only when the last display row has filler on one side: `topfill` counts virtual lines
---- *above* a line, so a top that lands inside virtual lines below the last buffer line
---- cannot be expressed, and the other pane would scroll further than this one.
+--- and when `trailer` is set for the side there is one more, empty, line at the end. The
+--- trailer exists only when the last display row has filler on one side: `topfill` counts
+--- virtual lines *above* a line, so a top that lands inside virtual lines below the last
+--- buffer line cannot be expressed, and the other pane would scroll further than this one.
+---
+--- A pair that shows its headers as winbars (a PR review, whose head pane is to be the real
+--- file) has no header line: line `n` is the file's line `n`, view row 0 is the first
+--- display row, and what comes before the first line — leading filler, a block after row 0
+--- — hangs *above* buffer line 1 (anchor -1), shown only with `topfill`. The header is
+--- pair-wide, since the panes share view row 0. A side can also be denied the trailer (a
+--- real file cannot grow a line): it then stops at its last line, `max_top` differs per
+--- side, and the corrector keeps both panes at or above the smaller one.
 ---
 --- Pure data: no windows, no buffers.
 
@@ -27,9 +35,16 @@ local M = {}
 --- Extra rows inserted into both panes after one display row: content on one side, the
 --- other side padded with blank rows to the same height. Comment threads are built on it.
 ---@class NvimDiff.Block
----@field row integer Display row it follows; 0 = directly under the header.
+---@field row integer Display row it follows; 0 = above the first row (under the header).
 ---@field old? NvimDiff.VirtLine[]
 ---@field new? NvimDiff.VirtLine[]
+
+--- How the pane buffers are laid out around the file's lines.
+---@class NvimDiff.RowMapLayout
+--- Buffer line 1 of both panes is the header. Default true.
+---@field header? boolean
+--- Sides allowed to end with the trailer line, when the diff needs one. Default: both.
+---@field trailer? { old?: boolean, new?: boolean }
 
 --- The line of `side` on display row `d`, nil where that side is filler.
 ---@param diff NvimDiff.Diff
@@ -46,7 +61,8 @@ end
 
 ---@class NvimDiff.RowMap
 ---@field diff NvimDiff.Diff
----@field trailer boolean Whether both buffers end with the extra trailer line.
+---@field header boolean Whether both buffers start with the header line.
+---@field trailer { old: boolean, new: boolean } Which buffers end with the extra trailer line.
 ---@field blocks NvimDiff.Block[] Sorted by `row`, stable.
 ---@field folds NvimDiff.Fold[] Sorted, disjoint; no block sits after a row inside one.
 ---@field private hidden integer[] `hidden[i]`: rows `folds[1..i]` take out of the view.
@@ -66,6 +82,22 @@ function M.needs_trailer(diff)
   return old == nil or new == nil
 end
 
+--- Which sides end with the trailer line: those allowed to, when the diff needs one, and,
+--- without a header, a side with no lines at all — its buffer still has a line, and its
+--- filler needs one to hang from.
+---@param diff NvimDiff.Diff
+---@param header boolean
+---@param allow { old?: boolean, new?: boolean }
+---@return { old: boolean, new: boolean }
+local function trailers(diff, header, allow)
+  local needs = M.needs_trailer(diff)
+  local out = {}
+  for _, side in ipairs({ "old", "new" }) do
+    out[side] = (needs and allow[side] ~= false) or (not header and diff[side .. "_count"] == 0)
+  end
+  return out
+end
+
 --- Height of a block, the same on both sides.
 ---@param block NvimDiff.Block
 ---@return integer
@@ -76,8 +108,9 @@ end
 ---@param diff NvimDiff.Diff
 ---@param blocks? NvimDiff.Block[] Any order; sorted here (stably, by `row`).
 ---@param folds? NvimDiff.Fold[] Closed folds, sorted and disjoint.
+---@param layout? NvimDiff.RowMapLayout
 ---@return NvimDiff.RowMap
-function M.new(diff, blocks, folds)
+function M.new(diff, blocks, folds, layout)
   local sorted = {}
   for i, b in ipairs(blocks or {}) do
     assert(b.row >= 0 and b.row <= diff.rows, "nvim-diff: block row out of range")
@@ -108,9 +141,11 @@ function M.new(diff, blocks, folds)
   for _, b in ipairs(list) do
     assert(not fold.find(folds, b.row), "nvim-diff: block inside a fold")
   end
+  local header = not layout or layout.header ~= false
   return setmetatable({
     diff = diff,
-    trailer = M.needs_trailer(diff),
+    header = header,
+    trailer = trailers(diff, header, layout and layout.trailer or {}),
     blocks = list,
     block_rows = heights,
     cum = cum,
@@ -162,26 +197,38 @@ function RowMap:folded_before(d)
   return self.hidden[found]
 end
 
+--- Buffer lines before the file's first line: 1 with the header, else 0.
+---@return integer
+function RowMap:head()
+  return self.header and 1 or 0
+end
+
 --- View row of display row `d` (`rows + 1` stands for the trailer). Every row of a fold
 --- maps to the fold's one row.
 ---@param d integer
 ---@return integer
 function RowMap:row_view(d)
-  return d + self:blocks_before(d) - self:folded_before(d)
+  return d - 1 + self:head() + self:blocks_before(d) - self:folded_before(d)
 end
 
---- Total view rows in each pane, header and trailer included, blocks after the last row
---- included, each fold counted as one row.
+--- Total view rows in `side`'s pane, header and trailer included, blocks after the last
+--- row included, each fold counted as one row.
+---@param side NvimDiff.Side
 ---@return integer
-function RowMap:height()
-  return 1 + self.diff.rows + (self.trailer and 1 or 0) + (self.cum[#self.cum] or 0) - (self.hidden[#self.hidden] or 0)
+function RowMap:height(side)
+  return self:head()
+    + self.diff.rows
+    + (self.trailer[side] and 1 or 0)
+    + (self.cum[#self.cum] or 0)
+    - (self.hidden[#self.hidden] or 0)
 end
 
---- Buffer line of the file's line `lnum` (either side): the header shifts everything by one.
+--- Buffer line of the file's line `lnum` (either side): the header, when there is one,
+--- shifts everything by one.
 ---@param lnum integer
 ---@return integer
-function M.buf_line(lnum)
-  return lnum + 1
+function RowMap:buf_line(lnum)
+  return lnum + self:head()
 end
 
 --- The file's line on buffer line `bl` of `side`, or nil on the header and the trailer.
@@ -189,7 +236,7 @@ end
 ---@param bl integer
 ---@return integer?
 function RowMap:file_line(side, bl)
-  local lnum = bl - 1
+  local lnum = bl - self:head()
   if lnum >= 1 and lnum <= self.diff[side .. "_count"] then
     return lnum
   end
@@ -200,7 +247,7 @@ end
 ---@param side NvimDiff.Side
 ---@return integer?
 function RowMap:trailer_line(side)
-  return self.trailer and self.diff[side .. "_count"] + 2 or nil
+  return self.trailer[side] and self:buf_line(self.diff[side .. "_count"]) + 1 or nil
 end
 
 --- View row of buffer line `bl` on `side`.
@@ -208,7 +255,7 @@ end
 ---@param bl integer
 ---@return integer?
 function RowMap:line_view(side, bl)
-  if bl == 1 then
+  if self.header and bl == 1 then
     return 0
   end
   local lnum = self:file_line(side, bl)
@@ -251,7 +298,7 @@ end
 
 --- Where a pane showing `side` must put its top so view row `v` is its first screen row.
 --- Nil when no top can show it: `v` is out of range, or inside virtual rows after the last
---- buffer line (which neither pane can scroll into, so both stop at the same place).
+--- buffer line (which the pane cannot scroll into).
 ---@param side NvimDiff.Side
 ---@param v integer
 ---@return integer? topline
@@ -260,7 +307,7 @@ function RowMap:view_top(side, v)
   if v < 0 then
     return nil, nil
   end
-  if v == 0 then
+  if self.header and v == 0 then
     return 1, 0
   end
   local rows = self.diff.rows
@@ -282,8 +329,8 @@ function RowMap:view_top(side, v)
   d = self:next_real_row(side, d)
   local bl
   if d <= rows then
-    bl = side_line(self.diff, side, d) + 1
-  elseif self.trailer then
+    bl = self:buf_line(side_line(self.diff, side, d))
+  elseif self.trailer[side] then
     bl = self:trailer_line(side)
   else
     return nil, nil
@@ -291,30 +338,35 @@ function RowMap:view_top(side, v)
   return bl, self:row_view(d) - v
 end
 
---- The last view row that can be at the top of a pane: the last buffer line's.
+--- The last view row that can be at the top of `side`'s pane: its last buffer line's.
+---@param side NvimDiff.Side
 ---@return integer
-function RowMap:max_top()
-  if self.trailer then
+function RowMap:max_top(side)
+  if self.trailer[side] then
     return self:row_view(self.diff.rows + 1)
   end
-  return self.diff.rows > 0 and self:row_view(self.diff.rows) or 0
+  local count = self.diff[side .. "_count"]
+  if count == 0 then
+    return 0 -- the header is the only line
+  end
+  return self:row_view(self.diff:row_of(side, count))
 end
 
 --- Anchor of the virtual rows that follow display row `d` on `side`: the 0-based buffer
---- row of the last line of `side` at or above `d` (0 is the header).
+--- row of the last line of `side` at or above `d` (0 is the header). -1 when there is none,
+--- not even a header: the rows then hang above buffer row 0.
 ---@param side NvimDiff.Side
 ---@param d integer
 ---@return integer
 function RowMap:anchor(side, d)
   if d == 0 then
-    return 0
+    return self:head() - 1
   end
   local lnum = side_line(self.diff, side, d)
-  if lnum then
-    return lnum
+  if not lnum then
+    lnum = self:filler_at(side, d).after
   end
-  local f = self:filler_at(side, d)
-  return f.after
+  return self:buf_line(lnum) - 1
 end
 
 --- The filler block of `side` covering display row `d`.

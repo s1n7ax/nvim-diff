@@ -76,6 +76,10 @@ local by_tab = {}
 ---@field range? NvimDiff.Git.Range
 ---@field resolve_opts? NvimDiff.Git.ResolveOpts Passed back to `revparse.toggle`.
 ---@field paths? string[] Limit the listing to these git paths.
+--- A PR review's view: side-by-side panes show their headers as winbars, the head side
+--- has no trailer line, and both panes have a sign column — the layout the head pane needs
+--- to show the real file in the review worktree.
+---@field review? boolean
 
 ---@class NvimDiff.DiffView
 ---@field repo NvimDiff.Git.Repo
@@ -85,6 +89,7 @@ local by_tab = {}
 ---@field range? NvimDiff.Git.Range
 ---@field resolve_opts? NvimDiff.Git.ResolveOpts
 ---@field paths? string[]
+---@field review? boolean
 ---@field augroup? integer Auto-refresh autocmds, for a worktree or index right side.
 ---@field list NvimDiff.FileList
 ---@field listing NvimDiff.Listing
@@ -190,6 +195,7 @@ function M.open(opts)
     range = opts.range,
     resolve_opts = opts.resolve_opts,
     paths = opts.paths,
+    review = opts.review,
     listing = opts.listing or cfg.panel.listing,
     collapsed = {},
     layouts = setmetatable({}, { __mode = "k" }),
@@ -608,7 +614,10 @@ function View:show_diff(entry)
       name = self:buf_name(right, entry.path),
       lang = lang_for(entry.path),
       keep = right.type == "commit",
+      trailer = not self.review,
     },
+    winbar = self.review,
+    signs = self.review,
     wins = layout == "unified" and { win = wins[1] } or { old = wins[1], new = wins[2] },
     on_scene = function(file)
       self:on_scene(entry, file)

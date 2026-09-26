@@ -210,6 +210,12 @@ are never touched. The diff is computed locally from the merge-base.
 Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
 buffers on the worktree's files and removes the worktree.
 
+In the side-by-side layout the file names sit in each pane's 'winbar' instead
+of on a first line, and both panes have a one-sign 'signcolumn'. Lines added
+or deleted above a file's first line show above it; `gg` and `<C-Home>` go
+back to them. A pane stops at its last line: neither pane scrolls further
+than the other can follow.
+
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
@@ -622,6 +628,7 @@ Diff panes ~
   *NvimDiffReformatSeparator*  the "reformatted" band
      *NvimDiffFiller*             filler: a line exists on the other side only
              *NvimDiffHeader*             the header line at the top of a pane
+                               (its 'winbar' in a PR review's side-by-side)
 
 Comment threads and the comment split ~
   *NvimDiffThreadBorder*       a thread bubble's border
