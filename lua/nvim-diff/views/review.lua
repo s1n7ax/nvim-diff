@@ -1,9 +1,9 @@
---- A GitHub PR review: the PR checked out into its own worktree, diffed in its own tabpage,
---- with GitHub's per-file viewed marks in the file panel.
+--- A GitHub PR review: the PR checked out into a review slot (a kept worktree), diffed in
+--- its own tabpage, with GitHub's per-file viewed marks in the file panel.
 ---
 ---     local review = require("nvim-diff.views.review").open({ number = 42 })
 ---     review:mark_viewed() -- marks the current file viewed on GitHub, jumps to the next unviewed
----     review:close()       -- closes the tab and removes the worktree
+---     review:close()       -- closes the tab and releases the review slot
 ---
 --- Opening a review:
 ---
@@ -13,14 +13,16 @@
 --- 3. diffs `merge-base(base, head)` against `head`, both as commits, locally with git —
 ---    never GitHub's `/pulls/{n}/files`;
 --- 4. reads every file's viewed state (`github/viewed.lua`);
---- 5. checks `head` out, detached, into `<common git dir>/nvim-diff/pr-<n>`
----    (`git/worktree.lua`), so LSP, tests and the debugger see the PR's code while the
----    user's branch and uncommitted changes are never touched;
---- 6. opens a `views/diff.lua` view on the worktree in a new tabpage, `:tcd` to the
----    worktree, and selects the first file not yet viewed.
+--- 5. checks `head` out, detached, into the lowest free review slot
+---    `<common git dir>/nvim-diff/review-<k>` (`git/worktree.lua`), so LSP, tests and the
+---    debugger see the PR's code while the user's branch and uncommitted changes are never
+---    touched, and files git ignores there (`node_modules/`) are kept from earlier reviews;
+--- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
+---    selects the first file not yet viewed.
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
---- closes the view, wipes any buffer on a file inside the worktree and removes the worktree.
+--- closes the view, wipes any buffer on a file inside the slot and releases the slot. The
+--- slot's folder stays on disk for the next review; only the user removes it.
 ---
 --- Viewed state lives on GitHub only. `keymaps.review.mark_viewed` posts the mark, then
 --- jumps to the next file that is not viewed (unviewed or re-changed), in panel order;
@@ -62,7 +64,7 @@ local api = vim.api
 
 local M = {}
 
---- Open reviews by PR number. One worktree per PR, so one review per PR.
+--- Open reviews by PR number: reopening an open PR enters its tab. Each holds its own slot.
 ---@type table<integer, NvimDiff.Review>
 local by_number = {}
 
@@ -72,10 +74,10 @@ local by_number = {}
 ---@field remote? string The remote the PR lives on and is fetched from. Defaults to `origin`.
 
 ---@class NvimDiff.Review
----@field repo NvimDiff.Git.Repo The user's repository, which owns the worktree.
+---@field repo NvimDiff.Git.Repo The user's repository, which owns the review slot.
 ---@field number integer
 ---@field pr NvimDiff.GitHub.PR
----@field path string The worktree.
+---@field path string The review slot the PR is checked out in.
 ---@field cwd string The cwd before the review opened, restored on a tabpage that outlives it.
 ---@field view NvimDiff.DiffView
 ---@field augroup integer
@@ -172,9 +174,9 @@ function M.open(opts)
   end
 
   local wt_path
-  wt_path, err = worktree.add(repo, number, head)
+  wt_path, err = worktree.acquire(repo, head)
   if not wt_path then
-    fail(("cannot check PR #%d out into a worktree: %s"):format(number, msg(err)))
+    fail(("cannot check PR #%d out into a review slot: %s"):format(number, msg(err)))
   end
 
   local cwd = vim.fn.getcwd()
@@ -190,7 +192,7 @@ function M.open(opts)
     })
   end
   if not wt_repo or not view_ok then
-    worktree.remove(repo, number)
+    worktree.release(repo, wt_path)
     fail(wt_repo and tostring(view):gsub("^nvim%-diff: ", "") or msg(err))
   end
 
@@ -247,14 +249,14 @@ function Review:trap()
     group = self.augroup,
     callback = function()
       -- Before `VimLeavePre`, where session plugins save the tabpage cwd; a session
-      -- restored into the removed worktree fails its `:tcd`.
+      -- restored into the slot would land in whatever PR the slot holds by then.
       self:leave_worktree(self.view.tab)
     end,
   })
   api.nvim_create_autocmd("VimLeavePre", {
     group = self.augroup,
     callback = function()
-      -- Neovim is going away with its windows; only the worktree needs removing.
+      -- Neovim is going away with its windows; only the slot needs releasing.
       self:close({ windows = false })
     end,
   })
@@ -1024,7 +1026,8 @@ function Review:reply_and_resolve()
   end)
 end
 
---- Wipe every buffer on a file inside the worktree: the files are about to be deleted.
+--- Wipe every buffer on a file inside the slot: the next review checks another PR out
+--- over those files.
 function Review:wipe_buffers()
   local root = path.real(self.path) or self.path
   local modified = {}
@@ -1042,10 +1045,7 @@ function Review:wipe_buffers()
   end
 end
 
---- End the review: close its view and tabpage, wipe buffers on the worktree's files and
---- remove the worktree. Idempotent.
----@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
---- `:tcd` tabpage `tab` back to where the review was started, out of the worktree.
+--- `:tcd` tabpage `tab` back to where the review was started, out of the slot.
 ---@param tab integer
 function Review:leave_worktree(tab)
   if api.nvim_tabpage_is_valid(tab) then
@@ -1055,6 +1055,9 @@ function Review:leave_worktree(tab)
   end
 end
 
+--- End the review: close its view and tabpage, wipe buffers on the slot's files and
+--- release the slot, keeping its folder. Idempotent.
+---@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
 function Review:close(opts)
   local windows = not (opts and opts.windows == false)
   if self.closed then
@@ -1087,16 +1090,16 @@ function Review:close(opts)
     if not self.view.closed then
       pcall(self.view.close, self.view)
     end
-    -- The last tabpage survives its view; take it back out of the worktree.
+    -- The last tabpage survives its view; take it back out of the slot.
     self:leave_worktree(tab)
     self:wipe_buffers()
   else
-    -- Leaving the cwd inside the removed worktree breaks `VimLeave` handlers that read it.
+    -- Quitting: nothing saved on the way out (a session) may keep the cwd in the slot.
     self:leave_worktree(self.view.tab)
   end
-  local ok, err = worktree.remove(self.repo, self.number)
+  local ok, err = worktree.release(self.repo, self.path)
   if not ok then
-    log.error("cannot remove PR #%d's worktree %s: %s", self.number, self.path, msg(err))
+    log.error("cannot release PR #%d's review slot %s: %s", self.number, self.path, msg(err))
   end
 end
 

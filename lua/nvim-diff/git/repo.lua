@@ -14,7 +14,7 @@ local M = {}
 ---@class NvimDiff.Git.Repo
 ---@field toplevel string Root of the work tree.
 ---@field gitdir string This work tree's git directory (`.git`, or `.git/worktrees/<id>` in a linked worktree).
----@field common_dir string The git directory shared by all worktrees; where `nvim-diff/pr-<n>` lives.
+---@field common_dir string The git directory shared by all worktrees; where the `nvim-diff/review-<k>` slots live.
 
 --- The repository containing `p` (a file or directory; the cwd when omitted).
 ---@param p? string

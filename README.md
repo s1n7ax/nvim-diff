@@ -24,8 +24,9 @@ review mode on top.
 - **Every diffview workflow**: working tree, index, branch to branch (merge-base by
   default, like a PR), file / folder / repository / line history, range compare, and a
   three-way merge conflict view with a base pane.
-- **GitHub PR review**: the PR is checked out into its own git worktree so LSP and tests
-  work on its code; viewed marks sync with GitHub; comment threads show inline and expand
+- **GitHub PR review**: the PR is checked out into a kept git worktree (a review slot) so
+  LSP and tests work on its code, and packages you installed there survive to the next
+  review; viewed marks sync with GitHub; comment threads show inline and expand
   in place; comments, replies, edits, suggestions, resolve and the review verdict all post
   straight to GitHub. github.com and GitHub Enterprise Server.
 
@@ -298,11 +299,27 @@ colours.
 
 ## PR review in short
 
-`:NvimDiffPR 42` fetches the PR through `gh`, checks its head out into
-`<git dir>/nvim-diff/pr-42` (a separate worktree — your branch and uncommitted changes are
-never touched) and opens it in a tabpage whose `:tcd` is that worktree. The diff is
-computed locally with git. Closing the tab removes the worktree. Nothing is kept locally:
-reopening a PR refetches viewed marks and threads from GitHub.
+`:NvimDiffPR 42` fetches the PR through `gh`, checks its head out, detached, into a
+review slot — a separate worktree at `<git dir>/nvim-diff/review-1`, so your branch and
+uncommitted changes are never touched — and opens it in a tabpage whose `:tcd` is that
+slot. The diff is computed locally with git. Reopening a PR refetches viewed marks and
+threads from GitHub.
+
+Review slots are kept:
+
+- Closing the review releases its slot but leaves the folder on disk. The next PR is
+  checked out into the same folder, so whatever git ignores there — `node_modules/`, a
+  virtualenv, build output — is still in place. Install packages in a slot by hand once;
+  nvim-diff never runs an install or setup command, and git hooks are off for its
+  checkouts.
+- Each checkout discards changes to tracked files and removes untracked files git does
+  not ignore. Anything you want kept must be ignored (`.gitignore`, `.git/info/exclude` or
+  your global excludes file).
+- A second review open at the same time — in the same Neovim or another — gets its own
+  slot, `review-2`, and so on. A slot is taken by locking it (`git worktree lock`) with the
+  Neovim's pid; a slot locked by a Neovim that crashed is free again.
+- nvim-diff never removes a slot. `:checkhealth nvim-diff` lists them; remove one that is
+  not in use with `git worktree remove --force <path>`.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
@@ -315,7 +332,6 @@ and only when you run it.
   verdict — is tested against a stub `gh`, not a live PR.
 - Nothing is refetched while a review is open; reopen the PR to see new comments.
 - File-level comments need a GHES version that supports `subject_type=file`.
-- Opening the same PR in two Neovim instances hands the worktree to the second.
 - Structural diff ignores injected languages and has no notion of moved code; it runs
   synchronously when a file opens.
 - No hunk or file staging, and no staged/unstaged split in the working-tree view.

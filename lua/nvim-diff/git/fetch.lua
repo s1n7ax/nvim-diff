@@ -7,8 +7,8 @@
 ---
 --- Nothing is written to the user's ref namespace: the fetch has no destination, so it
 --- lands in `FETCH_HEAD` only, and the plugin keeps no local state. The head commit stays
---- reachable through the worktree's own `HEAD` while the review is open; the base commit
---- is only needed for the merge-base, which is computed straight after.
+--- reachable through the review slot's own `HEAD` until the slot holds another PR; the base
+--- commit is only needed for the merge-base, which is computed straight after.
 ---
 --- No fetch happens when every commit is already present.
 
