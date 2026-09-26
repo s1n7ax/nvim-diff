@@ -1,4 +1,4 @@
---- Review slots: kept worktrees at `<common git dir>/nvim-diff/review-<k>`.
+--- Review slots: kept worktrees at `stdpath("data")/nvim-diff/slots/<repo>-<hash>/review-<k>`.
 ---
 --- A PR is checked out, detached, into a slot so LSP, tests and debugging see the PR's
 --- code while the user's branch and uncommitted changes are never touched. A slot outlives
@@ -7,6 +7,12 @@
 --- installed by hand once serve every later review. The plugin never installs anything,
 --- never removes a slot and has no cleanup command: the user removes slots by hand, and
 --- `:checkhealth nvim-diff` lists them.
+---
+--- Slots live outside the repository, in Neovim's data directory, one folder per
+--- repository. Nested anywhere in the repository — its `.git/` included — a language
+--- server's upward search for a root marker the slot lacks (an ignored
+--- `compile_commands.json`, or a `.git/` directory where a slot has a `.git` file) would
+--- climb into the user's checkout, and the checkout's client would take the slot's files.
 ---
 --- One open review holds one slot. A review takes the lowest-numbered slot no running
 --- Neovim holds, so a second review open at the same time — in this Neovim or another —
@@ -23,10 +29,15 @@
 --- it, so a `post-checkout` hook cannot run an install.
 ---
 --- A slot git and the disk disagree about is handled when a review looks for one:
---- - registered, folder gone or empty (removed by hand with `rm`): re-created;
---- - folder present, not registered: `git worktree repair` is tried, which relinks a slot
----   of a repository that was moved; otherwise the folder is skipped, reported and never
----   deleted.
+--- - registered, folder gone or empty (removed by hand, or the data directory wiped):
+---   re-created;
+--- - folder present, not registered (left by an earlier clone at the same path, or moved
+---   here): skipped, reported and never deleted. It is not relinked with `git worktree
+---   repair`, which rewrites whichever registration now has the id named in the folder's
+---   `.git` file — possibly a worktree made since, which would lose its link.
+---
+--- The folder is keyed by the repository's path: a repository that is moved gets new slots,
+--- and one that is deleted leaves its slots behind. `M.orphans` finds both kinds.
 
 local cmd = require("nvim-diff.git.cmd")
 local errors = require("nvim-diff.git.error")
@@ -73,12 +84,38 @@ local SLOT_ENV = {
 ---@field locked boolean
 ---@field reason? string Nil when unlocked or locked without a reason.
 
---- The folder every slot of `repo` lives in, with symlinks resolved so it compares equal
---- to the paths git records. Inside the common git directory, so it is invisible to
---- `git status` and shared by every worktree of the repository.
+---@class NvimDiff.Git.Orphan
+---@field path string The slot folder.
+---@field gitdir string The git directory its `.git` file names: gone, or another folder's.
+
+--- The folder the slots of every repository live under.
+---@return string
+function M.root()
+  return path.join(vim.fn.stdpath("data"), "nvim-diff", "slots")
+end
+
+--- The folder every slot of `repo` lives in, shared by all of its worktrees:
+--- `<root>/<name>-<hash>`. The hash of the common git directory keeps two repositories —
+--- two clones of one included — apart; the name is for the reader. Symlinks are resolved
+--- once the folder exists, so it compares equal to the paths git records.
 ---@param repo NvimDiff.Git.Repo
 ---@return string
 function M.dir(repo)
+  local common = path.real(repo.common_dir)
+  -- `<top>/.git` is named after `<top>`; a bare `<name>.git` after itself.
+  local name = vim.fs.basename(common)
+  if name == ".git" then
+    name = vim.fs.basename(vim.fs.dirname(common))
+  end
+  name = name:gsub("%.git$", ""):gsub("[^%w._-]", "_")
+  local key = vim.fn.has("win32") == 1 and common:lower() or common
+  return path.real(path.join(M.root(), ("%s-%s"):format(name, vim.fn.sha256(key):sub(1, 12))))
+end
+
+--- The folder slots of an older nvim-diff lived in, inside the common git directory.
+---@param repo NvimDiff.Git.Repo
+---@return string
+local function legacy_dir(repo)
   return path.join(path.real(repo.common_dir), "nvim-diff")
 end
 
@@ -122,17 +159,18 @@ local function occupied(p)
   return handle == nil or vim.uv.fs_scandir_next(handle) ~= nil
 end
 
---- `repo`'s registered worktrees inside `M.dir(repo)`, by folder name.
+--- `repo`'s registered worktrees directly inside `dir`, by folder name.
 ---@param repo NvimDiff.Git.Repo
+---@param dir? string Defaults to `M.dir(repo)`.
 ---@return table<string, NvimDiff.Git.WorktreeEntry>? entries
 ---@return NvimDiff.Git.Error? err
 ---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
-local function registered(repo)
+local function registered(repo, dir)
   local porcelain, err = cmd.output(repo.toplevel, { "worktree", "list", "--porcelain" })
   if not porcelain then
     return nil, err
   end
-  local dir = M.dir(repo)
+  dir = dir or M.dir(repo)
   local entries = {}
   -- Records are separated by a blank line; `locked` is optional and may carry a reason.
   for record in (porcelain .. "\n\n"):gmatch("(.-)\n\n") do
@@ -217,20 +255,21 @@ function M.slots(repo)
   return slots
 end
 
---- Worktrees an nvim-diff older than review slots left behind: `nvim-diff/pr-<n>`, which
---- it removed itself when a review ended. Nothing uses them any more.
+--- Worktrees an older nvim-diff left inside the common git directory, which nothing uses
+--- any more: `nvim-diff/pr-<n>`, which it removed itself when a review ended, and
+--- `nvim-diff/review-<k>`, slots from before they moved out of the repository.
 ---@param repo NvimDiff.Git.Repo
 ---@return string[]? paths
 ---@return NvimDiff.Git.Error? err
 ---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
 function M.legacy(repo)
-  local entries, err = registered(repo)
+  local entries, err = registered(repo, legacy_dir(repo))
   if not entries then
     return nil, err
   end
   local paths = {}
   for name, entry in pairs(entries) do
-    if name:match("^pr%-%d+$") then
+    if name:match("^pr%-%d+$") or name:match("^review%-%d+$") then
       paths[#paths + 1] = entry.path
     end
   end
@@ -238,18 +277,48 @@ function M.legacy(repo)
   return paths
 end
 
---- Relink a slot folder git lost track of — its repository was moved, so both sides of
---- the link name the old place. `git worktree repair` is git 2.29 or newer; on an older git
---- this fails and the folder is skipped.
----@param repo NvimDiff.Git.Repo
----@param slot NvimDiff.Git.Slot
----@return boolean repaired
-local function repair(repo, slot)
-  if not path.exists(path.join(slot.path, ".git")) then
-    return false
+--- The path in the first line of file `p`, after `prefix`; one relative to the file's
+--- folder (`worktree.useRelativePaths`) is resolved. Nil when there is no such line.
+---@param p string
+---@param prefix string
+---@return string?
+local function read_link(p, prefix)
+  local file = io.open(p, "r")
+  if not file then
+    return nil
   end
-  local _, err = cmd.output(repo.toplevel, { "worktree", "repair", slot.path })
-  return err == nil
+  -- A directory opens too, but reads as nothing.
+  local line = file:read("*l")
+  file:close()
+  local target = line and vim.startswith(line, prefix) and line:sub(#prefix + 1)
+  return target and target ~= "" and path.normalize(target, vim.fs.dirname(p)) or nil
+end
+
+--- Slot folders of any repository that no repository links to any more: the git directory
+--- their `.git` file names is gone, or links back to another folder. The repository was
+--- deleted, or moved and given new slots (or cloned again at the same path, and the id was
+--- taken since). Read from the disk alone. The folders are left for the user to remove.
+---@return NvimDiff.Git.Orphan[]
+function M.orphans()
+  local root = path.real(M.root())
+  local orphans = {}
+  for repo_name, repo_type in vim.fs.dir(root) do
+    if repo_type == "directory" then
+      local repo_dir = path.join(root, repo_name)
+      for name, slot_type in vim.fs.dir(repo_dir) do
+        local dotgit = path.join(repo_dir, name, ".git")
+        local gitdir = slot_type == "directory" and name:match("^review%-%d+$") and read_link(dotgit, "gitdir: ")
+        local back = gitdir and read_link(path.join(gitdir, "gitdir"), "")
+        if gitdir and not (back and path.real(back) == path.real(dotgit)) then
+          orphans[#orphans + 1] = { path = path.join(repo_dir, name), gitdir = gitdir }
+        end
+      end
+    end
+  end
+  table.sort(orphans, function(a, b)
+    return a.path < b.path
+  end)
+  return orphans
 end
 
 --- Whether a slot is locked by someone other than this Neovim right now.
@@ -377,13 +446,6 @@ function M.acquire(repo, commit)
   end
   for k = 1, M.MAX_SLOTS do
     local slot = classify(repo, k, entries)
-    if slot.state == "unregistered" and repair(repo, slot) then
-      entries, err = registered(repo)
-      if not entries then
-        return nil, err
-      end
-      slot = classify(repo, k, entries)
-    end
     local claimed
     claimed, err = claim(repo, slot, commit)
     if err then
@@ -397,7 +459,8 @@ function M.acquire(repo, commit)
         ---@cast err NvimDiff.Git.Error
         return nil, errors.new(err.kind, ("%s: %s"):format(slot.path, err.message), err)
       end
-      return slot.path
+      -- Resolved now that it exists: the first slot is named before its folders are made.
+      return path.real(slot.path)
     end
   end
   return nil, errors.new("failed", ("all %d review slots in %s are taken"):format(M.MAX_SLOTS, M.dir(repo)))

@@ -300,12 +300,15 @@ colours.
 ## PR review in short
 
 `:NvimDiffPR 42` fetches the PR through `gh`, checks its head out, detached, into a
-review slot — a separate worktree at `<git dir>/nvim-diff/review-1`, so your branch and
-uncommitted changes are never touched — and opens it in a tabpage whose `:tcd` is that
-slot. The diff is computed locally with git. Reopening a PR refetches viewed marks and
-threads from GitHub.
+review slot — a separate worktree, so your branch and uncommitted changes are never
+touched — and opens it in a tabpage whose `:tcd` is that slot. The diff is computed
+locally with git. Reopening a PR refetches viewed marks and threads from GitHub.
 
-Review slots are kept:
+Review slots live outside the repository, in Neovim's data directory:
+`stdpath("data")/nvim-diff/slots/<repo>-<hash>/review-1` (for example
+`~/.local/share/nvim/nvim-diff/slots/myapp-3f9a1c0e2b7d/review-1`), one folder per
+repository. Outside the repository, a language server looking upward for its project
+root from a slot file finds the slot, not your checkout. Review slots are kept:
 
 - Closing the review releases its slot but leaves the folder on disk. The next PR is
   checked out into the same folder, so whatever git ignores there — `node_modules/`, a
@@ -320,6 +323,8 @@ Review slots are kept:
   Neovim's pid; a slot locked by a Neovim that crashed is free again.
 - nvim-diff never removes a slot. `:checkhealth nvim-diff` lists them; remove one that is
   not in use with `git worktree remove --force <path>`.
+- Deleting or moving a repository leaves its slots behind (a moved repository gets new
+  ones). `:checkhealth nvim-diff` lists those too, from any directory, for you to remove.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
