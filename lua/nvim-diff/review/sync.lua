@@ -2,14 +2,14 @@
 --- `keymaps.review.sync`, one GraphQL query (`github/threads.lua` `snapshot`) reads the PR's
 --- state, head commit, base branch and threads.
 ---
---- Detection and signalling only. What GitHub has now is kept on the review as
---- `review.latest`; what the review shows (`review.pr`, the diff, the threads drawn) never
---- changes here.
+--- What GitHub has now is kept on the review as `review.latest`; what the review shows
+--- (`review.pr`, the diff) never changes here. The threads are the exception: every check
+--- hands them to the review, which redraws them when they changed (`review:show_threads`).
 ---
 --- * New code — a new head commit, or the PR retargeted to another base branch — is
----   announced once per change and marked in the panel until the review shows it. A push to
----   the base branch alone is not new code: GitHub's `baseRefOid` is the merge-base, which
----   it does not move.
+---   announced once per change and marked in the panel until the review shows it, with the
+---   count of threads on it that wait for it (`review.held`). A push to the base branch
+---   alone is not new code: GitHub's `baseRefOid` is the merge-base, which it does not move.
 --- * Merged or closed: announced, marked in the panel, and syncing stops. The review stays
 ---   usable; the key still checks, and a PR found open again syncs again.
 ---
@@ -82,6 +82,12 @@ local function echo(text)
   api.nvim_echo({ { "nvim-diff: " .. text } }, false, {})
 end
 
+---@param n integer
+---@return string
+local function threads(n)
+  return n == 1 and "1 thread" or ("%d threads"):format(n)
+end
+
 --- The notice for new code on GitHub.
 ---@param review NvimDiff.Review
 ---@param stale { head?: string, base?: string }
@@ -94,9 +100,11 @@ local function stale_notice(review, stale)
   if stale.base then
     what[#what + 1] = ("now targets %s (was %s)"):format(stale.base, review.pr.base.ref or "?")
   end
-  return ("PR #%d %s on GitHub; the review shows the old diff until reopened"):format(
+  local held = #review.held
+  return ("PR #%d %s on GitHub; the review shows the old diff%s until reopened"):format(
     review.number,
-    table.concat(what, " and ")
+    table.concat(what, " and "),
+    held > 0 and (", without %s on the new code,"):format(threads(held)) or ""
   )
 end
 
@@ -141,7 +149,7 @@ function Sync:check(manual)
     self.timer:stop()
   end
   self.manual = manual
-  local review, generation = self.review, self.generation
+  local review, generation, rev = self.review, self.generation, self.review.threads_rev
   self.task = job.task(function()
     return threads_mod.snapshot(review.pr.target, review.number)
   end, function(err, snap, gh_err)
@@ -155,7 +163,7 @@ function Sync:check(manual)
       gh_err = { kind = "api_error", message = tostring(err) }
     end
     if snap then
-      self:take(snap, reported)
+      self:take(snap, reported, rev)
     else
       self:fail(gh_err, reported)
     end
@@ -180,14 +188,19 @@ function Sync:now()
   self:check(true)
 end
 
---- Take a snapshot GitHub answered with: keep it on the review, announce what is new, stop
---- on a merged or closed PR, arm the next check.
+--- Take a snapshot GitHub answered with: keep it on the review, redraw its threads, announce
+--- what is new, stop on a merged or closed PR, arm the next check.
 ---@param snap NvimDiff.GitHub.Snapshot
 ---@param manual boolean
-function Sync:take(snap, manual)
+---@param rev? integer `review.threads_rev` when the check started. The threads are not drawn
+---when a change to them was made here since: they may predate it.
+function Sync:take(snap, manual, rev)
   local review = self.review
   review.latest = snap
   self.failures, self.problem, self.paused_until = 0, nil, nil
+  if rev == nil or rev == review.threads_rev then
+    review:show_threads(snap)
+  end
 
   local said = false
   local stale = review:stale()
@@ -279,21 +292,27 @@ function Sync:cancel()
   self.task, self.manual = nil, nil
 end
 
---- The panel's sync lines: what is new on GitHub, then why syncing is stopped, paused or
---- failing.
+--- The panel's sync lines: what is new on GitHub and the threads waiting for it, then why
+--- syncing is stopped, paused or failing.
 ---@return NvimDiff.PanelStatus[]
 function Sync:status()
   local out = {}
   local stale = self.review:stale()
-  if stale then
+  local held = #self.review.held
+  if stale or held > 0 then
     local what = {}
-    if stale.head then
+    if stale and stale.head then
       what[#what + 1] = "new commits"
     end
-    if stale.base then
+    if stale and stale.base then
       what[#what + 1] = "base → " .. stale.base
     end
-    out[#out + 1] = { text = "● " .. table.concat(what, ", ") .. " on GitHub", hl = "NvimDiffPanelStale" }
+    -- Held threads without stale code: read by a reload after a push the sync has not seen.
+    local text = #what > 0 and (table.concat(what, ", ") .. " on GitHub") or "newer code on GitHub"
+    if held > 0 then
+      text = ("%s · %s waiting"):format(text, threads(held))
+    end
+    out[#out + 1] = { text = "● " .. text, hl = "NvimDiffPanelStale" }
   end
   local text
   if self.stopped == "merged" or self.stopped == "closed" then

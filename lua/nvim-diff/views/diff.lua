@@ -386,8 +386,12 @@ function View:is_valid()
   return not self.closed and api.nvim_tabpage_is_valid(self.tab) and self.panel:is_open()
 end
 
---- Close whatever shows in the area right of the panel.
+--- Close whatever shows in the area right of the panel, and the threads drawn on it.
 function View:clear_area()
+  if self.thread_view then
+    self.thread_view:detach()
+    self.thread_view = nil
+  end
   if self.file and not self.file:is_closed() then
     self.file:close()
   end
@@ -888,16 +892,17 @@ end
 -- Review threads ---------------------------------------------------------------------------
 
 --- Show a PR's review threads: on each file's diff as it opens (the one showing now at
---- once), and in the side list. Replaces any threads set before; `{}` clears them.
+--- once), and in the side list. Replaces any threads set before; `{}` clears them. The diff
+--- showing is redrawn in place, not re-diffed: only rows whose threads changed are touched.
 ---@param list NvimDiff.GitHub.Thread[]
 function View:set_threads(list)
   self.threads = list
-  self.thread_state = self.thread_state or require("nvim-diff.review.threadview").new_state()
-  if self.thread_view then
-    self.thread_view:detach()
-    self.thread_view = nil
-  end
-  if self.current and self.file and not self.file:is_closed() then
+  local threadview = require("nvim-diff.review.threadview")
+  self.thread_state = self.thread_state or threadview.new_state()
+  local tv = self.thread_view
+  if tv and not tv.detached and self.current and self.file and not self.file:is_closed() then
+    tv:set_threads(threadview.for_path(list, self.current.path))
+  elseif self.current and self.file and not self.file:is_closed() then
     self:attach_threads(self.current)
   end
   if self.thread_list and self.thread_list:is_open() then
@@ -905,11 +910,14 @@ function View:set_threads(list)
   end
 end
 
---- Put the threads of `entry` on the diff just opened for it.
+--- Put the threads of `entry` on the diff just opened for it, in place of any drawn before.
 ---@param entry NvimDiff.FileEntry
 function View:attach_threads(entry)
   if not self.threads or not self.file then
     return
+  end
+  if self.thread_view then
+    self.thread_view:detach()
   end
   local threadview = require("nvim-diff.review.threadview")
   self.thread_view = threadview.attach(self.file, threadview.for_path(self.threads, entry.path), {

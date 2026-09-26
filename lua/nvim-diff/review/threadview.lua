@@ -69,7 +69,9 @@ local BLOCK = "nvim-diff.threads:"
 ---@field private active table<string, boolean> Threads on the cursor's line, drawn lit.
 ---@field private augroup integer
 ---@field private loose { thread: NvimDiff.GitHub.Thread, place: NvimDiff.ThreadPlace }[]
----@field private placed table<integer, boolean> Rows that currently hold a block.
+--- Rows that currently hold a block, to what was drawn there: a row whose block would be the
+--- same is not drawn again.
+---@field private placed table<integer, string>
 ---@field private width integer Display cells threads were last laid out for.
 ---@field private unwatch fun()
 ---@field private mapped { buf: integer, lhs: string }[]
@@ -142,7 +144,8 @@ function ThreadView:measure()
   return math.max(20, (width or 80) - 1)
 end
 
---- Replace the threads and redraw them all.
+--- Replace the threads and redraw them, in place: rows whose threads look the same are left
+--- alone, so a sync that brings one new reply redraws that thread only.
 ---@param threads NvimDiff.GitHub.Thread[]
 function ThreadView:set_threads(threads)
   self.threads = threads
@@ -253,8 +256,11 @@ function ThreadView:render_row(row)
   end
   local b = self:block(row)
   if b then
-    self.file:set_block(BLOCK .. row, b)
-    self.placed[row] = true
+    local drawn = vim.json.encode(b)
+    if self.placed[row] ~= drawn then
+      self.file:set_block(BLOCK .. row, b)
+      self.placed[row] = drawn
+    end
   elseif self.placed[row] then
     self.file:remove_block(BLOCK .. row)
     self.placed[row] = nil

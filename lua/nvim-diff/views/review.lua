@@ -45,6 +45,12 @@
 --- `keymaps.review.sync` (`review/sync.lua`): new commits, a new base branch and a merge or
 --- close are announced and marked in the panel. What GitHub has now is kept as
 --- `review.latest`; what the review shows (`review.pr`) is unchanged by a check.
+---
+--- Every check redraws the threads, in place, when anything about them changed: new
+--- threads, replies, edits and resolves by others show at once. Threads are fitted to the
+--- head shown (`review/live.lua`): one on code newer than that is held back (`review.held`)
+--- and counted in the panel until the new code is applied. A check that started before a
+--- comment was posted, edited, deleted or resolved here is not drawn: it may predate it.
 
 local comment_mod = require("nvim-diff.review.comment")
 local comments_mod = require("nvim-diff.github.comments")
@@ -52,6 +58,7 @@ local compose = require("nvim-diff.review.compose")
 local config = require("nvim-diff.config")
 local event = require("nvim-diff.core.event")
 local fetch = require("nvim-diff.git.fetch")
+local live = require("nvim-diff.review.live")
 local log = require("nvim-diff.core.log")
 local path = require("nvim-diff.core.path")
 local pr_mod = require("nvim-diff.github.pr")
@@ -88,6 +95,16 @@ local by_number = {}
 --- `base.ref` differing from `pr`'s is new code the review does not show (`stale`).
 ---@field latest? NvimDiff.GitHub.Snapshot
 ---@field sync NvimDiff.ReviewSync
+--- Where each thread drawn hangs in the head shown, so it keeps its place once GitHub's head
+--- moves on (`review/live.lua`).
+---@field anchors NvimDiff.ThreadAnchors
+--- Threads GitHub has on code newer than the head shown, as last read: not drawn, counted in
+--- the panel. What applying the new code shows.
+---@field held NvimDiff.GitHub.Thread[]
+--- Bumped by every change to the threads made here: a write to GitHub, or a redraw after
+--- one. A sync that started before carries an older value, and is not drawn.
+---@field threads_rev integer
+---@field drawn? string `live.fingerprint` of the threads drawn, so an unchanged sync skips them.
 ---@field path string The worktree.
 ---@field cwd string The cwd before the review opened, restored on a tabpage that outlives it.
 ---@field view NvimDiff.DiffView
@@ -213,6 +230,9 @@ function M.open(opts)
     number = number,
     pr = pr,
     latest = snap,
+    anchors = live.anchors(pr.head.oid),
+    held = {},
+    threads_rev = 0,
     path = wt_path,
     cwd = cwd,
     view = view,
@@ -227,8 +247,8 @@ function M.open(opts)
     entry.viewed = states[entry.path] or "unviewed"
   end
   view:render()
-  view:set_threads(snap.threads)
   self.sync = sync_mod.new(self)
+  self:show_threads(snap)
   self:trap()
   self:map_keys(view.panel.buf)
   self:map_keys(view.note_buf)
@@ -520,6 +540,7 @@ function Review:open_compose(header, post, opts)
     lines = opts.lines,
     suggestion = opts.suggestion,
     on_submit = function(text)
+      self:touch_threads()
       local posted, err = post(text)
       if not posted then
         return false, post_error(err)
@@ -719,6 +740,7 @@ function Review:delete()
     if not self:is_valid() or not M.confirm_delete(prompt) then
       return
     end
+    self:touch_threads()
     local ok, err = comments_mod.delete(self.pr, c)
     if not ok then
       log.error("comment not deleted: %s", post_error(err))
@@ -785,6 +807,69 @@ function Review:reply()
   return true
 end
 
+-- Live threads ----------------------------------------------------------------------------
+
+--- A change to the threads is being made here: a sync already under way may have read
+--- GitHub before it, so its threads are not drawn.
+function Review:touch_threads()
+  self.threads_rev = self.threads_rev + 1
+end
+
+--- The threads of a snapshot, fitted to the head the review shows (`review/live.lua`). The
+--- ones on newer code become `held`.
+---@param snap NvimDiff.GitHub.Snapshot
+---@return NvimDiff.GitHub.Thread[] shown
+function Review:fit_threads(snap)
+  local head = self.pr.head.oid
+  if self.anchors.head ~= head then
+    self.anchors = live.anchors(head)
+  end
+  local current = snap.head.oid == head and snap.base.ref == self.pr.base.ref
+  local shown, held = live.fit(snap.threads, self.anchors, current)
+  self.held = held
+  return shown
+end
+
+--- Draw the threads of a snapshot a sync (or the opening) read, unless they look the same
+--- as the ones drawn. A thread others resolved stays drawn, dimmed, while resolved ones are
+--- hidden, as one resolved here does. Skipped while a comment is being posted: the post
+--- redraws the threads once GitHub has it.
+---@param snap NvimDiff.GitHub.Snapshot
+function Review:show_threads(snap)
+  if not self:is_valid() or (self.compose and self.compose.posting) then
+    return
+  end
+  local list = self:fit_threads(snap)
+  local key = live.fingerprint(list)
+  if key == self.drawn then
+    return
+  end
+  local view = self.view
+  local was = {}
+  for _, t in ipairs(view.threads or {}) do
+    was[t.id] = t.resolved
+  end
+  view.thread_state = view.thread_state or require("nvim-diff.review.threadview").new_state()
+  local ts = view.thread_state
+  for _, t in ipairs(list) do
+    if t.resolved and was[t.id] == false then
+      ts.kept = ts.kept or {}
+      ts.kept[t.id] = true
+    end
+  end
+  self.drawn = key
+  view:set_threads(list)
+end
+
+--- Draw `list` after a change made here, whatever was drawn before.
+---@param list NvimDiff.GitHub.Thread[] Fitted already.
+function Review:draw_threads(list)
+  self:touch_threads()
+  self.drawn = live.fingerprint(list)
+  self.view:set_threads(list)
+  self.sync:show()
+end
+
 --- Redraw the threads after a change: refetched from GitHub, the only source of truth. When
 --- the refetch fails, `patch` applies the change to what is already showing instead, and
 --- the user is told.
@@ -796,8 +881,11 @@ function Review:reload_threads(what, patch, expand)
     return
   end
   local view = self.view
-  local list, err = threads_mod.fetch(self.pr.target, self.number)
-  if not list then
+  local snap, err = threads_mod.snapshot(self.pr.target, self.number)
+  local list
+  if snap then
+    list = self:fit_threads(snap)
+  else
     log.warn("%s, but the threads could not be reloaded: %s", what, msg(err))
     list = view.threads or {}
     patch(list)
@@ -812,7 +900,7 @@ function Review:reload_threads(what, patch, expand)
       end
     end
   end
-  view:set_threads(list)
+  self:draw_threads(list)
 end
 
 --- Redraw the threads after a post or an edit, with the thread holding the comment
@@ -919,12 +1007,13 @@ function Review:with_thread_id(thread)
   if not thread.local_only then
     return thread
   end
-  local list, err = threads_mod.fetch(self.pr.target, self.number)
-  if not list then
+  local snap, err = threads_mod.snapshot(self.pr.target, self.number)
+  if not snap then
     local why = "it was drawn from your comment alone, as GitHub's threads could not be read back, "
       .. "so it has no thread id yet (%s)"
     return nil, why:format(msg(err))
   end
+  local list = self:fit_threads(snap)
   local first = thread.comments[1]
   local found
   for _, t in ipairs(list) do
@@ -938,7 +1027,7 @@ function Review:with_thread_id(thread)
   if found and state and state.expanded[thread.id] ~= nil then
     state.expanded[found.id] = state.expanded[thread.id]
   end
-  self.view:set_threads(list)
+  self:draw_threads(list)
   if not found then
     return nil, "GitHub no longer lists it"
   end
@@ -979,13 +1068,14 @@ function Review:set_resolved(thread, resolved)
     log.warn("you cannot %s this thread", verb)
     return false
   end
+  self:touch_threads()
   local state, err = (resolved and threads_mod.resolve or threads_mod.unresolve)(self.pr.target.host, real)
   if not state then
     log.error("cannot %s this thread: %s", verb, post_error(err))
     return false
   end
   self:apply_resolved(real, state)
-  self.view:set_threads(self.view.threads or {})
+  self:draw_threads(self.view.threads or {})
   return true
 end
 

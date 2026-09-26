@@ -312,10 +312,11 @@ reopening a PR refetches viewed marks and threads from GitHub.
 
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
-in the panel; the review keeps the diff it opened with until you reopen the PR. A merged
-or closed PR gets a notice and syncing stops; the review stays usable. Network errors
-retry quietly (a warning after three in a row), a rate limit pauses syncing until it
-lifts.
+in the panel; the review keeps the diff it opened with until you reopen the PR. New
+threads, replies, edits and resolves from others are drawn at once, in place; a new thread
+on code the review does not show yet waits, counted in the panel. A merged or closed PR
+gets a notice and syncing stops; the review stays usable. Network errors retry quietly (a
+warning after three in a row), a rate limit pauses syncing until it lifts.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
@@ -326,8 +327,8 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- An open review detects new commits and a new base branch but does not load them, and
-  does not draw new comments yet; reopen the PR for both.
+- An open review detects new commits and a new base branch but does not load them, nor
+  the threads on them; reopen the PR for both.
 - File-level comments need a GHES version that supports `subject_type=file`.
 - Opening the same PR in two Neovim instances hands the worktree to the second.
 - Structural diff ignores injected languages and has no notion of moved code; it runs
