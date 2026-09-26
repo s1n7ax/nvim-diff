@@ -243,6 +243,15 @@ one GraphQL query: the PR's state, head commit, base branch and threads.
     `base → <branch>`) under its counts. The review keeps showing the old
     diff; reopen the PR to load the new one. A push to the base branch alone
     changes nothing, as the diff is from the merge-base.
+  - New threads, replies, edits and resolves from others: drawn at once, in
+    place, without re-diffing the file. A thread someone else resolves stays
+    on screen, dimmed, like one you resolve, until `gR` next flips resolved
+    threads.
+  - Threads while GitHub has new commits: a thread keeps the line it has in
+    the diff shown, and a comment you post there shows where you wrote it. A
+    new thread on the new code is not drawn: it waits, counted in the panel
+    (`● new commits on GitHub · 2 threads waiting`), until the new code is
+    loaded.
   - Merged or closed: a notice says so and syncing stops; the review stays
     open and usable, and the panel says `merged on GitHub; not syncing`.
     `<C-r>` still checks, and a PR found open again syncs again.
@@ -251,9 +260,8 @@ one GraphQL query: the PR's state, head commit, base branch and threads.
     lifts. A lost login or a PR no longer visible stops syncing, with a
     warning.
 
-Checks run in the background and go on while Neovim is unfocused. New
-comments and resolved threads from others are read but not drawn yet: they
-show once the PR is reopened.
+Checks run in the background and go on while Neovim is unfocused. The
+threads are redrawn only when something about them changed.
 
 THE COMMENT SPLIT                                          *nvim-diff-compose*
 
@@ -688,7 +696,8 @@ File panel ~
   *NvimDiffPanelStatusModified*    status letter: modified, renamed, type
                        *NvimDiffPanelStatusDeleted*     status letter: deleted
                     *NvimDiffPanelStatusConflicted*  status letter: conflicted
-  *NvimDiffPanelStale*         new commits or base on GitHub, not shown yet
+  *NvimDiffPanelStale*         new commits or base on GitHub, not shown yet,
+                             and the threads waiting for them
   *NvimDiffPanelSync*          syncing stopped (merged, closed), paused or
                              failing
 
@@ -739,7 +748,7 @@ Reports:
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
   - An open review detects new commits and a new base branch but does not
-    load them, and does not draw new comments yet; reopen the PR for both.
+    load them, nor the threads on them; reopen the PR for both.
   - Opening the same PR in two Neovim instances: the second takes the
     worktree over from the first.
   - Structural diff ignores injected languages (a code fence in markdown, a
