@@ -243,6 +243,14 @@ function Review:trap()
       end
     end,
   })
+  api.nvim_create_autocmd("ExitPre", {
+    group = self.augroup,
+    callback = function()
+      -- Before `VimLeavePre`, where session plugins save the tabpage cwd; a session
+      -- restored into the removed worktree fails its `:tcd`.
+      self:leave_worktree(self.view.tab)
+    end,
+  })
   api.nvim_create_autocmd("VimLeavePre", {
     group = self.augroup,
     callback = function()
@@ -1037,6 +1045,16 @@ end
 --- End the review: close its view and tabpage, wipe buffers on the worktree's files and
 --- remove the worktree. Idempotent.
 ---@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
+--- `:tcd` tabpage `tab` back to where the review was started, out of the worktree.
+---@param tab integer
+function Review:leave_worktree(tab)
+  if api.nvim_tabpage_is_valid(tab) then
+    api.nvim_win_call(api.nvim_tabpage_get_win(tab), function()
+      pcall(vim.cmd.tcd, vim.fn.fnameescape(self.cwd))
+    end)
+  end
+end
+
 function Review:close(opts)
   local windows = not (opts and opts.windows == false)
   if self.closed then
@@ -1070,12 +1088,11 @@ function Review:close(opts)
       pcall(self.view.close, self.view)
     end
     -- The last tabpage survives its view; take it back out of the worktree.
-    if api.nvim_tabpage_is_valid(tab) then
-      api.nvim_win_call(api.nvim_tabpage_get_win(tab), function()
-        pcall(vim.cmd.tcd, vim.fn.fnameescape(self.cwd))
-      end)
-    end
+    self:leave_worktree(tab)
     self:wipe_buffers()
+  else
+    -- Leaving the cwd inside the removed worktree breaks `VimLeave` handlers that read it.
+    self:leave_worktree(self.view.tab)
   end
   local ok, err = worktree.remove(self.repo, self.number)
   if not ok then
