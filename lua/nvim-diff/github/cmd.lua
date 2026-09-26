@@ -254,12 +254,70 @@ local function error_message(response)
   return top or more or ("gh api returned HTTP %s"):format(tostring(response.status))
 end
 
+---@class NvimDiff.GitHub.RateLimit
+---@field limit? integer Points (GraphQL) or requests (REST) per window.
+---@field remaining? integer
+---@field used? integer
+---@field reset? integer Epoch seconds the window ends.
+---@field resource? string `graphql`, `core`, …
+
+--- The `x-ratelimit-*` headers of a response, as numbers. Read from the headers rather than
+--- GraphQL's `rateLimit` field, which a GitHub Enterprise Server with rate limits turned off
+--- may not answer. Nil when the response carries none (such a host sends no headers either).
+---@param headers table<string, string>
+---@return NvimDiff.GitHub.RateLimit?
+function M.rate_limit(headers)
+  local remaining = tonumber(headers["x-ratelimit-remaining"])
+  if not remaining then
+    return nil
+  end
+  return {
+    limit = tonumber(headers["x-ratelimit-limit"]),
+    remaining = remaining,
+    used = tonumber(headers["x-ratelimit-used"]),
+    reset = tonumber(headers["x-ratelimit-reset"]),
+    resource = headers["x-ratelimit-resource"],
+  }
+end
+
+--- Seconds until a rate limit lifts: `Retry-After` for a secondary limit, else the primary
+--- window's `x-ratelimit-reset`. Nil when neither says; GitHub then asks for a minute.
+---@param headers table<string, string>
+---@return integer?
+local function retry_after(headers)
+  local after = tonumber(headers["retry-after"])
+  if after then
+    return math.max(1, math.ceil(after))
+  end
+  local reset = tonumber(headers["x-ratelimit-reset"])
+  if reset then
+    return math.max(1, reset - os.time())
+  end
+  return nil
+end
+
+--- Whether a 403 or 429 is a rate limit rather than a refusal: GitHub's documented signs are
+--- a `Retry-After` header or `x-ratelimit-remaining: 0`; a secondary limit may come with
+--- neither and only say so in its message.
+---@param headers table<string, string>
+---@param message string
+---@return boolean
+local function is_rate_limit(headers, message)
+  return headers["retry-after"] ~= nil
+    or headers["x-ratelimit-remaining"] == "0"
+    or message:lower():find("rate limit", 1, true) ~= nil
+end
+
 --- Turn a response into `data, nil` or `nil, err`, covering both shapes `gh api` can hand
 --- back on failure: a GraphQL body (`{"data":..., "errors":[...]}`, HTTP 200 even on a
 --- schema or NOT_FOUND error) and a plain REST-style error body
 --- (`{"message":..., "status":"401"}`, a non-2xx HTTP status). Verified against the live
 --- API for each status this function branches on (auth, bad field, missing repository/PR).
 --- A 2xx with no body at all (a DELETE's `204`) is success with empty data.
+---
+--- A rate limit is `rate_limited` in every shape GitHub sends it: a 429, a 403 with a
+--- `Retry-After` or an exhausted `x-ratelimit-remaining`, and GraphQL's HTTP 200 with a
+--- `RATE_LIMITED` error. `retry_after` is filled in from the headers when they say.
 ---@param response NvimDiff.GitHub.Response
 ---@return table? data
 ---@return NvimDiff.GitHub.Error? err
@@ -277,12 +335,18 @@ function M.classify(response)
     if body.errors then
       local kind = "api_error"
       for _, one in ipairs(body.errors) do
-        if one.type == "NOT_FOUND" then
-          kind = "not_found"
+        if one.type == "RATE_LIMITED" then
+          kind = "rate_limited"
           break
+        elseif one.type == "NOT_FOUND" then
+          kind = "not_found"
         end
       end
-      return nil, errors.new(kind, first_message(body.errors) or "GraphQL error", { status = status })
+      local extra = { status = status }
+      if kind == "rate_limited" then
+        extra.retry_after = retry_after(headers)
+      end
+      return nil, errors.new(kind, first_message(body.errors) or "GraphQL error", extra)
     end
     return body.data or body, nil
   end
@@ -291,11 +355,10 @@ function M.classify(response)
   if status == 401 then
     return nil, errors.new("not_authenticated", message, { status = status })
   end
+  if status == 429 or (status == 403 and is_rate_limit(headers, message)) then
+    return nil, errors.new("rate_limited", message, { status = status, retry_after = retry_after(headers) })
+  end
   if status == 403 then
-    local retry_after = tonumber(headers["retry-after"])
-    if retry_after then
-      return nil, errors.new("rate_limited", message, { status = status, retry_after = retry_after })
-    end
     return nil, errors.new("forbidden", message, { status = status })
   end
   if status == 404 then
@@ -316,6 +379,8 @@ M.GRAPHQL_HEADERS = { "X-Github-Next-Global-ID: 1" }
 ---@param opts? { timeout_ms?: integer }
 ---@return table? data The response's `data` object.
 ---@return NvimDiff.GitHub.Error? err
+---@return NvimDiff.GitHub.Response? response The whole response, when one came back — for
+---its rate-limit headers (`M.rate_limit`).
 ---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
 function M.graphql(host, query, vars, opts)
   opts = opts or {}
@@ -329,7 +394,9 @@ function M.graphql(host, query, vars, opts)
   if not response then
     return nil, err
   end
-  return M.classify(response)
+  local data
+  data, err = M.classify(response)
+  return data, err, response
 end
 
 return M

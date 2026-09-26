@@ -116,6 +116,10 @@ M.groups = {
     light = { link = "NvimDiffPanelDeletions" },
   },
   NvimDiffPanelStatusConflicted = { dark = { link = "WarningMsg" }, light = { link = "WarningMsg" } },
+  -- A PR review's sync state: new commits or a new base on GitHub that the review does not
+  -- show yet, and syncing stopped (merged, closed) or failing.
+  NvimDiffPanelStale = { dark = { link = "DiagnosticWarn" }, light = { link = "DiagnosticWarn" } },
+  NvimDiffPanelSync = { dark = { link = "DiagnosticInfo" }, light = { link = "DiagnosticInfo" } },
 
   -- The result buffer of a merge conflict view: the marker lines and the three sections.
   NvimDiffConflictMarker = {
