@@ -14,6 +14,16 @@
 --- other side is filler — clamped into what that pane shows, `scrolloff` included. Entering
 --- a pane therefore never scrolls it.
 ---
+--- Panes may stop at different view rows (a pane with no trailer line cannot scroll into
+--- the filler below its last line). A pane scrolled past where another can follow is put
+--- back at the last view row they all reach, its cursor kept on screen, so the panes never
+--- come apart there.
+---
+--- At the other end, Neovim keeps `topfill` below the window height, so a pane cannot put
+--- its top inside the upper part of a filler block taller than the window; it stops at the
+--- cap instead. Such a pane is followed when it moved, never when it merely sits there
+--- (`leader`, and `source` passing over a pane the corrector put where it is).
+---
 --- Pane-count agnostic: the side-by-side layout gives it two panes, a three-way merge
 --- layout can give it more.
 
@@ -81,6 +91,20 @@ local function line_for(pane, v)
   return tf > 0 and math.max(1, tl - 1) or tl
 end
 
+--- Whether `pane`, whose view is `view`, stopped at the `topfill` cap: Neovim keeps
+--- `topfill` below the window height, so with more virtual rows above its top line than
+--- that, the pane cannot show the rows above; it is as near to them as it gets.
+---@param pane NvimDiff.SyncPane
+---@param view vim.fn.winsaveview.ret
+---@return boolean
+local function at_cap(pane, view)
+  if view.topfill == 0 or view.topfill < vim.fn.winheight(pane.win) - 1 then
+    return false
+  end
+  local top = pane.top_view(view.topline, view.topfill)
+  return top ~= nil and top > 0 and pane.view_top(top - 1) == view.topline
+end
+
 --- Move `pane`'s cursor to the counterpart of view row `cursor_v`, kept inside the rows its
 --- view shows with `scrolloff` respected, so that entering the pane does not scroll it.
 --- Runs inside `nvim_win_call(pane.win)`.
@@ -91,7 +115,8 @@ local function place_cursor(pane, view, cursor_v)
   local top = pane.top_view(view.topline, view.topfill)
   local lnum = line_for(pane, cursor_v)
   if top then
-    local height = api.nvim_win_get_height(pane.win)
+    -- Text rows only: `nvim_win_get_height` counts a winbar too.
+    local height = vim.fn.winheight(pane.win)
     local so = math.min(vim.fn.eval("&scrolloff"), math.floor((height - 1) / 2))
     local lo = top > 0 and top + so or 0
     local hi = top < pane.max_top() and top + height - 1 - so or math.huge
@@ -110,7 +135,20 @@ local function place_cursor(pane, view, cursor_v)
   view.curswant = 0
 end
 
---- Bring every other pane to `src`'s view row, horizontal offset and cursor line.
+--- The last view row every pane can have at its top.
+---@return integer
+function Sync:limit()
+  local limit = math.huge
+  for _, p in ipairs(self.panes) do
+    if api.nvim_win_is_valid(p.win) then
+      limit = math.min(limit, p.max_top())
+    end
+  end
+  return limit
+end
+
+--- Bring every other pane to `src`'s view row, horizontal offset and cursor line. When
+--- `src` is past the last view row another pane can reach, it is put back there first.
 ---@param src integer Window to follow.
 function Sync:sync(src)
   local si = self:index_of(src)
@@ -124,6 +162,22 @@ function Sync:sync(src)
     return
   end
   local cursor_v = sp.line_view(sv.lnum)
+  local limit = self:limit()
+  if v > limit then
+    local tl, tf = sp.view_top(limit)
+    if tl then
+      api.nvim_win_call(src, function()
+        sv.topline, sv.topfill = tl, tf
+        if cursor_v then
+          place_cursor(sp, sv, cursor_v)
+        end
+        vim.fn.winrestview(sv)
+      end)
+      sv = save(src)
+      v = limit
+      cursor_v = sp.line_view(sv.lnum)
+    end
+  end
   self.expected[src] = key(sv)
 
   for i, dp in ipairs(self.panes) do
@@ -168,12 +222,14 @@ function Sync:sync_cursor(src)
 end
 
 --- Which pane a `WinScrolled` was about: the current window if it is a pane that moved,
---- else a pane that moved to somewhere the corrector did not put it.
+--- else a pane that moved to somewhere the corrector did not put it. A current pane the
+--- corrector itself moved (`gg` leading with the other pane, a clamp) is not the source:
+--- where it could not follow exactly, it would drag the others to where it stopped.
 ---@param event table `v:event`
 ---@return integer?
 function Sync:source(event)
   local cur = api.nvim_get_current_win()
-  if event[tostring(cur)] and self:index_of(cur) then
+  if event[tostring(cur)] and self:index_of(cur) and self.expected[cur] ~= key(save(cur)) then
     return cur
   end
   for _, p in ipairs(self.panes) do
@@ -185,14 +241,26 @@ function Sync:source(event)
 end
 
 --- The pane to follow when nothing in particular moved: the current window if it is a
---- pane, else the first pane.
+--- pane, else the first pane — passing over a pane stopped at its `topfill` cap, whose
+--- top says only how near it got (another pane may rightly be above it).
 ---@return integer?
 function Sync:leader()
   local cur = api.nvim_get_current_win()
+  local order = {}
   if self:index_of(cur) then
-    return cur
+    order[1] = self.panes[self:index_of(cur)]
   end
-  return self.panes[1] and self.panes[1].win
+  for _, p in ipairs(self.panes) do
+    if p.win ~= cur then
+      order[#order + 1] = p
+    end
+  end
+  for _, p in ipairs(order) do
+    if api.nvim_win_is_valid(p.win) and not at_cap(p, save(p.win)) then
+      return p.win
+    end
+  end
+  return order[1] and order[1].win
 end
 
 --- Resync from the leader. Call after anything that changes the view rows (virtual lines
