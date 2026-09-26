@@ -14,9 +14,11 @@
 ---    never GitHub's `/pulls/{n}/files`;
 --- 4. reads every file's viewed state (`github/viewed.lua`);
 --- 5. checks `head` out, detached, into the lowest free review slot
----    `<common git dir>/nvim-diff/review-<k>` (`git/worktree.lua`), so LSP, tests and the
----    debugger see the PR's code while the user's branch and uncommitted changes are never
----    touched, and files git ignores there (`node_modules/`) are kept from earlier reviews;
+---    `stdpath("data")/nvim-diff/slots/<repo>-<hash>/review-<k>` (`git/worktree.lua`), so
+---    LSP, tests and the debugger see the PR's code while the user's branch and uncommitted
+---    changes are never touched, and files git ignores there (`node_modules/`) are kept from
+---    earlier reviews. Outside the repository, so a language server's root search from a
+---    slot file finds the slot, not the user's checkout;
 --- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
 ---    selects the first file not yet viewed.
 ---

@@ -3,7 +3,8 @@
 --- Everything reported here is something that silently degrades the plugin rather than
 --- breaking it loudly: a missing `gh` costs PR review but not diffing, a missing parser
 --- costs structural diff but not line diff. The review-slot check is the one that reports
---- state on disk: the kept PR worktrees, which only the user removes.
+--- state on disk: the kept PR worktrees, which only the user removes, including those of a
+--- repository that is gone.
 
 local M = {}
 
@@ -266,24 +267,22 @@ local function report_slot(slot)
     )
   elseif slot.state == "unregistered" then
     vim.health.warn(("%s: a folder git does not list as a worktree; skipped, never deleted"):format(name), {
-      ("if the repository was moved, relink it: `git worktree repair %s`"):format(slot.path),
-      ("otherwise remove it by hand: `rm -rf %s`"):format(slot.path),
+      "most likely left by an earlier clone of the repository at this path",
+      ("remove it by hand: `rm -rf %s`"):format(slot.path),
     })
   end
 end
 
-local function check_slots()
-  vim.health.start("PR review slots")
-  local repo = require("nvim-diff.git.repo").discover()
-  if not repo then
-    vim.health.info("not inside a git repository; skipping")
-    return
-  end
+--- The cwd's repository's slots, and worktrees an older nvim-diff left in it.
+---@param repo NvimDiff.Git.Repo
+---@return table<string, true> reported Slot folders already reported, by path.
+local function check_repo_slots(repo)
   local worktree = require("nvim-diff.git.worktree")
+  local reported = {}
   local slots, err = worktree.slots(repo)
   if not slots then
     vim.health.warn("cannot list the repository's worktrees: " .. tostring(err))
-    return
+    return reported
   end
   local dir = worktree.dir(repo)
   if #slots == 0 then
@@ -292,6 +291,7 @@ local function check_slots()
     vim.health.info(("%d review slot(s) in %s"):format(#slots, dir))
     for _, slot in ipairs(slots) do
       report_slot(slot)
+      reported[slot.path] = true
     end
     vim.health.info(
       "a slot keeps the files git ignores (`node_modules/`, build output) for the next review, and nvim-diff "
@@ -302,11 +302,45 @@ local function check_slots()
 
   local legacy = worktree.legacy(repo) or {}
   if #legacy > 0 then
-    local advice = { "worktrees of an older nvim-diff, which removed them itself; nothing uses them now:" }
+    local advice = { "worktrees of an older nvim-diff inside the git directory; nothing uses them now:" }
+    local slot_left = false
     for _, path in ipairs(legacy) do
       advice[#advice + 1] = ("  git worktree remove --force --force %s"):format(path)
+      slot_left = slot_left or vim.fs.basename(path):match("^review%-") ~= nil
+    end
+    if slot_left then
+      advice[#advice + 1] = (
+        "to keep a `review-<k>` slot's ignored files, move it instead: `mkdir -p %s`, then "
+        .. "`git worktree move <path> %s/review-<n>` with a number no slot has"
+      ):format(dir, dir)
     end
     vim.health.warn(("%d leftover PR worktree(s)"):format(#legacy), advice)
+  end
+  return reported
+end
+
+local function check_slots()
+  vim.health.start("PR review slots")
+  local reported = {}
+  local repo = require("nvim-diff.git.repo").discover()
+  if repo then
+    reported = check_repo_slots(repo)
+  else
+    vim.health.info("not inside a git repository; no slots of its own to list")
+  end
+
+  -- Slots of any repository: one that was deleted or moved lists them nowhere else.
+  local worktree = require("nvim-diff.git.worktree")
+  local orphans = vim.tbl_filter(function(orphan)
+    return not reported[orphan.path]
+  end, worktree.orphans())
+  if #orphans > 0 then
+    local advice = { "their repository was deleted or moved (a moved one gets new slots); remove them by hand:" }
+    for _, orphan in ipairs(orphans) do
+      advice[#advice + 1] = ("  rm -rf %s  # was linked to %s"):format(orphan.path, orphan.gitdir)
+    end
+    advice[#advice + 1] = "then run `git worktree prune` in a moved repository, which still lists them"
+    vim.health.warn(("%d review slot(s) no repository links to any more"):format(#orphans), advice)
   end
 end
 

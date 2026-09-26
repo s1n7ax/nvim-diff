@@ -210,8 +210,16 @@ Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
 buffers on the slot's files and releases the slot. The slot's folder stays.
 
                                                       *nvim-diff-review-slots*
-Review slots are separate git worktrees at `<git dir>/nvim-diff/review-<k>`,
-kept between reviews:
+Review slots are separate git worktrees kept between reviews, outside the
+repository in Neovim's data directory, one folder per repository: >
+    stdpath("data")/nvim-diff/slots/<repo>-<hash>/review-<k>
+<
+`<repo>` is the repository's folder name, `<hash>` part of the SHA-256 of its
+git directory's path, so two clones never share slots. Being outside the
+repository matters to LSP: a language server searches upward from a file for
+its project root, and from a slot file it finds the slot, not your checkout
+(nested in `.git/`, a marker the slot lacks, such as an ignored
+`compile_commands.json`, would resolve to the checkout and its client).
 
   - A review takes the lowest-numbered slot no running Neovim holds, so a
     second review open at the same time, in the same Neovim or another, gets
@@ -230,10 +238,12 @@ kept between reviews:
     is not in use by hand with `git worktree remove --force <path>` (a second
     `--force` for one still locked by a Neovim that is gone).
     |nvim-diff-health| lists the slots and their state.
-  - A slot folder removed with `rm` while git still lists it is re-created
-    when next needed. A folder git does not list as a worktree is skipped and
-    never deleted; if the repository was moved, `git worktree repair` is
-    tried on it first.
+  - A slot folder removed with `rm` while git still lists it (or with the
+    whole data directory) is re-created when next needed. A folder git does
+    not list as a worktree is skipped and never deleted.
+  - Deleting or moving the repository leaves its slots in the data directory;
+    a moved repository starts new ones. |nvim-diff-health| lists slots whose
+    repository is gone, from any directory, for you to remove.
 
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
@@ -720,8 +730,13 @@ Reports:
   - PR review slots (|nvim-diff-review-slots|) in the cwd's repository: each
     one in use (and by which Neovim), free, or one to look at — locked by
     something else, or a folder git does not list as a worktree — with the
-    command to fix or remove it. Also PR worktrees an older nvim-diff left
-    behind (`nvim-diff/pr-<n>`), with the command to remove each one.
+    command to fix or remove it. Also worktrees an older nvim-diff left inside
+    the git directory (`nvim-diff/pr-<n>`, and `nvim-diff/review-<k>` slots
+    from before they moved to the data directory), with the command to remove
+    each one or move a slot to keep its ignored files.
+  - Review slots of any repository that no repository links to any more
+    (it was deleted or moved), found even outside a repository, with the
+    command to remove each one.
 
 ==============================================================================
 10. LIMITATIONS                                        *nvim-diff-limitations*
