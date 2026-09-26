@@ -286,10 +286,15 @@ end
 --- change what the review shows; the next check is at the next tick, or on the key.
 function Sync:cancel()
   self.generation = self.generation + 1
-  if self.task and not self.task.done then
+  local running = self.task and not self.task.done
+  if running then
     self.task:cancel()
   end
   self.task, self.manual = nil, nil
+  if running then
+    -- A running check stopped the timer, and only its answer would arm it again.
+    self:schedule()
+  end
 end
 
 --- The panel's sync lines: what is new on GitHub and the threads waiting for it, then why
@@ -351,8 +356,8 @@ function Sync:close()
   if self.closed then
     return
   end
-  self:cancel()
   self.closed = true
+  self:cancel()
   if self.timer then
     self.timer:stop()
     if not self.timer:is_closing() then
