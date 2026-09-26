@@ -5,6 +5,7 @@
 --- diffs (`diffopt`, `diffexpr`, `scrollopt`, `splitkeep`) are never touched.
 
 local hl = require("nvim-diff.ui.hl")
+local sidebyside = require("nvim-diff.render.sidebyside")
 
 local api = vim.api
 
@@ -36,6 +37,10 @@ M.OPTIONS = {
 
 ---@class NvimDiff.PaneWinOpts
 ---@field statuscolumn string
+--- A window-local `winbar` (the pane's header, when its buffer has no header line). Without
+--- it, a pane header `winbar` found in the window is taken back to the global value.
+---@field winbar? string
+---@field signcolumn? string Default `"no"`.
 
 --- Show `buf` in `win` and make `win` a diff pane.
 ---@param win integer
@@ -60,6 +65,19 @@ function M.pane(win, buf, opts)
     api.nvim_set_option_value(name, value, { win = win, scope = "local" })
   end
   api.nvim_set_option_value("statuscolumn", opts.statuscolumn, { win = win, scope = "local" })
+  if opts.signcolumn then
+    api.nvim_set_option_value("signcolumn", opts.signcolumn, { win = win, scope = "local" })
+  end
+  if opts.winbar then
+    api.nvim_set_option_value("winbar", opts.winbar, { win = win, scope = "local" })
+  elseif
+    vim.startswith(api.nvim_get_option_value("winbar", { win = win, scope = "local" }), sidebyside.WINBAR_START)
+  then
+    -- Left by a pane with no header line: the window was reused (a layout flip), or the
+    -- buffer is a kept one and Neovim restored the window options it last had. An empty
+    -- local value falls back to the global one.
+    api.nvim_set_option_value("winbar", "", { win = win, scope = "local" })
+  end
   api.nvim_set_option_value("winfixbuf", true, { win = win, scope = "local" })
   hl.apply_window(win)
 end

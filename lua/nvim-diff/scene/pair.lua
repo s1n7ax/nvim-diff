@@ -37,11 +37,21 @@ local SIDES = { "old", "new" }
 --- The side is a blob at a commit: its buffer may be kept for reuse after the scene
 --- closes (`scene/buffer.lua`, `buffers.lru_size`).
 ---@field keep? boolean
+--- `false`: the buffer never ends with the trailer line (`render/rowmap.lua`), as a real
+--- file cannot; the pane then cannot scroll into filler below its last line, and neither
+--- pane scrolls past it.
+---@field trailer? boolean
 
 ---@class NvimDiff.PairSpec
 ---@field diff NvimDiff.Diff
 ---@field old NvimDiff.PairSide
 ---@field new NvimDiff.PairSide
+--- Show each side's header as the pane's `winbar` instead of buffer line 1: the layout a
+--- pane showing the real file needs (a PR review's). Rows above a side's first line then
+--- show with `topfill`, so the panes open at it, and `gg`/`<C-Home>` go back to it.
+---@field winbar? boolean
+--- A sign column (`signcolumn=yes:1`) on both panes, the same width so rows stay aligned.
+---@field signs? boolean
 --- Windows to show the panes in. They become panes: `winfixbuf`, the pane options, and
 --- they are closed with the pair. Omitted: a new tabpage with two vertical splits.
 ---@field wins? { old: integer, new: integer }
@@ -65,6 +75,8 @@ local SIDES = { "old", "new" }
 ---@field fold_base NvimDiff.Fold[] The folds the pair opened with; collapsing restores them.
 ---@field fold_step integer
 ---@field fold_opts false|NvimDiff.FoldOpts The spec's `fold`: false when folding is off.
+---@field layout NvimDiff.RowMapLayout Every map of the pair is built with it.
+---@field cols NvimDiff.PaneColumns What the panes' `statuscolumn` shows.
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[] Ids in insertion order, so equal rows keep it.
 ---@field private augroup integer
@@ -91,7 +103,11 @@ function M.open(spec)
   local fold_opts = spec.fold == nil and {} or spec.fold
   local base = fold_opts and fold.compute(diff, fold_opts) or {}
   local folds = fold_opts and spec.folds and vim.deepcopy(spec.folds) or base
-  local map = rowmap.new(diff, nil, folds)
+  local layout = {
+    header = not spec.winbar,
+    trailer = { old = spec.old.trailer ~= false, new = spec.new.trailer ~= false },
+  }
+  local map = rowmap.new(diff, nil, folds, layout)
   local self = setmetatable({
     diff = diff,
     map = map,
@@ -105,24 +121,27 @@ function M.open(spec)
     fold_base = base,
     fold_step = fold_opts and fold_opts.step or fold.STEP,
     fold_opts = fold_opts,
+    layout = layout,
+    cols = { header = map.header, signs = spec.signs or false },
   }, Pair)
 
+  local headers = {}
   for _, side in ipairs(SIDES) do
     local s = spec[side]
+    headers[side] = s.header or sidebyside.header(s.label)
     self.bufs[side] = buffer.create({
       lines = s.lines,
-      header = s.header or sidebyside.header(s.label),
-      trailer = map.trailer,
+      header = map.header and headers[side] or nil,
+      trailer = map.trailer[side],
       name = s.name,
       lang = s.lang,
       keep = s.keep,
     })
+    assert(
+      api.nvim_buf_line_count(self.bufs[side]) == diff[side .. "_count"] + map:head() + (map.trailer[side] and 1 or 0),
+      "nvim-diff: pane lines do not match the diff"
+    )
   end
-  assert(
-    api.nvim_buf_line_count(self.bufs.old) == diff.old_count + 1 + (map.trailer and 1 or 0)
-      and api.nvim_buf_line_count(self.bufs.new) == diff.new_count + 1 + (map.trailer and 1 or 0),
-    "nvim-diff: pane lines do not match the diff"
-  )
 
   local placeholder
   if spec.wins then
@@ -135,7 +154,9 @@ function M.open(spec)
   local width = sidebyside.number_width(diff)
   for _, side in ipairs(SIDES) do
     window.pane(self.wins[side], self.bufs[side], {
-      statuscolumn = sidebyside.statuscolumn(diff[side .. "_count"], width),
+      statuscolumn = sidebyside.statuscolumn(diff[side .. "_count"], width, self.cols),
+      winbar = not map.header and sidebyside.winbar(headers[side]) or nil,
+      signcolumn = self.cols.signs and "yes:1" or nil,
     })
     folds_scene.setup_window(self.wins[side])
     folds_scene.apply(self, side)
@@ -146,9 +167,13 @@ function M.open(spec)
   end
 
   self.filler_width = sidebyside.filler_width()
-  sidebyside.render(self.bufs, map)
+  sidebyside.render(self.bufs, map, self.cols)
 
   self.sync = scrollsync.attach({ self:sync_pane("old"), self:sync_pane("new") })
+  if not map.header then
+    self:map_top_keys()
+    self:top(self.sync:leader())
+  end
 
   self.augroup = api.nvim_create_augroup("nvim-diff.pair." .. self.bufs.old, { clear = true })
   api.nvim_create_autocmd("WinClosed", {
@@ -197,9 +222,57 @@ function Pair:sync_pane(side)
       return self.map:line_view(side, lnum)
     end,
     max_top = function()
-      return self.map:max_top()
+      return self.map:max_top(side)
     end,
   }
+end
+
+--- The last view row both panes can have at their top.
+---@return integer
+function Pair:max_top()
+  return math.min(self.map:max_top("old"), self.map:max_top("new"))
+end
+
+--- Put `win`'s pane at view row 0, cursor on its first line, and bring the other pane
+--- along: what `gg` does in a pane with a header line. Without one, the rows above the
+--- first line show only with `topfill`, which `gg`, `:1` and `zz` reset.
+---
+--- `topfill` stays below the window height (measured: `winrestview` clamps it at once), so
+--- a pane with more rows above its first line than that cannot show view row 0. The other
+--- pane leads then: it shows its first lines, and this one stops as near the top as it can.
+---@param win integer
+function Pair:top(win)
+  local side = self:side_of(win)
+  if not side then
+    return
+  end
+  local tl, tf = self.map:view_top(side, 0)
+  if (tf or 0) > vim.fn.winheight(win) - 1 then
+    side = side == "old" and "new" or "old"
+    tl, tf = self.map:view_top(side, 0)
+  end
+  local lead = self.wins[side]
+  api.nvim_win_call(lead, function()
+    vim.fn.winrestview({ topline = tl or 1, topfill = tf or 0, lnum = 1, col = 0, curswant = 0 })
+  end)
+  self.sync:sync(lead)
+end
+
+--- Map `gg` and `<C-Home>` in both panes to `top`, which also shows the rows above the
+--- first line. With a count they go to that line, as usual.
+function Pair:map_top_keys()
+  for _, side in ipairs(SIDES) do
+    for _, lhs in ipairs({ "gg", "<C-Home>" }) do
+      vim.keymap.set("n", lhs, function()
+        if vim.v.count > 0 then
+          vim.cmd.normal({ vim.v.count .. "gg", bang = true })
+          return
+        end
+        vim.cmd.normal({ "m'", bang = true })
+        self:top(api.nvim_get_current_win())
+      end, { buffer = self.bufs[side], desc = "nvim-diff (top of the file)" })
+    end
+  end
 end
 
 --- Which side `win` shows, if it is one of the panes.
@@ -214,11 +287,11 @@ function Pair:side_of(win)
   return nil
 end
 
---- Buffer line of the file's line `lnum`.
+--- Buffer line of the file's line `lnum` (either side).
 ---@param lnum integer
 ---@return integer
-function Pair.buf_line(_, lnum)
-  return rowmap.buf_line(lnum)
+function Pair:buf_line(lnum)
+  return self.map:buf_line(lnum)
 end
 
 --- The file's line under `side`'s cursor; nil on the header or the trailer.
@@ -233,7 +306,7 @@ end
 ---@param lnum integer
 function Pair:jump(side, lnum)
   local win = self.wins[side]
-  local bl = math.max(1, math.min(rowmap.buf_line(lnum), api.nvim_buf_line_count(self.bufs[side])))
+  local bl = math.max(1, math.min(self:buf_line(lnum), api.nvim_buf_line_count(self.bufs[side])))
   api.nvim_win_set_cursor(win, { bl, 0 })
   api.nvim_win_call(win, function()
     vim.cmd("normal! zz")
@@ -253,10 +326,10 @@ end
 
 --- Rebuild the map from the current blocks and folds and repaint every virtual row.
 function Pair:rebuild_virt()
-  self.map = rowmap.new(self.diff, self:block_list(), self.folds)
+  self.map = rowmap.new(self.diff, self:block_list(), self.folds, self.layout)
   self.filler_width = sidebyside.filler_width()
   for _, side in ipairs(SIDES) do
-    sidebyside.paint_virt(self.bufs[side], self.map, side)
+    sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols)
   end
 end
 
@@ -301,6 +374,28 @@ function Pair:fold_at(side, lnum)
   return self.folds[i], i
 end
 
+--- The display row a block after `row` hangs off, which no fold may hide: `row` itself, or,
+--- for a block above the first row of panes with no header line, the first row — its rows
+--- are `virt_lines_above` that row, which a closed fold would hide.
+---@param row integer
+---@return integer
+function Pair:hang_row(row)
+  if row == 0 and self.layout.header == false then
+    return 1
+  end
+  return row
+end
+
+--- `list` with every row a block hangs off revealed.
+---@param list NvimDiff.Fold[]
+---@return NvimDiff.Fold[]
+function Pair:reveal_blocks(list)
+  for _, b in ipairs(self:block_list()) do
+    list = fold.reveal(list, self:hang_row(b.row))
+  end
+  return list
+end
+
 --- Replace the fold list and rebuild both panes' folds, keeping `leader`'s view (default:
 --- the current pane) and putting its cursor on `cursor` (a file line of the leader's side)
 --- when given. Rows that blocks hang off are always kept visible.
@@ -308,9 +403,7 @@ end
 ---@param leader? integer
 ---@param cursor? integer
 function Pair:set_folds(list, leader, cursor)
-  for _, b in ipairs(self:block_list()) do
-    list = fold.reveal(list, b.row)
-  end
+  list = self:reveal_blocks(list)
   self.folds = list
   leader = leader or self.sync:leader()
   local lside = leader and self:side_of(leader)
@@ -329,7 +422,7 @@ function Pair:set_folds(list, leader, cursor)
     end
     if view then
       if cursor then
-        view.lnum = rowmap.buf_line(cursor)
+        view.lnum = self:buf_line(cursor)
         view.col, view.curswant = 0, 0
       end
       api.nvim_win_call(leader, function()
@@ -407,14 +500,11 @@ function Pair:set_diff(diff)
   )
   self.diff = diff
   local base = self.fold_opts and fold.compute(diff, self.fold_opts) or {}
-  local list = self.fold_opts and fold.carry(self.folds, base) or {}
-  for _, b in ipairs(self:block_list()) do
-    list = fold.reveal(list, b.row)
-  end
+  local list = self:reveal_blocks(self.fold_opts and fold.carry(self.folds, base) or {})
   self.fold_base = base
   self.folds = list
-  self.map = rowmap.new(diff, self:block_list(), list)
-  sidebyside.render(self.bufs, self.map)
+  self.map = rowmap.new(diff, self:block_list(), list, self.layout)
+  sidebyside.render(self.bufs, self.map, self.cols)
   self:set_folds(list)
 end
 
@@ -428,7 +518,7 @@ function Pair:set_block(id, block)
     self.block_order[#self.block_order + 1] = id
   end
   self.blocks[id] = block
-  if fold.find(self.folds, block.row) then
+  if fold.find(self.folds, self:hang_row(block.row)) then
     self:set_folds(self.folds)
   else
     self:repaint_virt()

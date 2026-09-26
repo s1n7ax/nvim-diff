@@ -50,7 +50,7 @@ M.groups = {
   -- padding opposite a comment thread, which carries no mark at all.
   NvimDiffFiller = { dark = { fg = "#3b4048" }, light = { fg = "#c4c9d2" } },
 
-  -- The mandatory header at buffer line 1 of every pane.
+  -- The header at buffer line 1 of every pane, or its winbar in a PR review's pair.
   NvimDiffHeader = {
     dark = { fg = "#8a94a6", bg = "#20242c", bold = true },
     light = { fg = "#4a5262", bg = "#e6e9ee", bold = true },
