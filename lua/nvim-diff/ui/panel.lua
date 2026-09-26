@@ -6,8 +6,9 @@
 --- shows this entry — so every panel action is "find the row under the cursor".
 ---
 --- Layout, top to bottom: the title, a counts line (`12 files  +340 -120`, plus
---- `3/7 viewed` in a review), a notice line when the list is summarised, then one row per
---- directory or file. The cursor is kept off the header lines.
+--- `3/7 viewed` in a review), a review's sync status lines (new commits on GitHub, merged),
+--- a notice line when the list is summarised, then one row per directory or file. The
+--- cursor is kept off the header lines.
 ---
 --- The history view reuses the window and buffer with its own rows: a panel along the
 --- bottom (`position = "bottom"`), drawn through `draw` and grown or patched through
@@ -72,6 +73,12 @@ end
 ---@field entries NvimDiff.FileEntry[] Every entry, for the counts.
 ---@field current? NvimDiff.FileEntry
 ---@field notice? string Shown under the counts, e.g. why the list is summarised.
+---@field status? NvimDiff.PanelStatus[] Shown under the counts, above `notice`.
+
+--- A header line of its own, in its own highlight: a PR review's sync state.
+---@class NvimDiff.PanelStatus
+---@field text string
+---@field hl string
 
 ---@class NvimDiff.Panel
 ---@field buf integer
@@ -239,6 +246,11 @@ local function header(model)
   end
 
   local out = { title, counts }
+  for _, status in ipairs(model.status or {}) do
+    local l = line()
+    put(l, status.text, status.hl)
+    out[#out + 1] = l
+  end
   if model.notice then
     local notice = line()
     put(notice, model.notice, "NvimDiffPanelDeferred")

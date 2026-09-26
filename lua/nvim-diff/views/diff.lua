@@ -106,6 +106,7 @@ local by_tab = {}
 ---@field thread_list? NvimDiff.SideList
 --- Called with each side list as it opens (a review maps its comment keys there).
 ---@field on_thread_list? fun(list: NvimDiff.SideList)
+---@field status? NvimDiff.PanelStatus[] Panel header lines a PR review's sync sets.
 local View = {}
 View.__index = View
 
@@ -356,7 +357,27 @@ function View:render()
     entries = self.list.entries,
     current = self.current,
     notice = notice,
+    status = self.status,
   })
+end
+
+--- Set the status lines under the panel's counts (`{}` clears them) and redraw. A cursor on
+--- a file row stays on that row as the header grows or shrinks.
+---@param status NvimDiff.PanelStatus[]
+function View:set_status(status)
+  local shift = #status - #(self.status or {})
+  self.status = status
+  if not self:is_valid() then
+    return
+  end
+  local win = self.panel.win
+  local row = api.nvim_win_get_cursor(win)[1]
+  local on_row = row >= self.panel.first_row
+  self:render()
+  if shift ~= 0 and on_row then
+    local last = api.nvim_buf_line_count(self.panel.buf)
+    pcall(api.nvim_win_set_cursor, win, { math.max(1, math.min(row + shift, last)), 0 })
+  end
 end
 
 --- Whether the view still has its tabpage and panel.

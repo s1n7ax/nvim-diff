@@ -27,7 +27,8 @@ review mode on top.
 - **GitHub PR review**: the PR is checked out into its own git worktree so LSP and tests
   work on its code; viewed marks sync with GitHub; comment threads show inline and expand
   in place; comments, replies, edits, suggestions, resolve and the review verdict all post
-  straight to GitHub. github.com and GitHub Enterprise Server.
+  straight to GitHub; the open review checks GitHub every minute and says when new commits
+  land or the PR is merged. github.com and GitHub Enterprise Server.
 
 Side-by-side is the default layout; `g<C-x>` flips a file to unified.
 
@@ -140,6 +141,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | --- | --- |
 | `<leader><space>` | mark the file viewed on GitHub, jump to the next unviewed one |
 | `<leader><BS>` | clear the viewed mark |
+| `<C-r>` | check GitHub now for new commits, a new base branch or a merge |
 | `<leader>cc` | in the file panel: a file-level comment on the file under the cursor |
 
 **PR review** — diff panes (comment threads)
@@ -202,8 +204,12 @@ require("nvim-diff").setup({
   },
 
   git = { bin = "git", timeout_ms = 15000 },
-  -- `host = "ghe.example.com"` overrides the host taken from the `origin` remote
-  github = { bin = "gh", timeout_ms = 20000 },
+  github = {
+    bin = "gh",
+    timeout_ms = 20000,
+    -- `host = "ghe.example.com"` overrides the host taken from the `origin` remote
+    sync_interval_ms = 60000, -- an open review checks GitHub this often (min 10000); false: key only
+  },
 
   highlights = {}, -- group -> attributes, or group -> name of a group to link to
 
@@ -239,7 +245,7 @@ require("nvim-diff").setup({
       next_conflict = "]x",
       prev_conflict = "[x",
     },
-    review = { mark_viewed = "<leader><space>", unmark_viewed = "<leader><BS>" },
+    review = { mark_viewed = "<leader><space>", unmark_viewed = "<leader><BS>", sync = "<C-r>" },
     threads = {
       toggle = "<CR>",
       next = "]t",
@@ -288,7 +294,7 @@ highlights = {
 | Comment threads | `NvimDiffThreadBorder` `NvimDiffThreadBorderActive` `NvimDiffThreadBadgeUnresolved` `NvimDiffThreadBadgeResolved` `NvimDiffThreadAuthor` `NvimDiffThreadBody` `NvimDiffThreadMeta` `NvimDiffThreadResolved` |
 | Comment split | `NvimDiffCommentHeader` `NvimDiffCommentHint` `NvimDiffCommentError` `NvimDiffCommentPosting` |
 | Key menu | `NvimDiffHelpKey` `NvimDiffHelpBorder` `NvimDiffHelpTitle` |
-| File panel | `NvimDiffPanelTitle` `NvimDiffPanelDir` `NvimDiffPanelPath` `NvimDiffPanelOldPath` `NvimDiffPanelInsertions` `NvimDiffPanelDeletions` `NvimDiffPanelSelected` `NvimDiffPanelViewed` `NvimDiffPanelRechanged` `NvimDiffPanelDeferred` `NvimDiffPanelStatusAdded` `NvimDiffPanelStatusModified` `NvimDiffPanelStatusDeleted` `NvimDiffPanelStatusConflicted` |
+| File panel | `NvimDiffPanelTitle` `NvimDiffPanelDir` `NvimDiffPanelPath` `NvimDiffPanelOldPath` `NvimDiffPanelInsertions` `NvimDiffPanelDeletions` `NvimDiffPanelSelected` `NvimDiffPanelViewed` `NvimDiffPanelRechanged` `NvimDiffPanelDeferred` `NvimDiffPanelStatusAdded` `NvimDiffPanelStatusModified` `NvimDiffPanelStatusDeleted` `NvimDiffPanelStatusConflicted` `NvimDiffPanelStale` `NvimDiffPanelSync` |
 | Conflict result | `NvimDiffConflictMarker` `NvimDiffConflictOurs` `NvimDiffConflictBase` `NvimDiffConflictTheirs` |
 | History panel | `NvimDiffHistoryHash` `NvimDiffHistoryDate` `NvimDiffHistoryAuthor` `NvimDiffHistoryRename` `NvimDiffHistoryError` `NvimDiffHistoryMarked` `NvimDiffHistoryLineRange` |
 
@@ -304,6 +310,13 @@ never touched) and opens it in a tabpage whose `:tcd` is that worktree. The diff
 computed locally with git. Closing the tab removes the worktree. Nothing is kept locally:
 reopening a PR refetches viewed marks and threads from GitHub.
 
+While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
+query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
+in the panel; the review keeps the diff it opened with until you reopen the PR. A merged
+or closed PR gets a notice and syncing stops; the review stays usable. Network errors
+retry quietly (a warning after three in a row), a rate limit pauses syncing until it
+lifts.
+
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
 and only when you run it.
@@ -313,7 +326,8 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- Nothing is refetched while a review is open; reopen the PR to see new comments.
+- An open review detects new commits and a new base branch but does not load them, and
+  does not draw new comments yet; reopen the PR for both.
 - File-level comments need a GHES version that supports `subject_type=file`.
 - Opening the same PR in two Neovim instances hands the worktree to the second.
 - Structural diff ignores injected languages and has no notion of moved code; it runs

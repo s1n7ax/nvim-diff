@@ -33,6 +33,9 @@ local M = {}
 ---@field bin string
 ---@field timeout_ms integer
 ---@field host? string GitHub Enterprise host; resolved from the remote when unset.
+--- How often an open PR review checks GitHub for new commits, a new base branch, a merge
+--- and comments; at least 10 s. `false`: never by itself, only on `keymaps.review.sync`.
+---@field sync_interval_ms integer|false
 
 --- Keys of the layout toggle, buffer-local to diff panes. `false` disables a key.
 ---@class NvimDiff.Config.LayoutKeymaps
@@ -95,6 +98,9 @@ local M = {}
 ---@field mark_viewed NvimDiff.Config.Key
 --- Clear the file's viewed mark on GitHub.
 ---@field unmark_viewed NvimDiff.Config.Key
+--- Check GitHub for new commits, a new base branch or a merge now, without waiting for
+--- `github.sync_interval_ms`.
+---@field sync NvimDiff.Config.Key
 
 --- Buffer-local to the diff panes of a view showing PR review comment threads.
 ---@class NvimDiff.Config.ThreadKeymaps
@@ -215,6 +221,9 @@ local defaults = {
   github = {
     bin = "gh",
     timeout_ms = 20000,
+    -- One GraphQL point per open review per check: three reviews at 60 s spend about 4% of
+    -- the hourly budget.
+    sync_interval_ms = 60000,
   },
 
   highlights = {},
@@ -266,9 +275,11 @@ local defaults = {
       prev_conflict = "[x",
     },
     -- octo.nvim's viewed key, so muscle memory carries over; backspace takes it back.
+    -- `<C-r>` is octo.nvim's reload key too; redo means nothing in a read-only pane.
     review = {
       mark_viewed = "<leader><space>",
       unmark_viewed = "<leader><BS>",
+      sync = "<C-r>",
     },
     threads = {
       toggle = "<CR>",
@@ -305,8 +316,9 @@ local defaults = {
   },
 }
 
---- A leaf rule is `{ type = ... }`, optionally with `one_of`, `min`, `integer`, or `keymap`
---- (a non-empty key string, or `false` to disable).
+--- A leaf rule is `{ type = ... }`, optionally with `one_of`, `min`, `integer`, `keymap`
+--- (a non-empty key string, or `false` to disable), or `off` (a number, or `false` to turn
+--- the thing off; `min` and `integer` then apply to the number only).
 --- A table without a `type` key is a branch, and its values are rules for its children.
 --- `free` marks a branch whose keys are user-chosen; `values` then validates each value.
 local KEY = { type = { "string", "boolean" }, key = true }
@@ -347,6 +359,7 @@ local schema = {
     bin = { type = "string" },
     timeout_ms = { type = "number", integer = true, min = 1 },
     host = { type = "string" },
+    sync_interval_ms = { type = { "number", "boolean" }, off = true, integer = true, min = 10000 },
   },
 
   highlights = { free = true, values = { type = { "table", "string" } } },
@@ -398,6 +411,7 @@ local schema = {
     review = {
       mark_viewed = KEY,
       unmark_viewed = KEY,
+      sync = KEY,
     },
     threads = {
       toggle = KEY,
@@ -472,11 +486,17 @@ local function check_leaf(value, rule, path, errors)
   if rule.keymap and (value == true or value == "") then
     errors[#errors + 1] = ("`%s`: expected a key or false, got %s"):format(path, vim.inspect(value))
   end
+  if rule.off and value == true then
+    errors[#errors + 1] = ("`%s`: expected a number or false, got true"):format(path)
+  end
+  if type(value) ~= "number" then
+    if rule.key and value == true then
+      errors[#errors + 1] = ("`%s`: expected a key or false, got true"):format(path)
+    end
+    return
+  end
   if rule.integer and value % 1 ~= 0 then
     errors[#errors + 1] = ("`%s`: expected a whole number, got %s"):format(path, tostring(value))
-  end
-  if rule.key and value == true then
-    errors[#errors + 1] = ("`%s`: expected a key or false, got true"):format(path)
   end
   if rule.min and value < rule.min then
     errors[#errors + 1] = ("`%s`: expected at least %d, got %s"):format(path, rule.min, tostring(value))

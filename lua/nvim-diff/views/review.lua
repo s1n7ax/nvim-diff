@@ -40,6 +40,11 @@
 --- `reply_resolve` after a reply written in the same split, `unresolve` to undo. The thread
 --- is redrawn from GitHub's answer and stays on screen, dimmed with a ✓ — even while
 --- resolved threads are hidden, until the resolved mode is next flipped.
+---
+--- While the review is open it checks GitHub every `github.sync_interval_ms`, and at once on
+--- `keymaps.review.sync` (`review/sync.lua`): new commits, a new base branch and a merge or
+--- close are announced and marked in the panel. What GitHub has now is kept as
+--- `review.latest`; what the review shows (`review.pr`) is unchanged by a check.
 
 local comment_mod = require("nvim-diff.review.comment")
 local comments_mod = require("nvim-diff.github.comments")
@@ -53,6 +58,7 @@ local pr_mod = require("nvim-diff.github.pr")
 local repo_mod = require("nvim-diff.git.repo")
 local rev = require("nvim-diff.git.rev")
 local revparse = require("nvim-diff.git.revparse")
+local sync_mod = require("nvim-diff.review.sync")
 local threads_mod = require("nvim-diff.github.threads")
 local viewed_mod = require("nvim-diff.github.viewed")
 local views = require("nvim-diff.views.diff")
@@ -73,8 +79,15 @@ local by_number = {}
 
 ---@class NvimDiff.Review
 ---@field repo NvimDiff.Git.Repo The user's repository, which owns the worktree.
+---@field remote string The remote the PR's commits are fetched from.
 ---@field number integer
+--- The PR as the review shows it: its head is the diffed and checked-out commit, and what
+--- every comment is posted against. A sync never changes it.
 ---@field pr NvimDiff.GitHub.PR
+--- The PR as GitHub last answered — at open, then on every sync. Its `head.oid` or
+--- `base.ref` differing from `pr`'s is new code the review does not show (`stale`).
+---@field latest? NvimDiff.GitHub.Snapshot
+---@field sync NvimDiff.ReviewSync
 ---@field path string The worktree.
 ---@field cwd string The cwd before the review opened, restored on a tabpage that outlives it.
 ---@field view NvimDiff.DiffView
@@ -165,9 +178,9 @@ function M.open(opts)
     fail(("cannot read PR #%d's viewed files: %s"):format(number, msg(err)))
   end
 
-  local threads
-  threads, err = threads_mod.fetch(pr.target, number)
-  if not threads then
+  local snap
+  snap, err = threads_mod.snapshot(pr.target, number)
+  if not snap then
     fail(("cannot read PR #%d's comment threads: %s"):format(number, msg(err)))
   end
 
@@ -196,8 +209,10 @@ function M.open(opts)
 
   local self = setmetatable({
     repo = repo,
+    remote = remote,
     number = number,
     pr = pr,
+    latest = snap,
     path = wt_path,
     cwd = cwd,
     view = view,
@@ -212,7 +227,8 @@ function M.open(opts)
     entry.viewed = states[entry.path] or "unviewed"
   end
   view:render()
-  view:set_threads(threads)
+  view:set_threads(snap.threads)
+  self.sync = sync_mod.new(self)
   self:trap()
   self:map_keys(view.panel.buf)
   self:map_keys(view.note_buf)
@@ -225,6 +241,7 @@ function M.open(opts)
   if first then
     view:select(first)
   end
+  self.sync:start()
   return self
 end
 
@@ -343,6 +360,9 @@ function Review:map_keys(buf)
   map(keys.unmark_viewed, function()
     self:unmark_viewed()
   end, "Review: Unmark viewed")
+  map(keys.sync, function()
+    self:sync_now()
+  end, "Review: Check GitHub for updates")
 end
 
 --- The file a viewed key acts on: the file row under the cursor in the panel, else the file
@@ -385,6 +405,31 @@ end
 ---@return boolean
 function Review:is_valid()
   return not self.closed and self.view:is_valid()
+end
+
+--- What GitHub has that the review does not show: new commits, or the PR retargeted to
+--- another base branch. A push to the base branch alone is not here — the diff is from the
+--- merge-base, which it does not move.
+---@return { head?: string, base?: string }? stale `head`: GitHub's head commit, when not the
+---one shown; `base`: GitHub's base branch, when not the one shown. Nil when nothing is new.
+function Review:stale()
+  local latest = self.latest
+  if not latest then
+    return nil
+  end
+  local head = latest.head.oid ~= self.pr.head.oid and latest.head.oid or nil
+  local base = latest.base.ref ~= self.pr.base.ref and latest.base.ref or nil
+  if head or base then
+    return { head = head, base = base }
+  end
+  return nil
+end
+
+--- Check GitHub for new commits, a new base branch or a merge now.
+function Review:sync_now()
+  if self:is_valid() then
+    self.sync:now()
+  end
 end
 
 --- Mark a file viewed on GitHub, then show the next file that is not viewed.
@@ -1042,9 +1087,6 @@ function Review:wipe_buffers()
   end
 end
 
---- End the review: close its view and tabpage, wipe buffers on the worktree's files and
---- remove the worktree. Idempotent.
----@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
 --- `:tcd` tabpage `tab` back to where the review was started, out of the worktree.
 ---@param tab integer
 function Review:leave_worktree(tab)
@@ -1055,12 +1097,18 @@ function Review:leave_worktree(tab)
   end
 end
 
+--- End the review: stop syncing, close its view and tabpage, wipe buffers on the worktree's
+--- files and remove the worktree. Idempotent.
+---@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
 function Review:close(opts)
   local windows = not (opts and opts.windows == false)
   if self.closed then
     return
   end
   self.closed = true
+  if self.sync then
+    self.sync:close()
+  end
   if by_number[self.number] == self then
     by_number[self.number] = nil
   end
