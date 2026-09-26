@@ -75,8 +75,7 @@ naming the full path of each offending key, and the previous configuration
 stays active. Each call starts from the defaults again; calls do not
 accumulate.
 
-`setup()` also defines the highlight groups and, in the background, removes
-PR worktrees left behind in the cwd's repository by a Neovim that crashed.
+`setup()` also defines the highlight groups.
 
                                                             *nvim-diff.open()*
 >lua
@@ -202,13 +201,39 @@ writes with `merge.conflictStyle=diff3` (or `zdiff3`).
 PR REVIEW                                                   *nvim-diff-review*
 
 |:NvimDiffPR| fetches the PR from GitHub through `gh`, checks its head out,
-detached, into a separate git worktree at `<git dir>/nvim-diff/pr-<n>`, and
-opens a diff view of it in a new tabpage whose |:tcd| is that worktree. LSP,
-tests and debugging see the PR's code; your branch and uncommitted changes
-are never touched. The diff is computed locally from the merge-base.
+detached, into a review slot (|nvim-diff-review-slots|), and opens a diff view
+of it in a new tabpage whose |:tcd| is that slot. LSP, tests and debugging see
+the PR's code; your branch and uncommitted changes are never touched. The diff
+is computed locally from the merge-base.
 
 Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
-buffers on the worktree's files and removes the worktree.
+buffers on the slot's files and releases the slot. The slot's folder stays.
+
+                                                      *nvim-diff-review-slots*
+Review slots are separate git worktrees at `<git dir>/nvim-diff/review-<k>`,
+kept between reviews:
+
+  - A review takes the lowest-numbered slot no running Neovim holds, so a
+    second review open at the same time, in the same Neovim or another, gets
+    `review-2`, and so on. A held slot is locked with `git worktree lock`, the
+    reason naming the Neovim's pid; a lock whose Neovim is gone (a crash)
+    counts as free. A slot locked by anything else is skipped.
+  - Checking a PR into a slot discards changes to tracked files and removes
+    untracked files git does not ignore. Ignored files stay: `node_modules/`,
+    a virtualenv or build output installed once serves every later review.
+    Ignore anything else you want kept (`.gitignore`, `.git/info/exclude` or
+    your global excludes file).
+  - nvim-diff runs no install or setup command in a slot, and git hooks are
+    off for its checkouts, so a `post-checkout` hook cannot run one either.
+    Install packages by hand.
+  - nvim-diff never removes a slot and has no cleanup command. Remove one that
+    is not in use by hand with `git worktree remove --force <path>` (a second
+    `--force` for one still locked by a Neovim that is gone).
+    |nvim-diff-health| lists the slots and their state.
+  - A slot folder removed with `rm` while git still lists it is re-created
+    when next needed. A folder git does not list as a worktree is skipped and
+    never deleted; if the repository was moved, `git worktree repair` is
+    tried on it first.
 
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
@@ -692,8 +717,11 @@ Reports:
     GitHub Enterprise Server host you never logged in to shows up here rather
     than when |:NvimDiffPR| fails.
   - treesitter: which of a list of common languages have a parser.
-  - PR worktrees left behind by a Neovim that crashed or was killed, with the
-    command to remove each one.
+  - PR review slots (|nvim-diff-review-slots|) in the cwd's repository: each
+    one in use (and by which Neovim), free, or one to look at — locked by
+    something else, or a folder git does not list as a worktree — with the
+    command to fix or remove it. Also PR worktrees an older nvim-diff left
+    behind (`nvim-diff/pr-<n>`), with the command to remove each one.
 
 ==============================================================================
 10. LIMITATIONS                                        *nvim-diff-limitations*
@@ -705,8 +733,6 @@ Reports:
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
   - Nothing is refetched while a review is open.
-  - Opening the same PR in two Neovim instances: the second takes the
-    worktree over from the first.
   - Structural diff ignores injected languages (a code fence in markdown, a
     script in HTML), and a moved block reads as a delete plus an add.
   - Structural diff runs synchronously when a file opens.

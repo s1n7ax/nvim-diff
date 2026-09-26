@@ -7,7 +7,9 @@
 ---
 --- The child inherits Neovim's environment — deliberately, since a dotfiles setup runs
 --- Neovim with `GIT_DIR`/`GIT_WORK_TREE` set — plus `GIT_TERMINAL_PROMPT=0` so a fetch
---- that wants credentials fails instead of hanging on a prompt nobody can see.
+--- that wants credentials fails instead of hanging on a prompt nobody can see. A caller that
+--- must not follow those variables removes them with `env` (`git/worktree.lua` does, inside
+--- a review slot).
 
 local errors = require("nvim-diff.git.error")
 local job = require("nvim-diff.core.job")
@@ -19,6 +21,7 @@ local M = {}
 ---@field log? boolean Add `-c gc.auto=0`.
 ---@field ok_codes? integer[] Exit statuses that count as success besides 0.
 ---@field timeout_ms? integer Overrides `git.timeout_ms`, for a network call such as a fetch.
+---@field env? table<string, string|false> Merged over the inherited environment; `false` removes a name.
 
 ---@param args string[]
 ---@param opts NvimDiff.Git.CmdOpts
@@ -46,7 +49,7 @@ function M.run(cwd, args, opts)
   local res = job.await(argv, {
     cwd = cwd,
     stdin = opts.stdin,
-    env = { GIT_TERMINAL_PROMPT = "0" },
+    env = vim.tbl_extend("force", opts.env or {}, { GIT_TERMINAL_PROMPT = "0" }),
     timeout_ms = opts.timeout_ms or require("nvim-diff.config").get().git.timeout_ms,
   })
   local extra = { cmd = job.describe(argv), stderr = res.stderr }

@@ -2,8 +2,8 @@
 ---
 --- Everything reported here is something that silently degrades the plugin rather than
 --- breaking it loudly: a missing `gh` costs PR review but not diffing, a missing parser
---- costs structural diff but not line diff. The orphan-worktree check is the one that
---- reports state on disk the plugin is responsible for cleaning up.
+--- costs structural diff but not line diff. The review-slot check is the one that reports
+--- state on disk: the kept PR worktrees, which only the user removes.
 
 local M = {}
 
@@ -244,88 +244,70 @@ local function check_treesitter()
   end
 end
 
---- The lock reason a PR worktree carries while a review has it open. The pid names the
---- Neovim that owns it, so a second Neovim's startup prune can tell a live review from a
---- crashed one.
-M.WORKTREE_LOCK_REASON = "nvim-diff pid %d"
-
---- Whether a worktree lock reason names a Neovim that is still running.
----@param reason string?
----@return boolean
-function M.worktree_owner_alive(reason)
-  local pid = tonumber((reason or ""):match("^nvim%-diff pid (%d+)$"))
-  if not pid then
-    return false
+--- One line about review slot `slot`, at the level its state deserves.
+---@param slot NvimDiff.Git.Slot
+local function report_slot(slot)
+  local name = vim.fs.basename(slot.path)
+  if slot.state == "held" then
+    local by = slot.pid == vim.fn.getpid() and "this Neovim" or ("Neovim pid %d"):format(slot.pid)
+    vim.health.ok(("%s: in use by %s"):format(name, by))
+  elseif slot.state == "free" then
+    local note = slot.stale and (" (lock left by Neovim pid %d, which is gone)"):format(slot.pid) or ""
+    vim.health.ok(("%s: free%s"):format(name, note))
+  elseif slot.state == "missing" then
+    vim.health.info(("%s: folder removed, still registered with git; re-created when next needed"):format(name))
+  elseif slot.state == "foreign" then
+    vim.health.warn(
+      ("%s: locked by something other than nvim-diff (%s); skipped while locked"):format(
+        name,
+        slot.reason or "no reason given"
+      ),
+      { ("git worktree unlock %s"):format(slot.path) }
+    )
+  elseif slot.state == "unregistered" then
+    vim.health.warn(("%s: a folder git does not list as a worktree; skipped, never deleted"):format(name), {
+      ("if the repository was moved, relink it: `git worktree repair %s`"):format(slot.path),
+      ("otherwise remove it by hand: `rm -rf %s`"):format(slot.path),
+    })
   end
-  if pid == vim.fn.getpid() then
-    return true
-  end
-  -- Signal 0 checks for existence without delivering anything.
-  return vim.uv.kill(pid, 0) == 0
 end
 
---- Paths of PR worktrees left behind by a crash or `:qa!`: every `nvim-diff/pr-*`
---- worktree that is unlocked, or locked by a Neovim that is no longer running.
----@param opts? { cwd?: string } Repository to look in; the cwd when omitted.
----@return string[] paths
----@return string? err
-function M.orphan_worktrees(opts)
-  opts = opts or {}
-  local config = require("nvim-diff.config").get()
-  local cmd = { config.git.bin, "--no-optional-locks", "-c", "core.quotePath=false", "worktree", "list", "--porcelain" }
-  if opts.cwd then
-    table.insert(cmd, 2, "-C")
-    table.insert(cmd, 3, opts.cwd)
+local function check_slots()
+  vim.health.start("PR review slots")
+  local repo = require("nvim-diff.git.repo").discover()
+  if not repo then
+    vim.health.info("not inside a git repository; skipping")
+    return
   end
-  local result = run(cmd, config.git.timeout_ms)
-  if not result then
-    return {}, "git is unavailable"
+  local worktree = require("nvim-diff.git.worktree")
+  local slots, err = worktree.slots(repo)
+  if not slots then
+    vim.health.warn("cannot list the repository's worktrees: " .. tostring(err))
+    return
   end
-  if result.code ~= 0 then
-    return {}, "not inside a git repository"
-  end
-
-  return M.parse_orphans(result.stdout or "")
-end
-
---- The orphan matcher on its own, over `git worktree list --porcelain` output, so
---- `git/worktree.lua` can fetch the list asynchronously and still share this code.
----@param porcelain string
----@return string[] paths
-function M.parse_orphans(porcelain)
-  local paths = {}
-  -- Records are separated by a blank line; `locked` is optional and may carry a reason.
-  for record in (porcelain .. "\n\n"):gmatch("(.-)\n\n") do
-    local path = record:match("^worktree ([^\n]+)")
-    if path and path:match("nvim%-diff[/\\]pr%-%w+$") then
-      -- Unlocked, or locked by a Neovim that has gone. A lock anyone else placed is theirs.
-      local locked = record:match("\nlocked") ~= nil
-      local reason = record:match("\nlocked ([^\n]*)")
-      local ours = reason ~= nil and reason:match("^nvim%-diff pid %d+$") ~= nil
-      if not locked or (ours and not M.worktree_owner_alive(reason)) then
-        paths[#paths + 1] = path
-      end
+  local dir = worktree.dir(repo)
+  if #slots == 0 then
+    vim.health.ok(("no review slots yet; `:NvimDiffPR` creates them in %s"):format(dir))
+  else
+    vim.health.info(("%d review slot(s) in %s"):format(#slots, dir))
+    for _, slot in ipairs(slots) do
+      report_slot(slot)
     end
+    vim.health.info(
+      "a slot keeps the files git ignores (`node_modules/`, build output) for the next review, and nvim-diff "
+        .. "never removes it. Remove one not in use by hand with `git worktree remove --force <path>`; "
+        .. "add a second `--force` when it still carries the lock of a Neovim that is gone."
+    )
   end
-  return paths
-end
 
-local function check_worktrees()
-  vim.health.start("PR worktrees")
-  local paths, err = M.orphan_worktrees()
-  if err then
-    vim.health.info(err .. "; skipping the orphan check")
-    return
+  local legacy = worktree.legacy(repo) or {}
+  if #legacy > 0 then
+    local advice = { "worktrees of an older nvim-diff, which removed them itself; nothing uses them now:" }
+    for _, path in ipairs(legacy) do
+      advice[#advice + 1] = ("  git worktree remove --force --force %s"):format(path)
+    end
+    vim.health.warn(("%d leftover PR worktree(s)"):format(#legacy), advice)
   end
-  if #paths == 0 then
-    vim.health.ok("no leftover PR worktrees")
-    return
-  end
-  local advice = { "no running Neovim owns them; the next Neovim started here prunes them at `setup()`, or by hand:" }
-  for _, path in ipairs(paths) do
-    advice[#advice + 1] = ("  git worktree remove --force %s"):format(path)
-  end
-  vim.health.warn(("%d leftover PR worktree(s)"):format(#paths), advice)
 end
 
 --- Entry point for `:checkhealth nvim-diff`.
@@ -335,7 +317,7 @@ function M.check()
   check_git()
   check_gh()
   check_treesitter()
-  check_worktrees()
+  check_slots()
 end
 
 return M
