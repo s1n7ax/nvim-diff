@@ -465,7 +465,20 @@ function ThreadView:unanchored()
   return self.loose
 end
 
---- Map the thread keys in the scene's buffers, once per buffer, and watch their cursor.
+--- Whether `buf` has a buffer-local normal-mode mapping of `lhs` set by the plugin.
+---@param buf integer
+---@param lhs string
+---@return boolean
+local function has_own_map(buf, lhs)
+  local m = api.nvim_buf_call(buf, function()
+    return vim.fn.maparg(lhs, "n", false, true)
+  end)
+  return m.buffer == 1 and type(m.desc) == "string" and vim.startswith(m.desc, "nvim-diff")
+end
+
+--- Map the thread keys in the scene's buffers, once per buffer, and watch their cursor. A
+--- buffer that lost its keys (a kept or real file's buffer its pane let go of, taken back by
+--- the next scene) is mapped again.
 function ThreadView:map_keys()
   for _, buf in ipairs(self.file:bufs()) do
     if #api.nvim_get_autocmds({ group = self.augroup, buffer = buf }) == 0 then
@@ -485,9 +498,12 @@ function ThreadView:map_keys()
   for _, buf in ipairs(self.file:bufs()) do
     local done = false
     for _, m in ipairs(self.mapped) do
-      done = done or m.buf == buf
+      done = done or (m.buf == buf and has_own_map(buf, m.lhs))
     end
     if not done then
+      self.mapped = vim.tbl_filter(function(m)
+        return m.buf ~= buf
+      end, self.mapped)
       local function map(lhs, fn, desc)
         if type(lhs) == "string" then
           vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, desc = "nvim-diff: " .. desc })
@@ -532,7 +548,9 @@ function ThreadView:detach()
   self.unwatch()
   pcall(api.nvim_del_augroup_by_id, self.augroup)
   for _, m in ipairs(self.mapped) do
-    if api.nvim_buf_is_valid(m.buf) then
+    -- Only while the key is still the plugin's: a real file's buffer may have the user's
+    -- own mapping of it back by now.
+    if api.nvim_buf_is_valid(m.buf) and has_own_map(m.buf, m.lhs) then
       pcall(vim.keymap.del, "n", m.lhs, { buffer = m.buf })
     end
   end
