@@ -22,7 +22,8 @@ local M = {}
 
 ---@class NvimDiff.Config.Buffers
 --- Diff buffers of blobs at a commit kept after their view moves on, for reuse; beyond
---- this, the least recently used one not on screen is wiped. `0` keeps none.
+--- this, the least recently used one not on screen is wiped. `0` keeps none. The files a PR
+--- review's head pane opened (`scene/filebuf.lua`) are capped the same, separately.
 ---@field lru_size integer
 
 ---@class NvimDiff.Config.Git

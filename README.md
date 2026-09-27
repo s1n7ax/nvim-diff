@@ -199,7 +199,7 @@ require("nvim-diff").setup({
   },
 
   buffers = {
-    lru_size = 64, -- committed-file diff buffers kept for reuse; 0 keeps none
+    lru_size = 64, -- committed-file diff buffers (and review head-pane files) kept; 0 keeps none
   },
 
   git = { bin = "git", timeout_ms = 15000 },
@@ -326,6 +326,14 @@ root from a slot file finds the slot, not your checkout. Review slots are kept:
 - Deleting or moving a repository leaves its slots behind (a moved repository gets new
   ones). `:checkhealth nvim-diff` lists those too, from any directory, for you to remove.
 
+In side-by-side, the head (right) pane is the file itself in the slot, read-only, so your
+language servers attach to it: hover, go to definition within the file, references, and
+diagnostics with signs in the sign column. The diff colours stay in that pane — the same
+file in another window looks and maps keys as usual — and code lens is off there so rows
+stay aligned. A file on disk that is not exactly the PR's (changed since the checkout, an
+encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
+unified layout.
+
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
 and only when you run it.
@@ -336,6 +344,8 @@ and only when you run it.
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
 - Nothing is refetched while a review is open; reopen the PR to see new comments.
+- An LSP jump from the review's head pane to another file fails (`winfixbuf`); jumps
+  within the file work.
 - File-level comments need a GHES version that supports `subject_type=file`.
 - Structural diff ignores injected languages and has no notion of moved code; it runs
   synchronously when a file opens.

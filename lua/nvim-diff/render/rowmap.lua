@@ -15,8 +15,8 @@
 --- virtual lines *above* a line, so a top that lands inside virtual lines below the last
 --- buffer line cannot be expressed, and the other pane would scroll further than this one.
 ---
---- A pair that shows its headers as winbars (a PR review, whose head pane is to be the real
---- file) has no header line: line `n` is the file's line `n`, view row 0 is the first
+--- A pair that shows its headers as winbars (a PR review, whose head pane is the real file,
+--- `scene/filebuf.lua`) has no header line: line `n` is the file's line `n`, view row 0 is the first
 --- display row, and what comes before the first line — leading filler, a block after row 0
 --- — hangs *above* buffer line 1 (anchor -1), shown only with `topfill`. The header is
 --- pair-wide, since the panes share view row 0. A side can also be denied the trailer (a

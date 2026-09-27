@@ -80,6 +80,11 @@ local by_tab = {}
 --- has no trailer line, and both panes have a sign column — the layout the head pane needs
 --- to show the real file in the review worktree.
 ---@field review? boolean
+--- With `review`: the side-by-side head pane shows the file in `repo`'s worktree, which has
+--- `right` checked out, in its own buffer with filetype and LSP (`scene/filebuf.lua`) — not
+--- a scratch copy. A file whose buffer does not hold exactly the diffed lines falls back to
+--- the copy. `view.real_file` may change later; it counts from the next file shown.
+---@field real_file? boolean
 
 ---@class NvimDiff.DiffView
 ---@field repo NvimDiff.Git.Repo
@@ -90,6 +95,7 @@ local by_tab = {}
 ---@field resolve_opts? NvimDiff.Git.ResolveOpts
 ---@field paths? string[]
 ---@field review? boolean
+---@field real_file? boolean
 ---@field augroup? integer Auto-refresh autocmds, for a worktree or index right side.
 ---@field list NvimDiff.FileList
 ---@field listing NvimDiff.Listing
@@ -196,6 +202,7 @@ function M.open(opts)
     resolve_opts = opts.resolve_opts,
     paths = opts.paths,
     review = opts.review,
+    real_file = opts.real_file,
     listing = opts.listing or cfg.panel.listing,
     collapsed = {},
     layouts = setmetatable({}, { __mode = "k" }),
@@ -371,8 +378,12 @@ function View:is_valid()
   return not self.closed and api.nvim_tabpage_is_valid(self.tab) and self.panel:is_open()
 end
 
---- Close whatever shows in the area right of the panel.
+--- Close whatever shows in the area right of the panel, and the threads drawn on it.
 function View:clear_area()
+  if self.thread_view then
+    self.thread_view:detach()
+    self.thread_view = nil
+  end
   if self.file and not self.file:is_closed() then
     self.file:close()
   end
@@ -578,6 +589,16 @@ function View:layout_for(entry)
   return config.get().layout
 end
 
+--- The file on disk the head pane shows for `entry` instead of a copy (`real_file`), if any.
+---@param entry NvimDiff.FileEntry
+---@return string?
+function View:real_path(entry)
+  if not (self.review and self.real_file) or entry.change.status == "D" then
+    return nil
+  end
+  return path.from_git(self.repo.toplevel, entry.path)
+end
+
 ---@param entry NvimDiff.FileEntry
 function View:show_diff(entry)
   local old, problem = self:read_side(entry, "old")
@@ -615,6 +636,7 @@ function View:show_diff(entry)
       lang = lang_for(entry.path),
       keep = right.type == "commit",
       trailer = not self.review,
+      file = self:real_path(entry),
     },
     winbar = self.review,
     signs = self.review,

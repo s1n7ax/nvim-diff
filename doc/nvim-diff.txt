@@ -251,6 +251,34 @@ or deleted above a file's first line show above it; `gg` and `<C-Home>` go
 back to them. A pane stops at its last line: neither pane scrolls further
 than the other can follow.
 
+                                                  *nvim-diff-review-head-pane*
+In the side-by-side layout the head (right) pane is the file itself, in the
+review slot, not a copy: its 'filetype' is set, so filetype plugins run and
+language servers attach, rooted in the slot. Hover, go to definition within
+the file, references and diagnostics work there, with diagnostic signs in the
+sign column (your |vim.diagnostic.config()| applies). The pane is read-only
+('nomodifiable'): an edit, a rename or a code action that edits fails.
+
+  - The diff colours, filler rows and comment threads are drawn in the pane's
+    window only. The same file open in another window shows none of them and
+    gets your window options, not the pane's.
+  - nvim-diff's keys win in the pane, also over keys a language server's
+    |LspAttach| handler maps there. In any other window on the file your own
+    keys apply, and they are back on the file once the pane moves on.
+  - Code lens is off for the file while the pane shows it: its lines would
+    push the pane's rows out of line with the base pane.
+  - A file nvim-diff opened stays loaded, hidden and read-only after the pane
+    moves on, so going back is instant and the language server keeps it; up to
+    |nvim-diff-config.buffers.lru_size| of them. A file you already had open is
+    used as it is, read-only while the pane shows it, and never closed.
+  - The pane shows a copy, without LSP, when the file on disk is not exactly
+    the head the diff was made from: changed since the checkout, converted by
+    'fileencodings', a BOM, a git filter such as LFS (a CRLF file is fine);
+    when your own buffer on the file has unsaved changes; and for an empty
+    file.
+  - The unified layout (`g<C-x>`) shows a copy, without LSP; flip back to
+    side-by-side for it.
+
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
@@ -478,7 +506,9 @@ buffers.lru_size                       (default: `64`)
     on, so showing that file at that commit again reuses the buffer and its
     treesitter parse. Past this many, the least recently used one that no
     window shows is wiped; buffers on screen are never wiped. `0` keeps none.
-    Work-tree and index sides are never kept.
+    Work-tree and index sides are never kept. The files a PR review's head
+    pane opened (|nvim-diff-review-head-pane|) are kept the same way, up to
+    this many of them too.
 
                                                     *nvim-diff-config.git.bin*
 git.bin                                (default: `"git"`)
@@ -755,6 +785,11 @@ Reports:
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
   - Nothing is refetched while a review is open.
+  - An LSP jump from a review's head pane to another file fails (E1513,
+    'winfixbuf'); jumps within the file work.
+  - Showing the head pane's decorations in its window only uses an
+    experimental Neovim API (`nvim__ns_set`); without it they would show in
+    every window on the file.
   - Structural diff ignores injected languages (a code fence in markdown, a
     script in HTML), and a moved block reads as a delete plus an add.
   - Structural diff runs synchronously when a file opens.

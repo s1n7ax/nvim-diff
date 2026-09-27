@@ -4,7 +4,8 @@
 --- `topfill`, which `gg` and `zz` reset, so filler above the file's first line needs a real
 --- line to hang from), the file's lines follow, and an optional empty trailer line ends it
 --- (see `render/rowmap.lua` for when). A PR review's side-by-side panes leave the header
---- out and show it as a winbar instead.
+--- out and show it as a winbar instead; its head pane is usually no scratch buffer at all,
+--- but the real file's (`scene/filebuf.lua`).
 ---
 --- Buffers of immutable content — a blob at a commit, asked for with `keep` — outlive the
 --- scene that showed them: `release` hides such a buffer instead of wiping it, and the

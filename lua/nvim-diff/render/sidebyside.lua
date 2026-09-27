@@ -12,6 +12,10 @@
 ---   block that share an anchor can never be drawn in the wrong order. Without a header
 ---   line, what comes before the first line is one `virt_lines_above` mark on it.
 ---
+--- A pane showing a real file's buffer (`scene/filebuf.lua`) is painted into namespaces of
+--- its own instead, scoped to its window, so the marks never show in another window on the
+--- file: the painters take the namespaces to use, these two by default.
+---
 --- All marks are persistent and placed eagerly; no decoration provider (ephemeral marks
 --- cannot draw `virt_lines`).
 
@@ -131,11 +135,21 @@ function M.number_width(diff)
   return math.max(3, #tostring(math.max(diff.old_count, diff.new_count)))
 end
 
+--- The namespaces one pane is painted into.
+---@class NvimDiff.PaneNs
+---@field line integer The header band, changed lines and tokens (`ns`).
+---@field virt integer Virtual rows (`ns_virt`).
+
+--- The namespaces every scratch pane is painted into.
+---@type NvimDiff.PaneNs
+M.SHARED_NS = { line = M.ns, virt = M.ns_virt }
+
 ---@param buf integer
+---@param ns integer
 ---@param row integer 0-based
 ---@param group string
-local function line_mark(buf, row, group)
-  api.nvim_buf_set_extmark(buf, M.ns, row, 0, {
+local function line_mark(buf, ns, row, group)
+  api.nvim_buf_set_extmark(buf, ns, row, 0, {
     end_row = row + 1,
     end_col = 0,
     hl_group = group,
@@ -148,10 +162,11 @@ end
 ---@param buf integer
 ---@param map NvimDiff.RowMap
 ---@param side NvimDiff.Side
-local function paint_lines(buf, map, side)
-  api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
+---@param ns integer
+local function paint_lines(buf, map, side, ns)
+  api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   if map.header then
-    line_mark(buf, 0, "NvimDiffHeader")
+    line_mark(buf, ns, 0, "NvimDiffHeader")
   end
 
   local diff = map.diff
@@ -162,11 +177,11 @@ local function paint_lines(buf, map, side)
       local lnum = r[side]
       if lnum then
         local row = map:buf_line(lnum) - 1
-        line_mark(buf, row, groups.line)
+        line_mark(buf, ns, row, groups.line)
         -- The line engine sets tokens on `changed` rows only; the structural engine may
         -- also set them on an added or deleted line that is partly new.
         for _, span in ipairs(tokens[lnum] or {}) do
-          api.nvim_buf_set_extmark(buf, M.ns, row, span[1], {
+          api.nvim_buf_set_extmark(buf, ns, row, span[1], {
             end_row = row,
             end_col = span[2],
             hl_group = groups.token,
@@ -279,10 +294,12 @@ end
 ---@param map NvimDiff.RowMap
 ---@param side NvimDiff.Side
 ---@param cols? NvimDiff.PaneColumns
-function M.paint_virt(buf, map, side, cols)
-  api.nvim_buf_clear_namespace(buf, M.ns_virt, 0, -1)
+---@param ns? integer Default `ns_virt`.
+function M.paint_virt(buf, map, side, cols, ns)
+  ns = ns or M.ns_virt
+  api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, v in ipairs(M.virt_rows(map, side, cols)) do
-    api.nvim_buf_set_extmark(buf, M.ns_virt, math.max(0, v.anchor), 0, {
+    api.nvim_buf_set_extmark(buf, ns, math.max(0, v.anchor), 0, {
       virt_lines = v.lines,
       virt_lines_above = v.anchor < 0,
       virt_lines_leftcol = true,
@@ -294,10 +311,12 @@ end
 ---@param bufs { old: integer, new: integer }
 ---@param map NvimDiff.RowMap
 ---@param cols? NvimDiff.PaneColumns
-function M.render(bufs, map, cols)
+---@param nss? { old?: NvimDiff.PaneNs, new?: NvimDiff.PaneNs } Default `SHARED_NS` for both.
+function M.render(bufs, map, cols, nss)
   for _, side in ipairs({ "old", "new" }) do
-    paint_lines(bufs[side], map, side)
-    M.paint_virt(bufs[side], map, side, cols)
+    local ns = nss and nss[side] or M.SHARED_NS
+    paint_lines(bufs[side], map, side, ns.line)
+    M.paint_virt(bufs[side], map, side, cols, ns.virt)
   end
 end
 

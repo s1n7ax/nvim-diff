@@ -20,7 +20,8 @@
 ---    earlier reviews. Outside the repository, so a language server's root search from a
 ---    slot file finds the slot, not the user's checkout;
 --- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
----    selects the first file not yet viewed.
+---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
+---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`).
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
 --- closes the view, wipes any buffer on a file inside the slot and releases the slot. The
@@ -74,6 +75,9 @@ local by_number = {}
 ---@field number integer The PR number.
 ---@field repo? NvimDiff.Git.Repo Discovered from the cwd when omitted.
 ---@field remote? string The remote the PR lives on and is fetched from. Defaults to `origin`.
+--- The side-by-side head pane shows the slot's real file, with filetype and LSP, rather
+--- than a scratch copy (`views/diff.lua` `real_file`). Default true.
+---@field real_file? boolean
 
 ---@class NvimDiff.Review
 ---@field repo NvimDiff.Git.Repo The user's repository, which owns the review slot.
@@ -192,6 +196,7 @@ function M.open(opts)
       right = head,
       title = ("#%d %s"):format(number, pr.title or ""),
       review = true,
+      real_file = opts.real_file ~= false,
     })
   end
   if not wt_repo or not view_ok then

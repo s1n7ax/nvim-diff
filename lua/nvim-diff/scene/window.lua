@@ -1,8 +1,9 @@
 --- Diff pane windows: the window-local options that keep two panes aligned.
 ---
 --- Every option is set with `scope = "local"` (`:setlocal`), so nothing leaks into the
---- global value or into windows the user opens later. The global-only options that affect
---- diffs (`diffopt`, `diffexpr`, `scrollopt`, `splitkeep`) are never touched.
+--- global value or into windows the user opens later — except through a buffer that
+--- outlives the pane, which `reset` handles. The global-only options that affect diffs
+--- (`diffopt`, `diffexpr`, `scrollopt`, `splitkeep`) are never touched.
 
 local hl = require("nvim-diff.ui.hl")
 local sidebyside = require("nvim-diff.render.sidebyside")
@@ -80,6 +81,29 @@ function M.pane(win, buf, opts)
   end
   api.nvim_set_option_value("winfixbuf", true, { win = win, scope = "local" })
   hl.apply_window(win)
+end
+
+--- Window options a pane sets besides `OPTIONS`: `pane`'s own and the folding ones
+--- (`scene/folds.lua`).
+local PANE_EXTRA = { "statuscolumn", "signcolumn", "winbar", "winfixbuf", "foldenable", "foldlevel" }
+
+--- Take a pane window back to the user's settings: its folds deleted, every option a pane
+--- sets back to its global value (`:setlocal {option}<`), the global highlights. For a real
+--- file's buffer (`scene/filebuf.lua`): measured, Neovim gives a window newly showing a
+--- buffer the options and manual folds of a window showing it, or of the one it was last
+--- shown in, so the pane's would reach the user's own window on the file.
+---@param win integer
+function M.reset(win)
+  local names = vim.list_extend(vim.tbl_keys(M.OPTIONS), PANE_EXTRA)
+  for i, name in ipairs(names) do
+    names[i] = name .. "<"
+  end
+  api.nvim_win_call(win, function()
+    -- `zE` needs the manual folds the pane set, so before 'foldmethod' goes back.
+    vim.cmd("silent! normal! zE")
+    vim.cmd("silent! setlocal " .. table.concat(names, " "))
+  end)
+  api.nvim_win_set_hl_ns(win, 0)
 end
 
 --- An empty throwaway buffer, wiped as soon as it is replaced: what a window a scene gives

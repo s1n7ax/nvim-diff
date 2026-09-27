@@ -14,6 +14,7 @@
 
 local buffer = require("nvim-diff.scene.buffer")
 local event = require("nvim-diff.core.event")
+local filebuf = require("nvim-diff.scene.filebuf")
 local fold = require("nvim-diff.render.fold")
 local folds_scene = require("nvim-diff.scene.folds")
 local hl = require("nvim-diff.ui.hl")
@@ -41,6 +42,10 @@ local SIDES = { "old", "new" }
 --- file cannot; the pane then cannot scroll into filler below its last line, and neither
 --- pane scrolls past it.
 ---@field trailer? boolean
+--- Absolute path of the file on disk to show instead of a scratch copy of `lines`, with
+--- filetype and language servers (`scene/filebuf.lua`). Needs `winbar` and `trailer =
+--- false`. The scratch pane stands in when the file's buffer does not hold `lines`.
+---@field file? string
 
 ---@class NvimDiff.PairSpec
 ---@field diff NvimDiff.Diff
@@ -77,6 +82,10 @@ local SIDES = { "old", "new" }
 ---@field fold_opts false|NvimDiff.FoldOpts The spec's `fold`: false when folding is off.
 ---@field layout NvimDiff.RowMapLayout Every map of the pair is built with it.
 ---@field cols NvimDiff.PaneColumns What the panes' `statuscolumn` shows.
+--- The sides showing the real file (`PairSide.file`), and their hold on its buffer.
+---@field claims { old?: NvimDiff.FileClaim, new?: NvimDiff.FileClaim }
+--- The namespaces each pane is painted into: the shared ones, or a real file's own.
+---@field ns { old: NvimDiff.PaneNs, new: NvimDiff.PaneNs }
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[] Ids in insertion order, so equal rows keep it.
 ---@field private augroup integer
@@ -123,20 +132,28 @@ function M.open(spec)
     fold_opts = fold_opts,
     layout = layout,
     cols = { header = map.header, signs = spec.signs or false },
+    claims = {},
+    ns = { old = sidebyside.SHARED_NS, new = sidebyside.SHARED_NS },
   }, Pair)
 
   local headers = {}
   for _, side in ipairs(SIDES) do
     local s = spec[side]
     headers[side] = s.header or sidebyside.header(s.label)
-    self.bufs[side] = buffer.create({
-      lines = s.lines,
-      header = map.header and headers[side] or nil,
-      trailer = map.trailer[side],
-      name = s.name,
-      lang = s.lang,
-      keep = s.keep,
-    })
+    local claim
+    if s.file and not map.header and not map.trailer[side] then
+      claim = filebuf.claim({ path = s.file, lines = s.lines, lang = s.lang })
+    end
+    self.claims[side] = claim
+    self.bufs[side] = claim and claim.buf
+      or buffer.create({
+        lines = s.lines,
+        header = map.header and headers[side] or nil,
+        trailer = map.trailer[side],
+        name = s.name,
+        lang = s.lang,
+        keep = s.keep,
+      })
     assert(
       api.nvim_buf_line_count(self.bufs[side]) == diff[side .. "_count"] + map:head() + (map.trailer[side] and 1 or 0),
       "nvim-diff: pane lines do not match the diff"
@@ -158,6 +175,9 @@ function M.open(spec)
       winbar = not map.header and sidebyside.winbar(headers[side]) or nil,
       signcolumn = self.cols.signs and "yes:1" or nil,
     })
+    if self.claims[side] then
+      self.ns[side] = self.claims[side]:attach(self.wins[side])
+    end
     folds_scene.setup_window(self.wins[side])
     folds_scene.apply(self, side)
     api.nvim_win_set_cursor(self.wins[side], { 1, 0 })
@@ -167,7 +187,7 @@ function M.open(spec)
   end
 
   self.filler_width = sidebyside.filler_width()
-  sidebyside.render(self.bufs, map, self.cols)
+  sidebyside.render(self.bufs, map, self.cols, self.ns)
 
   self.sync = scrollsync.attach({ self:sync_pane("old"), self:sync_pane("new") })
   if not map.header then
@@ -329,7 +349,7 @@ function Pair:rebuild_virt()
   self.map = rowmap.new(self.diff, self:block_list(), self.folds, self.layout)
   self.filler_width = sidebyside.filler_width()
   for _, side in ipairs(SIDES) do
-    sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols)
+    sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols, self.ns[side].virt)
   end
 end
 
@@ -504,7 +524,7 @@ function Pair:set_diff(diff)
   self.fold_base = base
   self.folds = list
   self.map = rowmap.new(diff, self:block_list(), list, self.layout)
-  sidebyside.render(self.bufs, self.map, self.cols)
+  sidebyside.render(self.bufs, self.map, self.cols, self.ns)
   self:set_folds(list)
 end
 
@@ -542,7 +562,8 @@ function Pair:remove_block(id)
 end
 
 --- Tear the pair down: stop syncing, close both panes, release both buffers (wiped, or
---- kept for reuse — `scene/buffer.lua`). Idempotent.
+--- kept for reuse — `scene/buffer.lua`; a real file's handed back — `scene/filebuf.lua`).
+--- Idempotent.
 --- `opts.keep` leaves that window open (the layout toggle reuses it), on an empty scratch
 --- buffer if it still shows a pane.
 ---@param opts? NvimDiff.SceneCloseOpts
@@ -558,6 +579,10 @@ function Pair:close(opts)
     local win = self.wins[side]
     if api.nvim_win_is_valid(win) then
       api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
+      if self.claims[side] and api.nvim_win_get_buf(win) == self.bufs[side] then
+        -- Before the real file's buffer leaves the window, which it remembers.
+        window.reset(win)
+      end
       if win == keep then
         if api.nvim_win_get_buf(win) == self.bufs[side] then
           api.nvim_win_set_buf(win, window.scratch())
@@ -569,7 +594,11 @@ function Pair:close(opts)
     end
   end
   for _, side in ipairs(SIDES) do
-    buffer.release(self.bufs[side])
+    if self.claims[side] then
+      self.claims[side]:release()
+    else
+      buffer.release(self.bufs[side])
+    end
   end
 end
 

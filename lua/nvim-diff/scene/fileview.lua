@@ -46,6 +46,8 @@ local M = {}
 
 ---@class NvimDiff.FileViewSpec
 ---@field diff NvimDiff.Diff The line diff of `old.lines` and `new.lines`.
+--- A side's `file` (the real file in its pane) is for side-by-side only: unified shows a
+--- scratch pane, as always.
 ---@field old NvimDiff.PairSide
 ---@field new NvimDiff.PairSide
 ---@field layout? NvimDiff.Layout Default: `config.layout`.
