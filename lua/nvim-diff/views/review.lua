@@ -7,7 +7,8 @@
 ---
 --- Opening a review:
 ---
---- 1. fetches the PR's node id, head and base (`github/pr.lua`);
+--- 1. fetches the PR's node id, head and base (`github/pr.lua`); for a PR from a fork, asks
+---    `Start LSP? [y/N]` (`review/fork.lua`);
 --- 2. fetches `refs/pull/<n>/head` and the base branch from the remote when either commit
 ---    is missing locally (`git/fetch.lua`) — nothing is written to the user's refs;
 --- 3. diffs `merge-base(base, head)` against `head`, both as commits, locally with git —
@@ -18,10 +19,13 @@
 ---    LSP, tests and the debugger see the PR's code while the user's branch and uncommitted
 ---    changes are never touched, and files git ignores there (`node_modules/`) are kept from
 ---    earlier reviews. Outside the repository, so a language server's root search from a
----    slot file finds the slot, not the user's checkout;
+---    slot file finds the slot, not the user's checkout. Before a fork PR is checked out,
+---    this Neovim's language servers rooted in the slot are stopped;
 --- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
 ---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
----    real file, read-only, so language servers attach to it (`scene/filebuf.lua`).
+---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`) — for a
+---    fork PR only after a yes; after a no it is a scratch copy, and
+---    `keymaps.review.start_lsp` asks again.
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
 --- closes the view, wipes any buffer on a file inside the slot and releases the slot. The
@@ -52,6 +56,7 @@ local compose = require("nvim-diff.review.compose")
 local config = require("nvim-diff.config")
 local event = require("nvim-diff.core.event")
 local fetch = require("nvim-diff.git.fetch")
+local fork = require("nvim-diff.review.fork")
 local log = require("nvim-diff.core.log")
 local path = require("nvim-diff.core.path")
 local pr_mod = require("nvim-diff.github.pr")
@@ -76,7 +81,8 @@ local by_number = {}
 ---@field repo? NvimDiff.Git.Repo Discovered from the cwd when omitted.
 ---@field remote? string The remote the PR lives on and is fetched from. Defaults to `origin`.
 --- The side-by-side head pane shows the slot's real file, with filetype and LSP, rather
---- than a scratch copy (`views/diff.lua` `real_file`). Default true.
+--- than a scratch copy (`views/diff.lua` `real_file`). Default true; for a PR from a fork,
+--- only when the reviewer says yes to `Start LSP? [y/N]` (`false` skips the question).
 ---@field real_file? boolean
 
 ---@class NvimDiff.Review
@@ -86,6 +92,14 @@ local by_number = {}
 ---@field path string The review slot the PR is checked out in.
 ---@field cwd string The cwd before the review opened, restored on a tabpage that outlives it.
 ---@field view NvimDiff.DiffView
+--- The PR comes from a fork (GitHub's `isCrossRepository`): LSP runs on its code only after
+--- the reviewer says yes.
+---@field fork boolean
+--- Whether the head pane shows the real file, with LSP (`view.real_file`): for a same-repo
+--- PR from the start, for a fork once the reviewer said yes. The trust is kept here only and
+--- lasts until the review ends — a new push applied to the review keeps it, and reopening
+--- the PR asks again.
+---@field lsp boolean
 ---@field augroup integer
 ---@field unsubscribe fun()[]
 ---@field closed boolean
@@ -149,6 +163,14 @@ function M.open(opts)
     fail(("cannot fetch PR #%d: %s"):format(number, msg(err)))
   end
 
+  -- A fork's code gets a language server only when the reviewer says so. Asked first, so
+  -- the question comes before the slow part.
+  local is_fork = pr.cross_repository
+  local lsp = opts.real_file ~= false
+  if is_fork and lsp then
+    lsp = fork.ask(pr)
+  end
+
   local refs = { ("refs/pull/%d/head"):format(number) }
   if pr.base.ref then
     refs[#refs + 1] = "refs/heads/" .. pr.base.ref
@@ -180,7 +202,10 @@ function M.open(opts)
   end
 
   local wt_path
-  wt_path, err = worktree.acquire(repo, head)
+  wt_path, err = worktree.acquire(repo, head, {
+    -- Yes or no, a server an earlier PR started in the slot must not see the fork's code.
+    before_checkout = is_fork and fork.stop_clients or nil,
+  })
   if not wt_path then
     fail(("cannot check PR #%d out into a review slot: %s"):format(number, msg(err)))
   end
@@ -196,7 +221,7 @@ function M.open(opts)
       right = head,
       title = ("#%d %s"):format(number, pr.title or ""),
       review = true,
-      real_file = opts.real_file ~= false,
+      real_file = lsp,
     })
   end
   if not wt_repo or not view_ok then
@@ -211,6 +236,8 @@ function M.open(opts)
     path = wt_path,
     cwd = cwd,
     view = view,
+    fork = is_fork,
+    lsp = lsp,
     unsubscribe = {},
     closed = false,
   }, Review)
@@ -234,6 +261,11 @@ function M.open(opts)
   local first = self:next_unviewed(nil) or view.tree.order[1]
   if first then
     view:select(first)
+  end
+  if is_fork and not lsp and opts.real_file ~= false then
+    local key = config.get().keymaps.review.start_lsp
+    local again = type(key) == "string" and ("; %s asks again"):format(key) or ""
+    log.warn("PR #%d is from a fork: no LSP in the head pane%s", number, again)
   end
   return self
 end
@@ -353,6 +385,32 @@ function Review:map_keys(buf)
   map(keys.unmark_viewed, function()
     self:unmark_viewed()
   end, "Review: Unmark viewed")
+  if self.fork then
+    map(keys.start_lsp, function()
+      self:start_lsp()
+    end, "Review: Start LSP")
+  end
+end
+
+--- Turn LSP on for the review: for a fork PR, after asking `Start LSP? [y/N]` again. From
+--- then on the side-by-side head pane is the real file, with LSP; the file showing is
+--- shown again at once, on the same line. Lasts until the review ends.
+---@return boolean on Whether LSP is on for the review now.
+function Review:start_lsp()
+  if not self:is_valid() then
+    return false
+  end
+  if self.lsp then
+    log.warn("LSP is already on in this review")
+    return true
+  end
+  if self.fork and not fork.ask(self.pr) then
+    return false
+  end
+  self.lsp = true
+  self.view.real_file = true
+  self.view:reshow()
+  return true
 end
 
 --- The file a viewed key acts on: the file row under the cursor in the panel, else the file

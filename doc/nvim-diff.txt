@@ -279,6 +279,28 @@ sign column (your |vim.diagnostic.config()| applies). The pane is read-only
   - The unified layout (`g<C-x>`) shows a copy, without LSP; flip back to
     side-by-side for it.
 
+                                                       *nvim-diff-review-fork*
+A PR from a fork (GitHub's `isCrossRepository`) asks before any language
+server sees its code: >
+    nvim-diff: PR #42 is from a fork (someone/project). Start LSP? [y/N]
+<
+Some language servers run the project's own code (build scripts, macros, a
+linter's config), so a fork's author gets none until you say so. `y` (or
+`yes`) shows the real file as above; Enter, <Esc> or anything else shows a
+copy without LSP. A PR from the same repository never asks.
+
+  - The answer lasts until the review ends. Reopening the PR asks again;
+    nothing is saved.
+  - After a no, `<leader>L` (|nvim-diff-config.keymaps.review.start_lsp|)
+    asks again. Yes switches the head pane to the real file at once, on the
+    same file and line, and every file shown after it.
+  - Before a fork PR is checked out into a slot, the language servers this
+    Neovim still runs rooted in that slot (left from an earlier review) are
+    stopped, so they cannot read, or build, the fork's code.
+  - A no keeps the head pane off LSP, nothing more: a slot file you open
+    yourself (|:edit|, a picker; the tabpage's cwd is the slot) starts your
+    language servers as usual.
+
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
@@ -388,6 +410,8 @@ In the file panel and the diff panes:
   `<leader><space>`  mark the file viewed on GitHub, jump to the next one not
                    viewed
   `<leader><BS>`     clear the file's viewed mark
+  `<leader>L`        a PR from a fork, after no: ask `Start LSP? [y/N]` again
+                   (|nvim-diff-review-fork|)
 
 In the file panel:
 
@@ -628,7 +652,10 @@ keymaps.conflict.prev_conflict         (default: `"[x"`)
 keymaps.review.mark_viewed             (default: `"<leader><space>"`)
                                *nvim-diff-config.keymaps.review.unmark_viewed*
 keymaps.review.unmark_viewed           (default: `"<leader><BS>"`)
-    File panel and diff panes of a PR review.
+                                   *nvim-diff-config.keymaps.review.start_lsp*
+keymaps.review.start_lsp               (default: `"<leader>L"`)
+    File panel and diff panes of a PR review; `start_lsp` only in the review
+    of a PR from a fork (|nvim-diff-review-fork|).
 
                                      *nvim-diff-config.keymaps.threads.toggle*
 keymaps.threads.toggle                 (default: `"<CR>"`)

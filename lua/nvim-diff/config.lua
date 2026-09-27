@@ -89,13 +89,16 @@ local M = {}
 ---@field next_conflict NvimDiff.Config.Key
 ---@field prev_conflict NvimDiff.Config.Key
 
---- Buffer-local to the file panel and every pane of a PR review. They act on the file row
---- under the panel's cursor, else on the file showing.
+--- Buffer-local to the file panel and every pane of a PR review. The viewed keys act on the
+--- file row under the panel's cursor, else on the file showing.
 ---@class NvimDiff.Config.ReviewKeymaps
 --- Mark the file viewed on GitHub, then jump to the next file not viewed.
 ---@field mark_viewed NvimDiff.Config.Key
 --- Clear the file's viewed mark on GitHub.
 ---@field unmark_viewed NvimDiff.Config.Key
+--- A PR from a fork only, after no to `Start LSP? [y/N]`: ask again; yes shows the real
+--- file, with LSP, in the head pane from then on, keeping the file and line.
+---@field start_lsp NvimDiff.Config.Key
 
 --- Buffer-local to the diff panes of a view showing PR review comment threads.
 ---@class NvimDiff.Config.ThreadKeymaps
@@ -267,9 +270,11 @@ local defaults = {
       prev_conflict = "[x",
     },
     -- octo.nvim's viewed key, so muscle memory carries over; backspace takes it back.
+    -- `L` for LSP; capital, so a `<leader>l` prefix of the user's still works in the panes.
     review = {
       mark_viewed = "<leader><space>",
       unmark_viewed = "<leader><BS>",
+      start_lsp = "<leader>L",
     },
     threads = {
       toggle = "<CR>",
@@ -399,6 +404,7 @@ local schema = {
     review = {
       mark_viewed = KEY,
       unmark_viewed = KEY,
+      start_lsp = KEY,
     },
     threads = {
       toggle = KEY,
