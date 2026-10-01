@@ -6,6 +6,11 @@
 --- the layout toggle closes the pair and opens a unified pane in its place, the file panel
 --- opens it in windows it owns.
 ---
+--- Virtual lines another plugin draws in a pane (a diagnostic's `virtual_lines`, a code lens
+--- in the real file's pane) are counted in the whole buffer on open, then in the rows each
+--- redraw of a pane draws (`scene/foreign.lua`), and padded on the other side through the
+--- row map; nothing is repainted while the counts stay the same.
+---
 ---     local pair = require("nvim-diff.scene.pair").open({
 ---       diff = require("nvim-diff.diff.line").diff(old_lines, new_lines),
 ---       old = { lines = old_lines, label = "a/lua/foo.lua" },
@@ -16,6 +21,7 @@ local buffer = require("nvim-diff.scene.buffer")
 local event = require("nvim-diff.core.event")
 local filebuf = require("nvim-diff.scene.filebuf")
 local fold = require("nvim-diff.render.fold")
+local foreign = require("nvim-diff.scene.foreign")
 local folds_scene = require("nvim-diff.scene.folds")
 local hl = require("nvim-diff.ui.hl")
 local rowmap = require("nvim-diff.render.rowmap")
@@ -92,6 +98,13 @@ local SIDES = { "old", "new" }
 ---@field claims { old?: NvimDiff.FileClaim, new?: NvimDiff.FileClaim }
 --- The namespaces each pane is painted into: the shared ones, or a real file's own.
 ---@field ns { old: NvimDiff.PaneNs, new: NvimDiff.PaneNs }
+--- Virtual lines other plugins draw in each pane (`scene/foreign.lua`), as last counted
+--- (the part off screen may be stale): the map pads the other pane to match.
+---@field foreign { old: NvimDiff.ForeignLines, new: NvimDiff.ForeignLines }
+--- Buffer rows of each pane redrawn since the last count, `{ first, last }`.
+---@field private foreign_due { old?: integer[], new?: integer[] }
+---@field private foreign_scheduled boolean A count is scheduled.
+---@field private watchers { old: NvimDiff.ForeignWatcher, new: NvimDiff.ForeignWatcher }
 ---@field private blocks table<any, NvimDiff.Block>
 ---@field private block_order any[] Ids in insertion order, so equal rows keep it.
 ---@field private augroup integer
@@ -204,10 +217,23 @@ function M.open(spec)
     pcall(api.nvim_buf_delete, placeholder, { force = true })
   end
 
+  -- A real file may come with virtual lines already: diagnostics of a running server, a
+  -- code lens from the last time it was shown.
+  self.foreign = self:count_foreign()
+  self.map = rowmap.new(diff, nil, folds, layout, self.foreign)
   self.filler_width = sidebyside.filler_width()
-  sidebyside.render(self.bufs, map, self.cols, self.ns)
+  sidebyside.render(self.bufs, self.map, self.cols, self.ns)
 
   self.sync = scrollsync.attach({ self:sync_pane("old"), self:sync_pane("new") })
+  self.foreign_due = {}
+  self.foreign_scheduled = false
+  self.watchers = {}
+  for _, side in ipairs(SIDES) do
+    self.watchers[side] = function(top, bot)
+      self:foreign_redrawn(side, top, bot)
+    end
+    foreign.watch(self.wins[side], self.watchers[side])
+  end
   if not map.header then
     self:map_top_keys()
     self:top(self.sync:leader())
@@ -377,18 +403,115 @@ function Pair:block_list()
   return list
 end
 
---- Rebuild the map from the current blocks and folds and repaint every virtual row.
-function Pair:rebuild_virt()
-  self.map = rowmap.new(self.diff, self:block_list(), self.folds, self.layout)
-  self.filler_width = sidebyside.filler_width()
+--- Rebuild the map from the current blocks, folds and foreign virtual lines, and repaint
+--- every virtual row — of `sides` only, when given.
+---@param sides? { old?: boolean, new?: boolean }
+function Pair:rebuild_virt(sides)
+  self.map = rowmap.new(self.diff, self:block_list(), self.folds, self.layout, self.foreign)
+  if not sides then
+    self.filler_width = sidebyside.filler_width()
+  end
   for _, side in ipairs(SIDES) do
-    sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols, self.ns[side].virt)
+    if not sides or sides[side] then
+      sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols, self.ns[side].virt)
+    end
   end
 end
 
 --- Rebuild the map from the current blocks and folds, repaint every virtual row, realign.
 function Pair:repaint_virt()
   self:rebuild_virt()
+  self.sync:refresh()
+end
+
+-- Foreign virtual lines ------------------------------------------------------------------
+
+--- What counting `side`'s foreign virtual lines needs; nil when its window no longer shows
+--- its buffer.
+---@param side NvimDiff.Side
+---@return NvimDiff.ForeignPane?
+function Pair:foreign_pane(side)
+  local win, buf, ns = self.wins[side], self.bufs[side], self.ns[side]
+  if not (api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == buf) then
+    return nil
+  end
+  return {
+    buf = buf,
+    win = win,
+    own = { [ns.line] = true, [ns.virt] = true },
+    head = self.map:head(),
+    count = self.diff[side .. "_count"],
+  }
+end
+
+--- The virtual lines other plugins draw in each pane now, in the whole buffer.
+---@return { old: NvimDiff.ForeignLines, new: NvimDiff.ForeignLines }
+function Pair:count_foreign()
+  local out = {}
+  for _, side in ipairs(SIDES) do
+    local pane = self:foreign_pane(side)
+    out[side] = pane and foreign.scan(pane) or { below = {}, above = {} }
+  end
+  return out
+end
+
+--- `side`'s pane is being redrawn, buffer rows `top..bot`: virtual lines may have come or
+--- gone there. Count them once the redraw is over, when every decoration provider has
+--- placed its marks (a code lens is placed in one); several redraws before that add up.
+---@param side NvimDiff.Side
+---@param top integer
+---@param bot integer
+function Pair:foreign_redrawn(side, top, bot)
+  if self.closed then
+    return
+  end
+  local due = self.foreign_due[side]
+  self.foreign_due[side] = due and { math.min(due[1], top), math.max(due[2], bot) } or { top, bot }
+  if self.foreign_scheduled then
+    return
+  end
+  self.foreign_scheduled = true
+  vim.schedule(function()
+    self.foreign_scheduled = false
+    if not self.closed then
+      self:update_foreign()
+    end
+  end)
+end
+
+--- Count the foreign virtual lines of the rows redrawn since the last count again and, when
+--- they changed, pad and realign. The row above the first is counted too: what hangs under
+--- it shows above the top line (`topfill`). Only the side opposite a change is repainted,
+--- unless both sides have foreign lines: a side's own marks change only where the other
+--- side pads it.
+function Pair:update_foreign()
+  local due = self.foreign_due
+  self.foreign_due = {}
+  local now = { old = self.foreign.old, new = self.foreign.new }
+  local paint
+  for _, side in ipairs(SIDES) do
+    local pane, rows = self:foreign_pane(side), due[side]
+    local spliced
+    if pane and rows then
+      local first, last = rows[1] - 1, rows[2] + 1
+      local lo, hi = foreign.lines_of(pane, first, last)
+      spliced = foreign.splice(now[side], foreign.scan(pane, first, last), lo, hi)
+    end
+    if spliced then
+      now[side] = spliced
+      local other = side == "old" and "new" or "old"
+      paint = paint or {}
+      paint[other] = true
+      if foreign.any(now[other]) then
+        paint[side] = true
+      end
+    end
+  end
+  if not paint then
+    return
+  end
+  self.foreign = now
+  self:rebuild_virt(paint)
   self.sync:refresh()
 end
 
@@ -556,7 +679,7 @@ function Pair:set_diff(diff)
   local list = self:reveal_blocks(self.fold_opts and fold.carry(self.folds, base) or {})
   self.fold_base = base
   self.folds = list
-  self.map = rowmap.new(diff, self:block_list(), list, self.layout)
+  self.map = rowmap.new(diff, self:block_list(), list, self.layout, self.foreign)
   sidebyside.render(self.bufs, self.map, self.cols, self.ns)
   self:set_folds(list)
 end
@@ -607,6 +730,9 @@ function Pair:close(opts)
   self.closed = true
   local keep = opts and opts.keep
   self.sync:detach()
+  for _, side in ipairs(SIDES) do
+    foreign.unwatch(self.wins[side], self.watchers[side])
+  end
   pcall(api.nvim_del_augroup_by_id, self.augroup)
   for _, side in ipairs(SIDES) do
     local win = self.wins[side]

@@ -23,8 +23,8 @@
 ---   other window on the buffer, and once the pane lets go, the keys they shadowed (the
 ---   user's own, a language server's) are back. Keys an `LspAttach` handler maps over the
 ---   plugin's are taken back right after it;
---- * code lens is off for the buffer while the pane holds it: its lines would push the head
----   pane's rows down, out of line with the base pane;
+--- * other plugins' virtual lines (a code lens, a diagnostic's `virtual_lines`) stay: the
+---   pair pads the other pane to match (`scene/foreign.lua`);
 --- * the pane's window options and folds are taken back (`scene/window.lua` `reset`) before
 ---   the buffer leaves the pane window, and from another window that got them with the
 ---   buffer: Neovim gives a window newly showing a buffer the options of a window showing
@@ -113,7 +113,6 @@ local FOLD_OPTIONS = { foldmethod = true, foldenable = true, foldlevel = true, f
 ---@field private theirs table<string, table>
 ---@field private active boolean Whether the plugin's mappings are in place.
 ---@field private saved? { modifiable: boolean, readonly: boolean } A borrowed buffer's own.
----@field private lens boolean Code lens was on for the buffer when the pane turned it off.
 ---@field private root? string
 ---@field private on_changed? fun()
 ---@field private on_guard? fun(refold: boolean)
@@ -427,20 +426,6 @@ function Claim:on_enter()
   end)
 end
 
---- Turn code lens off for the buffer, when it is on.
-function Claim:lens_off()
-  -- No `vim.lsp` loaded, no client, no lens; and no need to load it here.
-  local lens = package.loaded["vim.lsp"] and vim.lsp.codelens
-  if not (lens and lens.enable and lens.is_enabled) then
-    return
-  end
-  local filter = { bufnr = self.buf }
-  if lens.is_enabled(filter) then
-    pcall(lens.enable, false, filter)
-    self.lens = true
-  end
-end
-
 -- Guards ---------------------------------------------------------------------------------
 
 --- Put the pane's window options back where other code changed them, keeping that code's
@@ -673,7 +658,6 @@ function M.claim(opts)
     ours = {},
     theirs = {},
     active = true,
-    lens = false,
     root = opts.root and path.real(opts.root) or nil,
     on_changed = opts.on_changed,
     loaded = loaded,
@@ -742,26 +726,29 @@ function Claim:attach(win, opts)
       self:on_enter()
     end,
   })
+  -- A language server attached: where it is rooted, then, after every `LspAttach` handler,
+  -- the plugin's keys over any it mapped and the pane's window options over any it set
+  -- (with `noautocmd`, past `OptionSet`). Its virtual lines stay (`scene/foreign.lua`).
   api.nvim_create_autocmd("LspAttach", {
     group = self.augroup,
     buffer = buf,
-    callback = function()
+    callback = function(args)
+      self:check_root(args.data and args.data.client_id)
       if self.active then
         self:remember()
       end
-      -- After every `LspAttach` handler, some of which map keys of their own.
       vim.schedule(function()
         if self.released then
           return
         end
-        self:lens_off()
         if self.active then
           self:map_ours()
         end
       end)
+      self:guard_soon()
     end,
   })
-  -- Guards: the pane's window options, and where the file's language servers are rooted.
+  -- Guard: the pane's window options.
   api.nvim_create_autocmd("OptionSet", {
     group = self.augroup,
     pattern = vim.list_extend({ "foldexpr" }, window.PANE_OPTIONS),
@@ -770,15 +757,6 @@ function Claim:attach(win, opts)
       if api.nvim_get_current_win() == self.win then
         self:guard_soon()
       end
-    end,
-  })
-  api.nvim_create_autocmd("LspAttach", {
-    group = self.augroup,
-    buffer = buf,
-    callback = function(args)
-      self:check_root(args.data and args.data.client_id)
-      -- Handlers may set window options with `noautocmd`, past `OptionSet`.
-      self:guard_soon()
     end,
   })
   api.nvim_create_autocmd("WinClosed", {
@@ -791,7 +769,6 @@ function Claim:attach(win, opts)
       end
     end,
   })
-  self:lens_off()
   -- Servers attached already: a running one attaches while the buffer loads.
   if package.loaded["vim.lsp"] then
     for _, client in ipairs(vim.lsp.get_clients({ bufnr = buf })) do
@@ -848,9 +825,6 @@ function Claim:release()
   -- `ui/help.lua` maps `?` again once this is gone.
   vim.b[buf].nvim_diff_help = nil
   vim.b[buf][buffer.VAR] = nil
-  if self.lens then
-    pcall(vim.lsp.codelens.enable, true, { bufnr = buf })
-  end
   window.ufo_restore(buf)
   if self.saved then
     api.nvim_set_option_value("modifiable", self.saved.modifiable, { buf = buf })

@@ -334,8 +334,9 @@ root from a slot file finds the slot, not your checkout. Review slots are kept:
 In side-by-side, the head (right) pane is the file itself in the slot, read-only, so your
 language servers attach to it: hover, go to definition within the file, references, and
 diagnostics with signs in the sign column. The diff colours stay in that pane — the same
-file in another window looks and maps keys as usual — and code lens is off there so rows
-stay aligned. A file on disk that is not exactly the PR's (changed since the checkout, an
+file in another window looks and maps keys as usual. Virtual lines other plugins draw there
+(code lens, diagnostics as `virtual_lines`) get matching blank rows in the base pane, so
+rows stay aligned. A file on disk that is not exactly the PR's (changed since the checkout, an
 encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
 unified layout.
 
