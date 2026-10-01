@@ -96,6 +96,8 @@ local SIDES = { "old", "new" }
 ---@field cols NvimDiff.PaneColumns What the panes' `statuscolumn` shows.
 --- The sides showing the real file (`PairSide.file`), and their hold on its buffer.
 ---@field claims { old?: NvimDiff.FileClaim, new?: NvimDiff.FileClaim }
+--- Why a side given a `file` shows a scratch copy of it instead (`filebuf.claim`'s reason).
+---@field refused { old?: string, new?: string }
 --- The namespaces each pane is painted into: the shared ones, or a real file's own.
 ---@field ns { old: NvimDiff.PaneNs, new: NvimDiff.PaneNs }
 --- Virtual lines other plugins draw in each pane (`scene/foreign.lua`), as last counted
@@ -152,6 +154,7 @@ function M.open(spec)
     layout = layout,
     cols = { header = map.header, signs = spec.signs or false },
     claims = {},
+    refused = {},
     ns = { old = sidebyside.SHARED_NS, new = sidebyside.SHARED_NS },
   }, Pair)
 
@@ -161,7 +164,7 @@ function M.open(spec)
     headers[side] = s.header or sidebyside.header(s.label)
     local claim
     if s.file and not map.header and not map.trailer[side] then
-      claim = filebuf.claim({
+      claim, self.refused[side] = filebuf.claim({
         path = s.file,
         lines = s.lines,
         lang = s.lang,

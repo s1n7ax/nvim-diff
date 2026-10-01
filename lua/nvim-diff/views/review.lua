@@ -401,7 +401,8 @@ end
 
 --- Turn LSP on for the review: for a fork PR, after asking `Start LSP? [y/N]` again. From
 --- then on the side-by-side head pane is the real file, with LSP; the file showing is
---- shown again at once, on the same line. Lasts until the review ends.
+--- shown again at once, on the same line, with a warning when it still shows as a copy
+--- (its file on disk changed, say). Lasts until the review ends.
 ---@return boolean on Whether LSP is on for the review now.
 function Review:start_lsp()
   if not self:is_valid() then
@@ -417,6 +418,12 @@ function Review:start_lsp()
   self.lsp = true
   self.view.real_file = true
   self.view:reshow()
+  -- The real file was refused (`scene/filebuf.lua`): say so, or the yes looks ignored.
+  local file, entry = self.view.file, self.view.current
+  local refused = file and not file:is_closed() and file.layout == "side_by_side" and file.scene.refused.new
+  if entry and refused then
+    log.warn("LSP is on, but %s shows as a copy without it: %s", entry.path, refused)
+  end
   return true
 end
 
