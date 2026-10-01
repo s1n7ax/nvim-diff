@@ -566,6 +566,21 @@ function View:reshow()
   end
 end
 
+--- The head pane's file changed on disk while it showed (`scene/filebuf.lua`): show it
+--- again, which makes the head pane a copy of the diffed version, without LSP, until the
+--- file on disk is the PR's again.
+---@param entry NvimDiff.FileEntry
+function View:head_changed(entry)
+  if self.current ~= entry then
+    return
+  end
+  self:reshow()
+  local file = self.file
+  if file and not file:is_closed() and file.layout == "side_by_side" and not file.scene.claims.new then
+    log.warn("%s changed on disk: the head pane shows the PR's version as a copy, without LSP", entry.path)
+  end
+end
+
 --- Which side of the showing diff `win` is: `"old"`/`"new"` for a side-by-side pane, the
 --- cursor's side for the unified pane, nil for any other window.
 ---@param win integer
@@ -661,6 +676,10 @@ function View:show_diff(entry, folds)
       keep = right.type == "commit",
       trailer = not self.review,
       file = self:real_path(entry),
+      root = self.repo.toplevel,
+      on_changed = function()
+        self:head_changed(entry)
+      end,
     },
     winbar = self.review,
     signs = self.review,

@@ -28,7 +28,8 @@
 ---    `keymaps.review.start_lsp` asks again.
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
---- closes the view, wipes any buffer on a file inside the slot and releases the slot. The
+--- closes the view, wipes any buffer on a file inside the slot, stops this Neovim's
+--- language servers rooted only in the slot (`core/lsp.lua`) and releases the slot. The
 --- slot's folder stays on disk for the next review; only the user removes it.
 ---
 --- Viewed state lives on GitHub only. `keymaps.review.mark_viewed` posts the mark, then
@@ -58,6 +59,7 @@ local event = require("nvim-diff.core.event")
 local fetch = require("nvim-diff.git.fetch")
 local fork = require("nvim-diff.review.fork")
 local log = require("nvim-diff.core.log")
+local lsp = require("nvim-diff.core.lsp")
 local path = require("nvim-diff.core.path")
 local pr_mod = require("nvim-diff.github.pr")
 local repo_mod = require("nvim-diff.git.repo")
@@ -1159,6 +1161,12 @@ function Review:close(opts)
     -- The last tabpage survives its view; take it back out of the slot.
     self:leave_worktree(tab)
     self:wipe_buffers()
+    -- No file of the slot is open any more, and the next review checks another PR out under
+    -- them. Quitting Neovim stops every server anyway.
+    local stopped = lsp.stop_inside(self.path)
+    if stopped > 0 then
+      log.debug("PR #%d review ended; stopped %d language server(s) rooted in %s", self.number, stopped, self.path)
+    end
   else
     -- Quitting: nothing saved on the way out (a session) may keep the cwd in the slot.
     self:leave_worktree(self.view.tab)
