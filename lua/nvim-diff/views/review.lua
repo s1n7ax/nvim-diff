@@ -20,7 +20,7 @@
 ---    changes are never touched, and files git ignores there (`node_modules/`) are kept from
 ---    earlier reviews. Outside the repository, so a language server's root search from a
 ---    slot file finds the slot, not the user's checkout. Before a fork PR is checked out,
----    this Neovim's language servers rooted in the slot are stopped;
+---    this Neovim's language servers with any root in the slot are killed (`core/lsp.lua`);
 --- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
 ---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
 ---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`) — for a
@@ -28,7 +28,7 @@
 ---    `keymaps.review.start_lsp` asks again.
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
---- closes the view, wipes any buffer on a file inside the slot, stops this Neovim's
+--- closes the view, wipes any buffer on a file inside the slot, shuts down this Neovim's
 --- language servers rooted only in the slot (`core/lsp.lua`) and releases the slot. The
 --- slot's folder stays on disk for the next review; only the user removes it.
 ---
@@ -168,9 +168,9 @@ function M.open(opts)
   -- A fork's code gets a language server only when the reviewer says so. Asked first, so
   -- the question comes before the slow part.
   local is_fork = pr.cross_repository
-  local lsp = opts.real_file ~= false
-  if is_fork and lsp then
-    lsp = fork.ask(pr)
+  local lsp_on = opts.real_file ~= false
+  if is_fork and lsp_on then
+    lsp_on = fork.ask(pr)
   end
 
   local refs = { ("refs/pull/%d/head"):format(number) }
@@ -206,7 +206,12 @@ function M.open(opts)
   local wt_path
   wt_path, err = worktree.acquire(repo, head, {
     -- Yes or no, a server an earlier PR started in the slot must not see the fork's code.
-    before_checkout = is_fork and fork.stop_clients or nil,
+    before_checkout = is_fork and function(slot)
+      local stopped = lsp.stop_in(slot, "checkout")
+      if stopped > 0 then
+        log.info("stopped %d language server(s) rooted in %s before checking a fork PR out there", stopped, slot)
+      end
+    end or nil,
   })
   if not wt_path then
     fail(("cannot check PR #%d out into a review slot: %s"):format(number, msg(err)))
@@ -223,7 +228,7 @@ function M.open(opts)
       right = head,
       title = ("#%d %s"):format(number, pr.title or ""),
       review = true,
-      real_file = lsp,
+      real_file = lsp_on,
     })
   end
   if not wt_repo or not view_ok then
@@ -239,7 +244,7 @@ function M.open(opts)
     cwd = cwd,
     view = view,
     fork = is_fork,
-    lsp = lsp,
+    lsp = lsp_on,
     unsubscribe = {},
     closed = false,
   }, Review)
@@ -264,7 +269,7 @@ function M.open(opts)
   if first then
     view:select(first)
   end
-  if is_fork and not lsp and opts.real_file ~= false then
+  if is_fork and not lsp_on and opts.real_file ~= false then
     local key = config.get().keymaps.review.start_lsp
     local again = type(key) == "string" and ("; %s asks again"):format(key) or ""
     log.warn("PR #%d is from a fork: no LSP in the head pane%s", number, again)
@@ -1163,7 +1168,7 @@ function Review:close(opts)
     self:wipe_buffers()
     -- No file of the slot is open any more, and the next review checks another PR out under
     -- them. Quitting Neovim stops every server anyway.
-    local stopped = lsp.stop_inside(self.path)
+    local stopped = lsp.stop_in(self.path, "close")
     if stopped > 0 then
       log.debug("PR #%d review ended; stopped %d language server(s) rooted in %s", self.number, stopped, self.path)
     end
