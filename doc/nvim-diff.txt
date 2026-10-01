@@ -207,10 +207,11 @@ the PR's code; your branch and uncommitted changes are never touched. The diff
 is computed locally from the merge-base.
 
 Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
-buffers on the slot's files, stops the language servers rooted only in the
-slot (a server that has not shut down after 5 seconds is killed; one also
+buffers on the slot's files, shuts down the language servers rooted only in
+the slot (a server that has not shut down after 5 seconds is killed; one also
 rooted elsewhere keeps running) and releases the slot. The slot's folder
-stays.
+stays. A PR from a fork stops the slot's servers before its checkout too
+(|nvim-diff-review-fork|).
 
                                                       *nvim-diff-review-slots*
 Review slots are separate git worktrees kept between reviews, outside the
@@ -317,10 +318,14 @@ copy without LSP. A PR from the same repository never asks.
     nothing is saved.
   - After a no, `<leader>L` (|nvim-diff-config.keymaps.review.start_lsp|)
     asks again. Yes switches the head pane to the real file at once, on the
-    same file and line, and every file shown after it.
-  - Before a fork PR is checked out into a slot, the language servers this
-    Neovim still runs rooted in that slot (left from an earlier review) are
-    stopped, so they cannot read, or build, the fork's code.
+    same file and line, and every file shown after it. A file that still
+    shows as a copy (|nvim-diff-review-head-pane|) gets a warning saying why.
+  - Before a fork PR is checked out into a slot, every language server this
+    Neovim still runs with any root in that slot (left from an earlier
+    review, also one still shutting down after it) is killed at once, so it
+    cannot read, or build, the fork's code. Unlike the end of a review, this
+    does not wait for a graceful shutdown, and spares no server that is also
+    rooted elsewhere.
   - A no keeps the head pane off LSP, nothing more: a slot file you open
     yourself (|:edit|, a picker; the tabpage's cwd is the slot) starts your
     language servers as usual.

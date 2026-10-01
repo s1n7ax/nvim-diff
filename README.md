@@ -340,20 +340,22 @@ rows stay aligned. A file on disk that is not exactly the PR's (changed since th
 encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
 unified layout.
 
-A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
-code (build scripts, macros, a linter config), so a fork's code gets none until you say
-yes; Enter shows the copy without LSP. The answer lasts until the review closes and is not
-saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
-the head pane to the real file on the same line. Before a fork PR is checked out into a
-slot, language servers still running there from an earlier review are stopped. A no only
-keeps the head pane off LSP: a slot file you open yourself starts your servers as usual.
-
 The pane keeps its own window options: an `LspAttach` handler or another plugin setting
 `foldmethod=expr`, a `statuscolumn` or a `winbar` there is undone at once, and what it set
 goes to your own windows on the file once the pane moves on (nvim-ufo's folds come back
 too). A language server rooted outside the slot gets a warning. A file that changes on
 disk while the pane shows it is not reloaded and does not prompt: the pane shows a copy
-instead, with a warning. Ending the review stops the language servers rooted in its slot.
+instead, with a warning. Ending the review shuts down the language servers rooted only in
+its slot (killed if still running after 5 seconds).
+
+A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
+code (build scripts, macros, a linter config), so a fork's code gets none until you say
+yes; Enter shows the copy without LSP. The answer lasts until the review closes and is not
+saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
+the head pane to the real file on the same line. Before a fork PR is checked out into a
+slot, every language server still running there from an earlier review is killed at once.
+A no only keeps the head pane off LSP: a slot file you open yourself starts your servers as
+usual.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
