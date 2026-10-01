@@ -46,6 +46,12 @@ local SIDES = { "old", "new" }
 --- filetype and language servers (`scene/filebuf.lua`). Needs `winbar` and `trailer =
 --- false`. The scratch pane stands in when the file's buffer does not hold `lines`.
 ---@field file? string
+--- With `file`: the folder its language servers belong in (a PR review's slot); one rooted
+--- elsewhere gets a warning.
+---@field root? string
+--- With `file`: called when the file changed on disk while the pane showed it. The pane
+--- keeps the diffed lines; the owner opens the file again, which then shows a copy.
+---@field on_changed? fun()
 
 ---@class NvimDiff.PairSpec
 ---@field diff NvimDiff.Diff
@@ -142,7 +148,13 @@ function M.open(spec)
     headers[side] = s.header or sidebyside.header(s.label)
     local claim
     if s.file and not map.header and not map.trailer[side] then
-      claim = filebuf.claim({ path = s.file, lines = s.lines, lang = s.lang })
+      claim = filebuf.claim({
+        path = s.file,
+        lines = s.lines,
+        lang = s.lang,
+        root = s.root,
+        on_changed = s.on_changed,
+      })
     end
     self.claims[side] = claim
     self.bufs[side] = claim and claim.buf
@@ -170,15 +182,21 @@ function M.open(spec)
 
   local width = sidebyside.number_width(diff)
   for _, side in ipairs(SIDES) do
-    window.pane(self.wins[side], self.bufs[side], {
+    local user = window.pane(self.wins[side], self.bufs[side], {
       statuscolumn = sidebyside.statuscolumn(diff[side .. "_count"], width, self.cols),
       winbar = not map.header and sidebyside.winbar(headers[side]) or nil,
       signcolumn = self.cols.signs and "yes:1" or nil,
     })
-    if self.claims[side] then
-      self.ns[side] = self.claims[side]:attach(self.wins[side])
-    end
     folds_scene.setup_window(self.wins[side])
+    if self.claims[side] then
+      -- After every pane option is set: the claim guards them as they are now.
+      self.ns[side] = self.claims[side]:attach(self.wins[side], {
+        user = user,
+        on_guard = function(refold)
+          self:options_restored(refold)
+        end,
+      })
+    end
     folds_scene.apply(self, side)
     api.nvim_win_set_cursor(self.wins[side], { 1, 0 })
   end
@@ -223,6 +241,21 @@ function M.open(spec)
     })
   end
   return self
+end
+
+--- A real file's pane got its window options back over another plugin's
+--- (`scene/filebuf.lua` guards them): rebuild both panes' folds when fold options were
+--- among them, else realign.
+---@param refold boolean
+function Pair:options_restored(refold)
+  if self.closed then
+    return
+  end
+  if refold then
+    self:set_folds(self.folds)
+  else
+    self.sync:refresh()
+  end
 end
 
 --- The corrector's view of one pane; reads `self.map` on every call, so a new map (a block
@@ -581,7 +614,7 @@ function Pair:close(opts)
       api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
       if self.claims[side] and api.nvim_win_get_buf(win) == self.bufs[side] then
         -- Before the real file's buffer leaves the window, which it remembers.
-        window.reset(win)
+        self.claims[side]:reset_window(win)
       end
       if win == keep then
         if api.nvim_win_get_buf(win) == self.bufs[side] then

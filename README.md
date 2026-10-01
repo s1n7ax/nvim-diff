@@ -334,6 +334,13 @@ stay aligned. A file on disk that is not exactly the PR's (changed since the che
 encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
 unified layout.
 
+The pane keeps its own window options: an `LspAttach` handler or another plugin setting
+`foldmethod=expr`, a `statuscolumn` or a `winbar` there is undone at once, and what it set
+goes to your own windows on the file once the pane moves on (nvim-ufo's folds come back
+too). A language server rooted outside the slot gets a warning. A file that changes on
+disk while the pane shows it is not reloaded and does not prompt: the pane shows a copy
+instead, with a warning. Ending the review stops the language servers rooted in its slot.
+
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
 and only when you run it.

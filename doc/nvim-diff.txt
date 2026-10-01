@@ -207,7 +207,10 @@ the PR's code; your branch and uncommitted changes are never touched. The diff
 is computed locally from the merge-base.
 
 Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
-buffers on the slot's files and releases the slot. The slot's folder stays.
+buffers on the slot's files, stops the language servers rooted only in the
+slot (a server that has not shut down after 5 seconds is killed; one also
+rooted elsewhere keeps running) and releases the slot. The slot's folder
+stays.
 
                                                       *nvim-diff-review-slots*
 Review slots are separate git worktrees kept between reviews, outside the
@@ -262,6 +265,22 @@ sign column (your |vim.diagnostic.config()| applies). The pane is read-only
   - The diff colours, filler rows and comment threads are drawn in the pane's
     window only. The same file open in another window shows none of them and
     gets your window options, not the pane's.
+  - The pane keeps its window options: when another plugin or an |LspAttach|
+    handler sets one there (an `expr` 'foldmethod', a 'statuscolumn', a
+    'winbar', 'foldlevel'), the pane's comes back at once and its folds are
+    rebuilt. What they set is kept for the file: once the pane moves on, your
+    windows on the file get it, with what filetype plugins set while nvim-diff
+    loaded the file (a treesitter `expr` 'foldmethod') — not the pane's
+    options, and not just the global values. nvim-ufo is kept off the file
+    while the pane shows it, and works its folds out again after.
+  - A language server attached to the file but rooted outside the review slot
+    gets a warning: its answers may come from other code than the PR's.
+  - When the file changes on disk while the pane shows it (seen by
+    |:checktime|, or when Neovim gets focus), nothing reloads and nothing
+    prompts (no W11): with a warning, the pane shows the file again as a copy,
+    without LSP, and does so until the file on disk is the PR's again. A file
+    you had open yourself is reloaded once the pane moves on if 'autoread' is
+    on; otherwise a warning says to |:edit| it.
   - nvim-diff's keys win in the pane, also over keys a language server's
     |LspAttach| handler maps there. In any other window on the file your own
     keys apply, and they are back on the file once the pane moves on.
