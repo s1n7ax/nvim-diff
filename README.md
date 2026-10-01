@@ -141,6 +141,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | --- | --- |
 | `<leader><space>` | mark the file viewed on GitHub, jump to the next unviewed one |
 | `<leader><BS>` | clear the viewed mark |
+| `<leader>L` | a PR from a fork, after no: ask `Start LSP? [y/N]` again |
 | `<leader>cc` | in the file panel: a file-level comment on the file under the cursor |
 
 **PR review** — diff panes (comment threads)
@@ -240,7 +241,11 @@ require("nvim-diff").setup({
       next_conflict = "]x",
       prev_conflict = "[x",
     },
-    review = { mark_viewed = "<leader><space>", unmark_viewed = "<leader><BS>" },
+    review = {
+      mark_viewed = "<leader><space>",
+      unmark_viewed = "<leader><BS>",
+      start_lsp = "<leader>L", -- a fork PR: ask `Start LSP? [y/N]` again
+    },
     threads = {
       toggle = "<CR>",
       next = "]t",
@@ -333,6 +338,14 @@ file in another window looks and maps keys as usual — and code lens is off the
 stay aligned. A file on disk that is not exactly the PR's (changed since the checkout, an
 encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
 unified layout.
+
+A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
+code (build scripts, macros, a linter config), so a fork's code gets none until you say
+yes; Enter shows the copy without LSP. The answer lasts until the review closes and is not
+saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
+the head pane to the real file on the same line. Before a fork PR is checked out into a
+slot, language servers still running there from an earlier review are stopped. A no only
+keeps the head pane off LSP: a slot file you open yourself starts your servers as usual.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,

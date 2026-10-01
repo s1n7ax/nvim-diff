@@ -428,15 +428,22 @@ function M.checkout(slot_path, commit)
   return true
 end
 
+---@class NvimDiff.Git.AcquireOpts
+--- Called with the slot's path once it is this Neovim's, right before `commit` is checked
+--- out into it (a fork PR's review stops the language servers rooted there). When it
+--- raises, nothing is checked out and the slot is released again.
+---@field before_checkout? fun(slot_path: string)
+
 --- Take the lowest free slot of `repo`, lock it to this Neovim and check `commit` out into
 --- it. On failure the slot is released again and its folder kept.
 ---@param repo NvimDiff.Git.Repo
 ---@param commit NvimDiff.Git.Rev A `commit`; the PR head must already be fetched.
+---@param opts? NvimDiff.Git.AcquireOpts
 ---@return string? path The slot.
 ---@return NvimDiff.Git.Error? err `invalid` for a non-commit, `failed` when every slot is
----taken, or git's failure.
+---taken or `before_checkout` raised, or git's failure.
 ---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
-function M.acquire(repo, commit)
+function M.acquire(repo, commit, opts)
   if commit.type ~= "commit" then
     return nil, errors.new("invalid", "a review slot needs a commit, not the " .. commit.type)
   end
@@ -452,6 +459,13 @@ function M.acquire(repo, commit)
       return nil, err
     end
     if claimed then
+      if opts and opts.before_checkout then
+        local hook_ok, hook_err = pcall(opts.before_checkout, slot.path)
+        if not hook_ok then
+          M.release(repo, slot.path)
+          return nil, errors.new("failed", ("%s: %s"):format(slot.path, tostring(hook_err)))
+        end
+      end
       local ok
       ok, err = M.checkout(slot.path, commit)
       if not ok then

@@ -83,7 +83,8 @@ local by_tab = {}
 --- With `review`: the side-by-side head pane shows the file in `repo`'s worktree, which has
 --- `right` checked out, in its own buffer with filetype and LSP (`scene/filebuf.lua`) — not
 --- a scratch copy. A file whose buffer does not hold exactly the diffed lines falls back to
---- the copy. `view.real_file` may change later; it counts from the next file shown.
+--- the copy. `view.real_file` may change later; it counts from the next file shown, or
+--- from `reshow()` for the one showing.
 ---@field real_file? boolean
 
 ---@class NvimDiff.DiffView
@@ -478,12 +479,18 @@ function View:read_side(entry, side)
   return (blob.lines(b.bytes))
 end
 
+---@class NvimDiff.SelectOpts
+---@field force? boolean Load a deferred entry.
+--- Context folds to open the diff with, from an earlier view of the same diff (`reshow`);
+--- used only when the diff still has `rows` display rows.
+---@field folds? { list: NvimDiff.Fold[], rows: integer }
+
 --- Show `entry` in the area. A deferred entry shows a note unless `force` (or it was
 --- forced before); asking for the entry whose deferred note is already showing counts as
 --- asking to load it. A conflicted (`U`) entry opens the merge conflict view in its own
 --- tabpage instead, and the cursor is left there.
 ---@param entry? NvimDiff.FileEntry Nil clears the selection.
----@param opts? { force?: boolean }
+---@param opts? NvimDiff.SelectOpts
 function View:select(entry, opts)
   opts = opts or {}
   if not self:is_valid() then
@@ -522,7 +529,7 @@ function View:select(entry, opts)
         or "  Select it again to load it.",
     })
   else
-    self:show_diff(entry)
+    self:show_diff(entry, opts.folds)
   end
 
   -- Keep the cursor in the same kind of window it was in.
@@ -541,6 +548,22 @@ end
 ---@param entry NvimDiff.FileEntry
 function View:load(entry)
   self:select(entry, { force = true })
+end
+
+--- Show the file showing again, built anew — after `real_file` changed — in the same
+--- layout and diff mode, with the same context folds, and the cursor on the same line of
+--- the same side at the same screen row. A no-op when no diff is showing.
+function View:reshow()
+  local entry, file = self.current, self.file
+  if not self:is_valid() or not entry or not file or file:is_closed() then
+    return
+  end
+  local at = file:cursor()
+  local scene = file.scene
+  self:select(entry, { folds = { list = scene.folds, rows = scene.diff.rows } })
+  if self.file and self.file ~= file and not self.file:is_closed() then
+    self.file:place(at)
+  end
 end
 
 --- Which side of the showing diff `win` is: `"old"`/`"new"` for a side-by-side pane, the
@@ -600,7 +623,8 @@ function View:real_path(entry)
 end
 
 ---@param entry NvimDiff.FileEntry
-function View:show_diff(entry)
+---@param folds? { list: NvimDiff.Fold[], rows: integer } As `NvimDiff.SelectOpts.folds`.
+function View:show_diff(entry, folds)
   local old, problem = self:read_side(entry, "old")
   local new
   if old then
@@ -640,6 +664,7 @@ function View:show_diff(entry)
     },
     winbar = self.review,
     signs = self.review,
+    folds = folds and folds.rows == d.rows and folds.list or nil,
     wins = layout == "unified" and { win = wins[1] } or { old = wins[1], new = wins[2] },
     on_scene = function(file)
       self:on_scene(entry, file)
