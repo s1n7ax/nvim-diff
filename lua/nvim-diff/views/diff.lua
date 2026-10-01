@@ -118,6 +118,7 @@ local by_tab = {}
 ---@field thread_list? NvimDiff.SideList
 --- Called with each side list as it opens (a review maps its comment keys there).
 ---@field on_thread_list? fun(list: NvimDiff.SideList)
+---@field status? NvimDiff.PanelStatus[] Panel header lines a PR review's sync sets.
 local View = {}
 View.__index = View
 
@@ -370,7 +371,27 @@ function View:render()
     entries = self.list.entries,
     current = self.current,
     notice = notice,
+    status = self.status,
   })
+end
+
+--- Set the status lines under the panel's counts (`{}` clears them) and redraw. A cursor on
+--- a file row stays on that row as the header grows or shrinks.
+---@param status NvimDiff.PanelStatus[]
+function View:set_status(status)
+  local shift = #status - #(self.status or {})
+  self.status = status
+  if not self:is_valid() then
+    return
+  end
+  local win = self.panel.win
+  local row = api.nvim_win_get_cursor(win)[1]
+  local on_row = row >= self.panel.first_row
+  self:render()
+  if shift ~= 0 and on_row then
+    local last = api.nvim_buf_line_count(self.panel.buf)
+    pcall(api.nvim_win_set_cursor, win, { math.max(1, math.min(row + shift, last)), 0 })
+  end
 end
 
 --- Whether the view still has its tabpage and panel.
@@ -942,16 +963,17 @@ end
 -- Review threads ---------------------------------------------------------------------------
 
 --- Show a PR's review threads: on each file's diff as it opens (the one showing now at
---- once), and in the side list. Replaces any threads set before; `{}` clears them.
+--- once), and in the side list. Replaces any threads set before; `{}` clears them. The diff
+--- showing is redrawn in place, not re-diffed: only rows whose threads changed are touched.
 ---@param list NvimDiff.GitHub.Thread[]
 function View:set_threads(list)
   self.threads = list
-  self.thread_state = self.thread_state or require("nvim-diff.review.threadview").new_state()
-  if self.thread_view then
-    self.thread_view:detach()
-    self.thread_view = nil
-  end
-  if self.current and self.file and not self.file:is_closed() then
+  local threadview = require("nvim-diff.review.threadview")
+  self.thread_state = self.thread_state or threadview.new_state()
+  local tv = self.thread_view
+  if tv and not tv.detached and self.current and self.file and not self.file:is_closed() then
+    tv:set_threads(threadview.for_path(list, self.current.path))
+  elseif self.current and self.file and not self.file:is_closed() then
     self:attach_threads(self.current)
   end
   if self.thread_list and self.thread_list:is_open() then
@@ -959,11 +981,14 @@ function View:set_threads(list)
   end
 end
 
---- Put the threads of `entry` on the diff just opened for it.
+--- Put the threads of `entry` on the diff just opened for it, in place of any drawn before.
 ---@param entry NvimDiff.FileEntry
 function View:attach_threads(entry)
   if not self.threads or not self.file then
     return
+  end
+  if self.thread_view then
+    self.thread_view:detach()
   end
   local threadview = require("nvim-diff.review.threadview")
   self.thread_view = threadview.attach(self.file, threadview.for_path(self.threads, entry.path), {

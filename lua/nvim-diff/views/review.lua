@@ -50,6 +50,17 @@
 --- `reply_resolve` after a reply written in the same split, `unresolve` to undo. The thread
 --- is redrawn from GitHub's answer and stays on screen, dimmed with a ✓ — even while
 --- resolved threads are hidden, until the resolved mode is next flipped.
+---
+--- While the review is open it checks GitHub every `github.sync_interval_ms`, and at once on
+--- `keymaps.review.sync` (`review/sync.lua`): new commits, a new base branch and a merge or
+--- close are announced and marked in the panel. What GitHub has now is kept as
+--- `review.latest`; what the review shows (`review.pr`) is unchanged by a check.
+---
+--- Every check redraws the threads, in place, when anything about them changed: new
+--- threads, replies, edits and resolves by others show at once. Threads are fitted to the
+--- head shown (`review/live.lua`): one on code newer than that is held back (`review.held`)
+--- and counted in the panel until the new code is applied. A check that started before a
+--- comment was posted, edited, deleted or resolved here is not drawn: it may predate it.
 
 local comment_mod = require("nvim-diff.review.comment")
 local comments_mod = require("nvim-diff.github.comments")
@@ -58,6 +69,7 @@ local config = require("nvim-diff.config")
 local event = require("nvim-diff.core.event")
 local fetch = require("nvim-diff.git.fetch")
 local fork = require("nvim-diff.review.fork")
+local live = require("nvim-diff.review.live")
 local log = require("nvim-diff.core.log")
 local lsp = require("nvim-diff.core.lsp")
 local path = require("nvim-diff.core.path")
@@ -65,6 +77,7 @@ local pr_mod = require("nvim-diff.github.pr")
 local repo_mod = require("nvim-diff.git.repo")
 local rev = require("nvim-diff.git.rev")
 local revparse = require("nvim-diff.git.revparse")
+local sync_mod = require("nvim-diff.review.sync")
 local threads_mod = require("nvim-diff.github.threads")
 local viewed_mod = require("nvim-diff.github.viewed")
 local views = require("nvim-diff.views.diff")
@@ -89,8 +102,25 @@ local by_number = {}
 
 ---@class NvimDiff.Review
 ---@field repo NvimDiff.Git.Repo The user's repository, which owns the review slot.
+---@field remote string The remote the PR's commits are fetched from.
 ---@field number integer
+--- The PR as the review shows it: its head is the diffed and checked-out commit, and what
+--- every comment is posted against. A sync never changes it.
 ---@field pr NvimDiff.GitHub.PR
+--- The PR as GitHub last answered — at open, then on every sync. Its `head.oid` or
+--- `base.ref` differing from `pr`'s is new code the review does not show (`stale`).
+---@field latest? NvimDiff.GitHub.Snapshot
+---@field sync NvimDiff.ReviewSync
+--- Where each thread drawn hangs in the head shown, so it keeps its place once GitHub's head
+--- moves on (`review/live.lua`).
+---@field anchors NvimDiff.ThreadAnchors
+--- Threads GitHub has on code newer than the head shown, as last read: not drawn, counted in
+--- the panel. What applying the new code shows.
+---@field held NvimDiff.GitHub.Thread[]
+--- Bumped by every change to the threads made here: a write to GitHub, or a redraw after
+--- one. A sync that started before carries an older value, and is not drawn.
+---@field threads_rev integer
+---@field drawn? string `live.fingerprint` of the threads drawn, so an unchanged sync skips them.
 ---@field path string The review slot the PR is checked out in.
 ---@field cwd string The cwd before the review opened, restored on a tabpage that outlives it.
 ---@field view NvimDiff.DiffView
@@ -197,9 +227,9 @@ function M.open(opts)
     fail(("cannot read PR #%d's viewed files: %s"):format(number, msg(err)))
   end
 
-  local threads
-  threads, err = threads_mod.fetch(pr.target, number)
-  if not threads then
+  local snap
+  snap, err = threads_mod.snapshot(pr.target, number)
+  if not snap then
     fail(("cannot read PR #%d's comment threads: %s"):format(number, msg(err)))
   end
 
@@ -238,8 +268,13 @@ function M.open(opts)
 
   local self = setmetatable({
     repo = repo,
+    remote = remote,
     number = number,
     pr = pr,
+    latest = snap,
+    anchors = live.anchors(pr.head.oid),
+    held = {},
+    threads_rev = 0,
     path = wt_path,
     cwd = cwd,
     view = view,
@@ -256,7 +291,8 @@ function M.open(opts)
     entry.viewed = states[entry.path] or "unviewed"
   end
   view:render()
-  view:set_threads(threads)
+  self.sync = sync_mod.new(self)
+  self:show_threads(snap)
   self:trap()
   self:map_keys(view.panel.buf)
   self:map_keys(view.note_buf)
@@ -274,6 +310,7 @@ function M.open(opts)
     local again = type(key) == "string" and ("; %s asks again"):format(key) or ""
     log.warn("PR #%d is from a fork: no LSP in the head pane%s", number, again)
   end
+  self.sync:start()
   return self
 end
 
@@ -392,6 +429,9 @@ function Review:map_keys(buf)
   map(keys.unmark_viewed, function()
     self:unmark_viewed()
   end, "Review: Unmark viewed")
+  map(keys.sync, function()
+    self:sync_now()
+  end, "Review: Check GitHub for updates")
   if self.fork then
     map(keys.start_lsp, function()
       self:start_lsp()
@@ -467,6 +507,31 @@ end
 ---@return boolean
 function Review:is_valid()
   return not self.closed and self.view:is_valid()
+end
+
+--- What GitHub has that the review does not show: new commits, or the PR retargeted to
+--- another base branch. A push to the base branch alone is not here — the diff is from the
+--- merge-base, which it does not move.
+---@return { head?: string, base?: string }? stale `head`: GitHub's head commit, when not the
+---one shown; `base`: GitHub's base branch, when not the one shown. Nil when nothing is new.
+function Review:stale()
+  local latest = self.latest
+  if not latest then
+    return nil
+  end
+  local head = latest.head.oid ~= self.pr.head.oid and latest.head.oid or nil
+  local base = latest.base.ref ~= self.pr.base.ref and latest.base.ref or nil
+  if head or base then
+    return { head = head, base = base }
+  end
+  return nil
+end
+
+--- Check GitHub for new commits, a new base branch or a merge now.
+function Review:sync_now()
+  if self:is_valid() then
+    self.sync:now()
+  end
 end
 
 --- Mark a file viewed on GitHub, then show the next file that is not viewed.
@@ -557,6 +622,7 @@ function Review:open_compose(header, post, opts)
     lines = opts.lines,
     suggestion = opts.suggestion,
     on_submit = function(text)
+      self:touch_threads()
       local posted, err = post(text)
       if not posted then
         return false, post_error(err)
@@ -756,6 +822,7 @@ function Review:delete()
     if not self:is_valid() or not M.confirm_delete(prompt) then
       return
     end
+    self:touch_threads()
     local ok, err = comments_mod.delete(self.pr, c)
     if not ok then
       log.error("comment not deleted: %s", post_error(err))
@@ -822,6 +889,69 @@ function Review:reply()
   return true
 end
 
+-- Live threads ----------------------------------------------------------------------------
+
+--- A change to the threads is being made here: a sync already under way may have read
+--- GitHub before it, so its threads are not drawn.
+function Review:touch_threads()
+  self.threads_rev = self.threads_rev + 1
+end
+
+--- The threads of a snapshot, fitted to the head the review shows (`review/live.lua`). The
+--- ones on newer code become `held`.
+---@param snap NvimDiff.GitHub.Snapshot
+---@return NvimDiff.GitHub.Thread[] shown
+function Review:fit_threads(snap)
+  local head = self.pr.head.oid
+  if self.anchors.head ~= head then
+    self.anchors = live.anchors(head)
+  end
+  local current = snap.head.oid == head and snap.base.ref == self.pr.base.ref
+  local shown, held = live.fit(snap.threads, self.anchors, current)
+  self.held = held
+  return shown
+end
+
+--- Draw the threads of a snapshot a sync (or the opening) read, unless they look the same
+--- as the ones drawn. A thread others resolved stays drawn, dimmed, while resolved ones are
+--- hidden, as one resolved here does. Skipped while a comment is being posted: the post
+--- redraws the threads once GitHub has it.
+---@param snap NvimDiff.GitHub.Snapshot
+function Review:show_threads(snap)
+  if not self:is_valid() or (self.compose and self.compose.posting) then
+    return
+  end
+  local list = self:fit_threads(snap)
+  local key = live.fingerprint(list)
+  if key == self.drawn then
+    return
+  end
+  local view = self.view
+  local was = {}
+  for _, t in ipairs(view.threads or {}) do
+    was[t.id] = t.resolved
+  end
+  view.thread_state = view.thread_state or require("nvim-diff.review.threadview").new_state()
+  local ts = view.thread_state
+  for _, t in ipairs(list) do
+    if t.resolved and was[t.id] == false then
+      ts.kept = ts.kept or {}
+      ts.kept[t.id] = true
+    end
+  end
+  self.drawn = key
+  view:set_threads(list)
+end
+
+--- Draw `list` after a change made here, whatever was drawn before.
+---@param list NvimDiff.GitHub.Thread[] Fitted already.
+function Review:draw_threads(list)
+  self:touch_threads()
+  self.drawn = live.fingerprint(list)
+  self.view:set_threads(list)
+  self.sync:show()
+end
+
 --- Redraw the threads after a change: refetched from GitHub, the only source of truth. When
 --- the refetch fails, `patch` applies the change to what is already showing instead, and
 --- the user is told.
@@ -833,8 +963,11 @@ function Review:reload_threads(what, patch, expand)
     return
   end
   local view = self.view
-  local list, err = threads_mod.fetch(self.pr.target, self.number)
-  if not list then
+  local snap, err = threads_mod.snapshot(self.pr.target, self.number)
+  local list
+  if snap then
+    list = self:fit_threads(snap)
+  else
     log.warn("%s, but the threads could not be reloaded: %s", what, msg(err))
     list = view.threads or {}
     patch(list)
@@ -849,7 +982,7 @@ function Review:reload_threads(what, patch, expand)
       end
     end
   end
-  view:set_threads(list)
+  self:draw_threads(list)
 end
 
 --- Redraw the threads after a post or an edit, with the thread holding the comment
@@ -956,12 +1089,13 @@ function Review:with_thread_id(thread)
   if not thread.local_only then
     return thread
   end
-  local list, err = threads_mod.fetch(self.pr.target, self.number)
-  if not list then
+  local snap, err = threads_mod.snapshot(self.pr.target, self.number)
+  if not snap then
     local why = "it was drawn from your comment alone, as GitHub's threads could not be read back, "
       .. "so it has no thread id yet (%s)"
     return nil, why:format(msg(err))
   end
+  local list = self:fit_threads(snap)
   local first = thread.comments[1]
   local found
   for _, t in ipairs(list) do
@@ -975,7 +1109,7 @@ function Review:with_thread_id(thread)
   if found and state and state.expanded[thread.id] ~= nil then
     state.expanded[found.id] = state.expanded[thread.id]
   end
-  self.view:set_threads(list)
+  self:draw_threads(list)
   if not found then
     return nil, "GitHub no longer lists it"
   end
@@ -1016,13 +1150,14 @@ function Review:set_resolved(thread, resolved)
     log.warn("you cannot %s this thread", verb)
     return false
   end
+  self:touch_threads()
   local state, err = (resolved and threads_mod.resolve or threads_mod.unresolve)(self.pr.target.host, real)
   if not state then
     log.error("cannot %s this thread: %s", verb, post_error(err))
     return false
   end
   self:apply_resolved(real, state)
-  self.view:set_threads(self.view.threads or {})
+  self:draw_threads(self.view.threads or {})
   return true
 end
 
@@ -1135,8 +1270,8 @@ function Review:leave_worktree(tab)
   end
 end
 
---- End the review: close its view and tabpage, wipe buffers on the slot's files and
---- release the slot, keeping its folder. Idempotent.
+--- End the review: stop syncing, close its view and tabpage, wipe buffers on the slot's
+--- files and release the slot, keeping its folder. Idempotent.
 ---@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
 function Review:close(opts)
   local windows = not (opts and opts.windows == false)
@@ -1144,6 +1279,9 @@ function Review:close(opts)
     return
   end
   self.closed = true
+  if self.sync then
+    self.sync:close()
+  end
   if by_number[self.number] == self then
     by_number[self.number] = nil
   end

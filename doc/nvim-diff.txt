@@ -353,8 +353,35 @@ the line, `<leader>cR` replies and then resolves it, `<leader>cu` unresolves
 it. A thread resolved during the review stays on screen, dimmed, until `gR`
 next flips resolved threads between dimmed and hidden.
 
-Nothing is refetched while a review is open: another reviewer's new comment
-shows once the PR is reopened.
+                                                       *nvim-diff-review-sync*
+While the review is open it checks GitHub every minute
+(|nvim-diff-config.github.sync_interval_ms|), and at once on `<C-r>`, with
+one GraphQL query: the PR's state, head commit, base branch and threads.
+
+  - New commits, or the PR retargeted to another base branch: a notice says
+    so, once per change, and the panel shows `● new commits on GitHub` (or
+    `base → <branch>`) under its counts. The review keeps showing the old
+    diff; reopen the PR to load the new one. A push to the base branch alone
+    changes nothing, as the diff is from the merge-base.
+  - New threads, replies, edits and resolves from others: drawn at once, in
+    place, without re-diffing the file. A thread someone else resolves stays
+    on screen, dimmed, like one you resolve, until `gR` next flips resolved
+    threads.
+  - Threads while GitHub has new commits: a thread keeps the line it has in
+    the diff shown, and a comment you post there shows where you wrote it. A
+    new thread on the new code is not drawn: it waits, counted in the panel
+    (`● new commits on GitHub · 2 threads waiting`), until the new code is
+    loaded.
+  - Merged or closed: a notice says so and syncing stops; the review stays
+    open and usable, and the panel says `merged on GitHub; not syncing`.
+    `<C-r>` still checks, and a PR found open again syncs again.
+  - A network error or timeout is retried at the next check, with a warning
+    after three in a row. A rate limit pauses syncing until GitHub says it
+    lifts. A lost login or a PR no longer visible stops syncing, with a
+    warning.
+
+Checks run in the background and go on while Neovim is unfocused. The
+threads are redrawn only when something about them changed.
 
 THE COMMENT SPLIT                                          *nvim-diff-compose*
 
@@ -439,6 +466,8 @@ In the file panel and the diff panes:
   `<leader><space>`  mark the file viewed on GitHub, jump to the next one not
                    viewed
   `<leader><BS>`     clear the file's viewed mark
+  `<C-r>`            check GitHub now for new commits, a new base branch or
+                   a merge (|nvim-diff-review-sync|)
   `<leader>L`        a PR from a fork, after no: ask `Start LSP? [y/N]` again
                    (|nvim-diff-review-fork|)
 
@@ -586,6 +615,14 @@ github.host                            (default: unset)
     the `origin` remote. Set it when the remote names an alias `gh` was not
     logged in to. The owner and repository always come from the remote.
 
+                                    *nvim-diff-config.github.sync_interval_ms*
+github.sync_interval_ms                (default: `60000`)
+    Milliseconds between an open PR review's checks of GitHub, at least
+    `10000`. `false`: no checks by themselves, only on
+    |nvim-diff-config.keymaps.review.sync|. Each check costs one point of
+    GitHub's hourly GraphQL budget of 5000 (one more per extra 100 threads).
+    See |nvim-diff-review-sync|.
+
                                                  *nvim-diff-config.highlights*
 highlights                             (default: `{}`)
     Group name to attributes (as |nvim_set_hl()| takes them), or to the name
@@ -681,6 +718,8 @@ keymaps.conflict.prev_conflict         (default: `"[x"`)
 keymaps.review.mark_viewed             (default: `"<leader><space>"`)
                                *nvim-diff-config.keymaps.review.unmark_viewed*
 keymaps.review.unmark_viewed           (default: `"<leader><BS>"`)
+                                        *nvim-diff-config.keymaps.review.sync*
+keymaps.review.sync                    (default: `"<C-r>"`)
                                    *nvim-diff-config.keymaps.review.start_lsp*
 keymaps.review.start_lsp               (default: `"<leader>L"`)
     File panel and diff panes of a PR review; `start_lsp` only in the review
@@ -785,6 +824,10 @@ File panel ~
   *NvimDiffPanelStatusModified*    status letter: modified, renamed, type
                        *NvimDiffPanelStatusDeleted*     status letter: deleted
                     *NvimDiffPanelStatusConflicted*  status letter: conflicted
+  *NvimDiffPanelStale*         new commits or base on GitHub, not shown yet,
+                             and the threads waiting for them
+  *NvimDiffPanelSync*          syncing stopped (merged, closed), paused or
+                             failing
 
 Conflict view result buffer ~
                                      *NvimDiffConflictMarker*     marker lines
@@ -840,7 +883,8 @@ Reports:
     verdict, viewed marks) are tested against a stub `gh`, not a live PR.
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
-  - Nothing is refetched while a review is open.
+  - An open review detects new commits and a new base branch but does not
+    load them, nor the threads on them; reopen the PR for both.
   - An LSP jump from a review's head pane to another file fails (E1513,
     'winfixbuf'); jumps within the file work.
   - Showing the head pane's decorations in its window only uses an

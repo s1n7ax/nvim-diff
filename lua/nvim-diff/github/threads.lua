@@ -14,6 +14,11 @@
 ---
 --- Sides are normalised to the hunk model's names: GitHub's `LEFT` is `"old"`, `RIGHT` is
 --- `"new"`.
+---
+--- The same query also reads the PR's state, title, head commit and base branch
+--- (`M.snapshot`), so a review's sync learns everything it polls for in one call — one point
+--- of GitHub's GraphQL budget per 100 threads. A thread's `line` is counted in its first
+--- comment's `commit_oid`, which is GitHub's current head for a thread that is not outdated.
 
 local cmd = require("nvim-diff.github.cmd")
 local errors = require("nvim-diff.github.error")
@@ -33,9 +38,12 @@ local COMMENTS = [[
         body
         outdated
         createdAt
+        lastEditedAt
         url
         viewerDidAuthor
         replyTo { id }
+        commit { oid }
+        originalCommit { oid }
       }
 ]]
 
@@ -44,6 +52,11 @@ local THREADS_QUERY = [[
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      state
+      title
+      headRefOid
+      baseRefName
+      baseRefOid
       reviewThreads(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -93,9 +106,14 @@ query($id: ID!, $cursor: String) {
 ---@field body string Markdown source, line endings normalised to `\n`.
 ---@field outdated boolean
 ---@field created_at string ISO 8601.
+---@field last_edited_at? string ISO 8601; nil when never edited.
 ---@field url? string
 ---@field viewer_did_author boolean
 ---@field reply_to? string Node id of the comment this one replies to.
+--- The commit the comment's position is counted in: GitHub's current head while the thread
+--- is not outdated, else the same as `original_commit_oid`. Nil when GitHub lost the commit.
+---@field commit_oid? string
+---@field original_commit_oid? string The commit the comment was written on.
 
 ---@class NvimDiff.GitHub.Thread
 ---@field id string GraphQL node id — what `resolveReviewThread` takes.
@@ -138,6 +156,8 @@ local function comment_from(node)
   local author = value(node.author)
   local reply = value(node.replyTo)
   local db = value(node.fullDatabaseId)
+  local commit = value(node.commit)
+  local original = value(node.originalCommit)
   return {
     id = node.id,
     database_id = db ~= nil and tostring(db) or nil,
@@ -145,9 +165,12 @@ local function comment_from(node)
     body = (value(node.body) or ""):gsub("\r\n?", "\n"),
     outdated = node.outdated == true,
     created_at = value(node.createdAt) or "",
+    last_edited_at = value(node.lastEditedAt),
     url = value(node.url),
     viewer_did_author = node.viewerDidAuthor == true,
     reply_to = reply and value(reply.id) or nil,
+    commit_oid = commit and value(commit.oid) or nil,
+    original_commit_oid = original and value(original.oid) or nil,
   }
 end
 
@@ -224,19 +247,33 @@ local function rest_of_comments(host, thread, cursor)
   return true
 end
 
---- Every review thread of a PR, in GitHub's order (by creation), each with all its
---- comments, oldest first.
+--- A PR as GitHub has it now: what a review's sync compares with what it shows. `head` and
+--- `base` mirror `NvimDiff.GitHub.PR`'s, so `snapshot.head.oid ~= pr.head.oid` reads as it
+--- says.
+---@class NvimDiff.GitHub.Snapshot
+---@field state "OPEN"|"CLOSED"|"MERGED"
+---@field title string
+---@field head { oid: string }
+---@field base { ref: string, oid: string } `oid` is the merge-base GitHub diffs from, which a
+---push to the base branch does not move.
+---@field threads NvimDiff.GitHub.Thread[] As `M.fetch` returns them.
+---@field rate? NvimDiff.GitHub.RateLimit From the last response's headers.
+---@field at integer `os.time()` when it was read.
+
+--- Every review thread of a PR with all their comments, and the PR's state, title, head and
+--- base branch, read in the same query.
 ---@param target NvimDiff.GitHub.Target Host, owner and repo; a fetched PR's `target`.
 ---@param number integer
----@return NvimDiff.GitHub.Thread[]? threads
----@return NvimDiff.GitHub.Error? err `invalid`, `not_found`, `not_authenticated`, or a
----failure to reach the API.
+---@return NvimDiff.GitHub.Snapshot? snapshot
+---@return NvimDiff.GitHub.Error? err `invalid`, `not_found`, `not_authenticated`,
+---`rate_limited`, or a failure to reach the API.
 ---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
-function M.fetch(target, number)
+function M.snapshot(target, number)
   if type(number) ~= "number" or number ~= math.floor(number) or number < 1 then
     return nil, errors.new("invalid", ("not a PR number: %s"):format(vim.inspect(number)))
   end
   local threads = {}
+  local snap
   local cursor
   repeat
     local vars = {
@@ -247,7 +284,7 @@ function M.fetch(target, number)
     if cursor then
       vars[#vars + 1] = { flag = "-f", name = "cursor", value = cursor }
     end
-    local data, err = cmd.graphql(target.host, THREADS_QUERY, vars)
+    local data, err, response = cmd.graphql(target.host, THREADS_QUERY, vars)
     if not data then
       return nil, err
     end
@@ -256,6 +293,16 @@ function M.fetch(target, number)
     if not pr then
       return nil, errors.new("not_found", ("PR #%d not found in %s/%s"):format(number, target.owner, target.repo))
     end
+    -- The PR's own fields from the first page; later pages repeat them.
+    snap = snap
+      or {
+        state = value(pr.state),
+        title = value(pr.title) or "",
+        head = { oid = value(pr.headRefOid) },
+        base = { ref = value(pr.baseRefName), oid = value(pr.baseRefOid) },
+        threads = threads,
+      }
+    snap.rate = response and cmd.rate_limit(response.headers) or snap.rate
     local conn = value(pr.reviewThreads) or {}
     for _, node in ipairs(value(conn.nodes) or {}) do
       local thread = thread_from(node)
@@ -274,7 +321,24 @@ function M.fetch(target, number)
     end
     cursor = nxt
   until not cursor
-  return threads
+  snap.at = os.time()
+  return snap
+end
+
+--- Every review thread of a PR, in GitHub's order (by creation), each with all its
+--- comments, oldest first.
+---@param target NvimDiff.GitHub.Target Host, owner and repo; a fetched PR's `target`.
+---@param number integer
+---@return NvimDiff.GitHub.Thread[]? threads
+---@return NvimDiff.GitHub.Error? err `invalid`, `not_found`, `not_authenticated`, or a
+---failure to reach the API.
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function M.fetch(target, number)
+  local snap, err = M.snapshot(target, number)
+  if not snap then
+    return nil, err
+  end
+  return snap.threads
 end
 
 -- Resolving -------------------------------------------------------------------------------
