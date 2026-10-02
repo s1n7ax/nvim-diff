@@ -28,8 +28,9 @@ review mode on top.
   LSP and tests work on its code, and packages you installed there survive to the next
   review; viewed marks sync with GitHub; comment threads show inline and expand
   in place; comments, replies, edits, suggestions, resolve and the review verdict all post
-  straight to GitHub; the open review checks GitHub every minute and says when new commits
-  land or the PR is merged. github.com and GitHub Enterprise Server.
+  straight to GitHub; the open review checks GitHub every minute, says when new commits
+  land or the PR is merged, and applies new commits on a key, in place. github.com and
+  GitHub Enterprise Server.
 
 Side-by-side is the default layout; `g<C-x>` flips a file to unified.
 
@@ -143,6 +144,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | `<leader><space>` | mark the file viewed on GitHub, jump to the next unviewed one |
 | `<leader><BS>` | clear the viewed mark |
 | `<C-r>` | check GitHub now for new commits, a new base branch or a merge |
+| `<leader>A` | apply the new code a check found, in the same review |
 | `<leader>L` | a PR from a fork, after no: ask `Start LSP? [y/N]` again |
 | `<leader>cc` | in the file panel: a file-level comment on the file under the cursor |
 
@@ -251,6 +253,7 @@ require("nvim-diff").setup({
       mark_viewed = "<leader><space>",
       unmark_viewed = "<leader><BS>",
       sync = "<C-r>",
+      apply = "<leader>A",
       start_lsp = "<leader>L", -- a fork PR: ask `Start LSP? [y/N]` again
     },
     threads = {
@@ -366,11 +369,19 @@ usual.
 
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
-in the panel; the review keeps the diff it opened with until you reopen the PR. New
+in the panel; the review keeps the diff it opened with until you press `<leader>A`. New
 threads, replies, edits and resolves from others are drawn at once, in place; a new thread
 on code the review does not show yet waits, counted in the panel. A merged or closed PR
 gets a notice and syncing stops; the review stays usable. Network errors retry quietly (a
 warning after three in a row), a rate limit pauses syncing until it lifts.
+
+`<leader>A` applies the new code in the same review: the commits are fetched in the
+background, then the new head is checked out into the same slot, and the file list, viewed
+marks and threads are the new code's. The file that showed shows again, on the same line
+number. The head pane lets go of its file before the checkout and loads it afresh after,
+so nothing prompts and language servers stay on (a fork's yes included). It is refused
+while a comment or the verdict is being written, since that was written on the diff
+showing.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
@@ -381,8 +392,8 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- An open review detects new commits and a new base branch but does not load them, nor
-  the threads on them; reopen the PR for both.
+- Applying new code keeps the file by its path and the cursor on the same line number; a
+  renamed file is not followed and the line is not mapped through the new commits.
 - An LSP jump from the review's head pane to another file fails (`winfixbuf`); jumps
   within the file work.
 - File-level comments need a GHES version that supports `subject_type=file`.
