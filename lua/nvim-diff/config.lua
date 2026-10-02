@@ -105,6 +105,9 @@ local M = {}
 --- Check GitHub for new commits, a new base branch or a merge now, without waiting for
 --- `github.sync_interval_ms`.
 ---@field sync NvimDiff.Config.Key
+--- Apply the new code a check found (new commits, a new base branch): check it out into the
+--- review slot and show its diff, viewed marks and threads, in the same review.
+---@field apply NvimDiff.Config.Key
 
 --- Buffer-local to the diff panes of a view showing PR review comment threads.
 ---@class NvimDiff.Config.ThreadKeymaps
@@ -281,11 +284,13 @@ local defaults = {
     -- octo.nvim's viewed key, so muscle memory carries over; backspace takes it back.
     -- `L` for LSP; capital, so a `<leader>l` prefix of the user's still works in the panes.
     -- `<C-r>` is octo.nvim's reload key too; redo means nothing in a read-only pane.
+    -- `A` for apply; capital, like `L`.
     review = {
       mark_viewed = "<leader><space>",
       unmark_viewed = "<leader><BS>",
       start_lsp = "<leader>L",
       sync = "<C-r>",
+      apply = "<leader>A",
     },
     threads = {
       toggle = "<CR>",
@@ -419,6 +424,7 @@ local schema = {
       unmark_viewed = KEY,
       start_lsp = KEY,
       sync = KEY,
+      apply = KEY,
     },
     threads = {
       toggle = KEY,

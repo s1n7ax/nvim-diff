@@ -901,6 +901,28 @@ function View:refresh(changes)
   return ops
 end
 
+--- Diff `left` against `right` from now on — a PR review applying new code — and re-list
+--- the files as `refresh` does, entries the new diff keeps keeping their state (viewed,
+--- forced load, layout, diff mode). Nothing is selected after: the caller picks the file.
+---@param left NvimDiff.Git.Rev
+---@param right NvimDiff.Git.Rev
+---@param title? string Defaults to the one the revisions give.
+---@param changes? NvimDiff.Git.FileChange[] The new list, when the caller read it already.
+---@return NvimDiff.EditOp[]? ops Nil when the list could not be read.
+function View:retarget(left, right, title, changes)
+  if not self:is_valid() then
+    return nil
+  end
+  self.left, self.right = left, right
+  self.title = title or title_of(nil, left, right)
+  self.current = nil
+  if self.file then
+    -- A diff of the old revisions.
+    self:show_note({ "", "  Select a file in the panel." })
+  end
+  return self:refresh(changes)
+end
+
 --- Flip a branch diff between merge-base (`a...b`, what a PR shows) and tip-to-tip
 --- (`a..b`, what a rebase brings in), then re-list. Files the flip does not touch keep
 --- their state and their open diff.

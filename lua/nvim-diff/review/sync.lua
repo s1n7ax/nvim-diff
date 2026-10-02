@@ -8,8 +8,9 @@
 ---
 --- * New code — a new head commit, or the PR retargeted to another base branch — is
 ---   announced once per change and marked in the panel until the review shows it, with the
----   count of threads on it that wait for it (`review.held`). A push to the base branch
----   alone is not new code: GitHub's `baseRefOid` is the merge-base, which it does not move.
+---   count of threads on it that wait for it (`review.held`) and the key that applies it
+---   (`keymaps.review.apply`, `review:apply()`). A push to the base branch alone is not new
+---   code: GitHub's `baseRefOid` is the merge-base, which it does not move.
 --- * Merged or closed: announced, marked in the panel, and syncing stops. The review stays
 ---   usable; the key still checks, and a PR found open again syncs again.
 ---
@@ -88,6 +89,20 @@ local function threads(n)
   return n == 1 and "1 thread" or ("%d threads"):format(n)
 end
 
+--- The key that applies new code, if one is set.
+---@return string?
+local function apply_key()
+  local key = config.get().keymaps.review.apply
+  return type(key) == "string" and key or nil
+end
+
+--- How a notice ends that says the review shows old code: what applies the new code.
+---@return string
+local function until_applied()
+  local key = apply_key()
+  return key and ("until %s applies it"):format(key) or "until it is applied"
+end
+
 --- The notice for new code on GitHub.
 ---@param review NvimDiff.Review
 ---@param stale { head?: string, base?: string }
@@ -101,10 +116,11 @@ local function stale_notice(review, stale)
     what[#what + 1] = ("now targets %s (was %s)"):format(stale.base, review.pr.base.ref or "?")
   end
   local held = #review.held
-  return ("PR #%d %s on GitHub; the review shows the old diff%s until reopened"):format(
+  return ("PR #%d %s on GitHub; the review shows the old diff%s %s"):format(
     review.number,
     table.concat(what, " and "),
-    held > 0 and (", without %s on the new code,"):format(threads(held)) or ""
+    held > 0 and (", without %s on the new code,"):format(threads(held)) or "",
+    until_applied()
   )
 end
 
@@ -235,7 +251,7 @@ function Sync:take(snap, manual, rev)
 
   if manual and not said then
     if stale then
-      echo(("PR #%d has new code on GitHub that this review does not show"):format(review.number))
+      echo(("PR #%d has new code on GitHub that this review does not show %s"):format(review.number, until_applied()))
     elseif self.stopped then
       echo(("PR #%d is %s; not syncing"):format(review.number, self.stopped))
     else
@@ -297,8 +313,17 @@ function Sync:cancel()
   end
 end
 
---- The panel's sync lines: what is new on GitHub and the threads waiting for it, then why
---- syncing is stopped, paused or failing.
+--- No checks until the next `take` or `schedule`: the one running is dropped and the timer
+--- stopped. For a review changing what it shows over several ticks (applying new code).
+function Sync:hold()
+  self:cancel()
+  if self.timer then
+    self.timer:stop()
+  end
+end
+
+--- The panel's sync lines: what is new on GitHub, the threads waiting for it and the key
+--- that applies it, then why syncing is stopped, paused or failing.
 ---@return NvimDiff.PanelStatus[]
 function Sync:status()
   local out = {}
@@ -318,6 +343,10 @@ function Sync:status()
       text = ("%s · %s waiting"):format(text, threads(held))
     end
     out[#out + 1] = { text = "● " .. text, hl = "NvimDiffPanelStale" }
+    local key = apply_key()
+    if stale and key then
+      out[#out + 1] = { text = ("  %s to apply"):format(key), hl = "NvimDiffPanelSync" }
+    end
   end
   local text
   if self.stopped == "merged" or self.stopped == "closed" then

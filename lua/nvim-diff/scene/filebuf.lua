@@ -51,6 +51,9 @@
 ---   changed. An owned buffer shown elsewhere gets no prompt either; once the user took it
 ---   over (opened the file), Neovim's own.
 ---
+--- A review applying new code checks another commit out into the slot: it lets the head pane
+--- go first, then `checked_out` wipes or reloads the buffers whose files that changed.
+---
 ---     local claim, why = require("nvim-diff.scene.filebuf").claim({ path = abs, lines = lines })
 ---     if claim then
 ---       local user = window.pane(win, claim.buf, ...)
@@ -520,6 +523,17 @@ function Claim:disk_changed()
   end)
 end
 
+--- Read unmodified `buf`'s file again, as 'autoread' would, keeping its 'readonly'.
+---@param buf integer
+local function reload(buf)
+  -- `:edit` resets 'readonly'; the buffer goes back as it was.
+  local readonly = vim.bo[buf].readonly
+  pcall(api.nvim_buf_call, buf, function()
+    vim.cmd("silent! edit")
+  end)
+  vim.bo[buf].readonly = readonly
+end
+
 --- Hand back a borrowed buffer whose file changed on disk while the pane held it: Neovim
 --- took the change as seen, so it would not tell the user. Reloaded as 'autoread' would
 --- (the pane kept it unmodified), else a warning.
@@ -534,12 +548,7 @@ function Claim:hand_back_stale()
   if not vim.uv.fs_stat(self.path) then
     log.warn("%s was deleted while the review showed it", shown(self.path))
   elseif autoread and not vim.bo[buf].modified then
-    -- `:edit` resets 'readonly'; the buffer goes back as it was.
-    local readonly = vim.bo[buf].readonly
-    pcall(api.nvim_buf_call, buf, function()
-      vim.cmd("silent! edit")
-    end)
-    vim.bo[buf].readonly = readonly
+    reload(buf)
   else
     log.warn("%s changed on disk while the review showed it; :edit loads it", shown(self.path))
   end
@@ -849,6 +858,49 @@ function Claim:release()
     drop_stale(buf)
   end
   M.evict()
+end
+
+--- Another commit was checked out into `root` (a review applying new code): bring every
+--- buffer on a file under it in line with the disk, before Neovim finds the change itself
+--- and the head pane falls back to a copy, or prompts (W11). No pane may hold one: the
+--- caller lets the head pane go before the checkout.
+---
+--- * An owned buffer no window shows, whose file changed or went, is wiped (its language
+---   servers close it); the next pane loads the file afresh. One whose file is the same
+---   is kept, servers and all.
+--- * Any other buffer whose file changed is read again when it has no unsaved changes, as
+---   'autoread' would. One with unsaved changes is left to Neovim, which asks (W12).
+---@param root string
+---@return { wiped: integer, reloaded: integer, modified: string[] } done `modified`: the files
+---with unsaved changes left alone, relative to `root`.
+function M.checked_out(root)
+  root = path.real(root) or root
+  local done = { wiped = 0, reloaded = 0, modified = {} }
+  for _, buf in ipairs(api.nvim_list_bufs()) do
+    local name = api.nvim_buf_get_name(buf)
+    if
+      api.nvim_buf_is_loaded(buf)
+      and not claimed[buf]
+      and vim.bo[buf].buftype == ""
+      and name ~= ""
+      and path.is_under(path.normalize(name), root)
+    then
+      local disk = read_lines(name)
+      if not disk or not same_lines(api.nvim_buf_get_lines(buf, 0, -1, false), disk) then
+        if vim.bo[buf].modified then
+          done.modified[#done.modified + 1] = path.relative(name, root)
+        elseif owned[buf] and not vim.bo[buf].buflisted and #vim.fn.win_findbuf(buf) == 0 then
+          owned[buf], stale[buf] = nil, nil
+          pcall(api.nvim_buf_delete, buf, { force = true })
+          done.wiped = done.wiped + 1
+        elseif disk then
+          reload(buf)
+          done.reloaded = done.reloaded + 1
+        end
+      end
+    end
+  end
+  return done
 end
 
 --- Wipe the least recently used owned buffers that no pane holds and no window shows,
