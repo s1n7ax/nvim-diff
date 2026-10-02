@@ -38,12 +38,20 @@
 --- A PR review hands the view its comment threads with `set_threads`: each file's diff then
 --- shows its threads (`review/threadview.lua`), and `keymaps.threads.list` opens the side
 --- list of outdated and file-level ones (`review/sidelist.lua`).
+---
+--- A PR review's jumps to another file (`route_jump`) — an LSP jump from the head pane
+--- showing the real file, a quickfix or location list entry, `:edit` there — never replace
+--- a pane's buffer and never split the review's tabpage: a file the diff lists is selected
+--- and shown at the jump's line; any other opens in a new tabpage, read-only when it is in
+--- the review's worktree (the PR's code).
 
 local blob = require("nvim-diff.git.blob")
+local buffer = require("nvim-diff.scene.buffer")
 local config = require("nvim-diff.config")
 local conflict_view = require("nvim-diff.views.conflict")
 local entry_mod = require("nvim-diff.scene.entry")
 local event = require("nvim-diff.core.event")
+local filebuf = require("nvim-diff.scene.filebuf")
 local files = require("nvim-diff.git.files")
 local fileview = require("nvim-diff.scene.fileview")
 local help = require("nvim-diff.ui.help")
@@ -97,7 +105,11 @@ local by_tab = {}
 ---@field paths? string[]
 ---@field review? boolean
 ---@field real_file? boolean
----@field augroup? integer Auto-refresh autocmds, for a worktree or index right side.
+--- Auto-refresh autocmds, for a worktree or index right side; a review's jump routing.
+---@field augroup? integer
+--- Called with each tabpage a jump opens for a file the diff does not list (`route_jump`),
+--- which starts in the view's tab-local directory.
+---@field on_tab? fun(tab: integer)
 ---@field list NvimDiff.FileList
 ---@field listing NvimDiff.Listing
 ---@field collapsed table<string, boolean> Directory path to the user's own fold choice.
@@ -239,6 +251,9 @@ function M.open(opts)
   api.nvim_set_current_win(self.panel.win)
   by_tab[self.tab] = self
   self:watch()
+  if self.review then
+    self:catch_splits()
+  end
 
   event.emit_in({ win = self.panel.win, buf = self.panel.buf }, event.events.VIEW_OPENED, self)
   return self
@@ -680,6 +695,9 @@ function View:show_diff(entry, folds)
       on_changed = function()
         self:head_changed(entry)
       end,
+      on_jump = self.review and function(jump)
+        self:route_jump(jump)
+      end or nil,
     },
     winbar = self.review,
     signs = self.review,
@@ -937,6 +955,199 @@ function View:close()
   if api.nvim_buf_is_valid(self.note_buf) then
     pcall(api.nvim_buf_delete, self.note_buf, { force = true })
   end
+end
+
+-- Jumps to other files ---------------------------------------------------------------------
+
+--- Whether `buf` is a file on disk inside the view's worktree (a review's slot); nil when it
+--- is no file at all (a scratch buffer, a `scheme://` one), false for one elsewhere.
+---@param buf integer
+---@return boolean?
+function View:in_worktree(buf)
+  local name = api.nvim_buf_get_name(buf)
+  if vim.bo[buf].buftype ~= "" or name == "" or name:find("^%a[%w+.-]*://") then
+    return nil
+  end
+  return path.is_under(path.real(name), path.real(self.repo.toplevel))
+end
+
+--- The entry the diff lists for `buf`'s file — in the worktree, at the entry's path (a
+--- renamed file's new one) and not deleted; nil for any other buffer.
+---@param buf integer
+---@return NvimDiff.FileEntry?
+function View:entry_of(buf)
+  if not self:in_worktree(buf) then
+    return nil
+  end
+  local rel = path.relative(path.real(api.nvim_buf_get_name(buf)), path.real(self.repo.toplevel))
+  for _, e in ipairs(self.list.entries) do
+    if e.path == rel and e.change.status ~= "D" then
+      return e
+    end
+  end
+  return nil
+end
+
+--- A jump went to another file (`NvimDiff.PaneJump`): out of the head pane showing the real
+--- file (which got its buffer back), or into a window the review's tabpage just split for
+--- it (`catch_splits`, which closed it). A file the diff lists is selected — a deferred one
+--- loaded — and its diff shows on the jump's line, on the head side; any other file opens
+--- in a new tabpage (`open_tab`).
+---@param jump NvimDiff.PaneJump
+function View:route_jump(jump)
+  if not self:is_valid() or not api.nvim_buf_is_valid(jump.buf) then
+    return
+  end
+  local entry = self:entry_of(jump.buf)
+  if not entry then
+    self:open_tab(jump)
+    return
+  end
+  if jump.read then
+    -- Loaded by the jump, as the user's: the head pane loads it its own way.
+    pcall(api.nvim_buf_delete, jump.buf, { force = true })
+  elseif filebuf.owns(jump.buf) then
+    -- The head pane's, hidden; a jump lists the buffer it goes to.
+    api.nvim_set_option_value("buflisted", false, { buf = jump.buf })
+  end
+  if entry ~= self.current or not self.file or self.file:is_closed() then
+    self:select(entry, { force = true })
+  end
+  local file = self.file
+  if self.current ~= entry or not file or file:is_closed() then
+    return
+  end
+  api.nvim_set_current_win(self:diff_win("new"))
+  file:jump("new", jump.lnum, jump.col)
+end
+
+--- Show `jump.buf` on the jump's line in a new tabpage right after the view's, in the
+--- view's tab-local directory (`on_tab` is told). A file of the worktree — the PR's code —
+--- is made read-only, as in the head pane ('readonly', 'nomodifiable'); one from elsewhere
+--- (a library, the standard library) is not the review's, and is left as it is.
+---@param jump NvimDiff.PaneJump
+function View:open_tab(jump)
+  local buf = jump.buf
+  local nr = api.nvim_tabpage_get_number(self.tab)
+  local cwd = vim.fn.getcwd(-1, nr)
+  local tcd = vim.fn.haslocaldir(-1, nr) == 1
+  vim.cmd(("%dtabnew"):format(nr))
+  if tcd and vim.fn.getcwd() ~= cwd then
+    vim.cmd.tcd(vim.fn.fnameescape(cwd))
+  end
+  local win = api.nvim_get_current_win()
+  local placeholder = api.nvim_win_get_buf(win)
+  api.nvim_win_set_buf(win, buf)
+  if
+    placeholder ~= buf
+    and api.nvim_buf_is_valid(placeholder)
+    and api.nvim_buf_get_name(placeholder) == ""
+    and not vim.bo[placeholder].modified
+  then
+    pcall(api.nvim_buf_delete, placeholder, { force = true })
+  end
+  if self:in_worktree(buf) then
+    api.nvim_set_option_value("readonly", true, { buf = buf })
+    api.nvim_set_option_value("modifiable", false, { buf = buf })
+  end
+  pcall(api.nvim_win_set_cursor, win, { jump.lnum, jump.col })
+  api.nvim_win_call(win, function()
+    -- Open the user's folds over the line, as an LSP jump does.
+    vim.cmd("silent! normal! zv")
+  end)
+  if self.on_tab then
+    self.on_tab(api.nvim_get_current_tabpage())
+  end
+end
+
+--- Whether `win` is one of the view's own windows: the panel, the note, the diff's panes.
+---@param win integer
+---@return boolean
+function View:owns_window(win)
+  if win == self.panel.win or win == self.note_win then
+    return true
+  end
+  return self.file ~= nil and not self.file:is_closed() and vim.tbl_contains(self.file:wins(), win)
+end
+
+--- Route a file opened in a new window of the view's tabpage as a jump (`route_jump`) when
+--- the window was split off a quickfix or location list window or one of the view's own
+--- windows, by the command that opened the file: a list entry or `:cnext` no pane could
+--- take (Neovim splits when every window is 'winfixbuf' or a scratch buffer: the head pane
+--- is a copy, the layout is unified), a jump that opens a window of its own. The window
+--- closes once the jump is over: the tabpage holds the review only. A window split off one
+--- of the user's own, or a file opened in a split later, is left alone.
+function View:catch_splits()
+  self.augroup = self.augroup or api.nvim_create_augroup(("nvim-diff.view.%d"):format(self.tab), { clear = true })
+  ---@type table<integer, true> New windows split off a list or a view window, this tick.
+  local splits = {}
+  ---@type table<integer, integer> Buffer to the window it was read from disk in.
+  local read = {}
+
+  api.nvim_create_autocmd("WinNew", {
+    group = self.augroup,
+    callback = function()
+      if api.nvim_get_current_tabpage() ~= self.tab or not self:is_valid() then
+        return
+      end
+      local prev = vim.fn.win_getid(vim.fn.winnr("#"))
+      local kind = vim.fn.win_gettype(prev)
+      if kind == "quickfix" or kind == "loclist" or self:owns_window(prev) then
+        local win = api.nvim_get_current_win()
+        splits[win] = true
+        -- The command that split it puts the file in (`:new`, then a buffer) before this.
+        vim.schedule(function()
+          splits[win] = nil
+        end)
+      end
+    end,
+  })
+  api.nvim_create_autocmd("BufReadPost", {
+    group = self.augroup,
+    callback = function(args)
+      local win = api.nvim_get_current_win()
+      if splits[win] then
+        read[args.buf] = win
+      end
+    end,
+  })
+  api.nvim_create_autocmd("BufWinEnter", {
+    group = self.augroup,
+    callback = function(args)
+      local win = api.nvim_get_current_win()
+      -- The view's own windows (a pane buffer comes in), floats (a picker's preview) and
+      -- buffers that are no file stay.
+      if
+        not splits[win]
+        or vim.b[args.buf][buffer.VAR]
+        or api.nvim_win_get_config(win).relative ~= ""
+        or self:in_worktree(args.buf) == nil
+      then
+        return
+      end
+      splits[win] = nil
+      local pending = true
+      -- After the jump, which puts the cursor on its line after this event.
+      local function route()
+        if not pending then
+          return
+        end
+        pending = false
+        if not self:is_valid() or not api.nvim_win_is_valid(win) then
+          return
+        end
+        local buf = api.nvim_win_get_buf(win)
+        local cursor = api.nvim_win_get_cursor(win)
+        local jump = { buf = buf, lnum = cursor[1], col = cursor[2], read = read[buf] == win }
+        read = {}
+        -- Its buffer stays loaded, also with 'nohidden'.
+        api.nvim_win_hide(win)
+        self:route_jump(jump)
+      end
+      api.nvim_create_autocmd("CursorMoved", { group = self.augroup, once = true, callback = route })
+      vim.schedule(route)
+    end,
+  })
 end
 
 -- Review threads ---------------------------------------------------------------------------
