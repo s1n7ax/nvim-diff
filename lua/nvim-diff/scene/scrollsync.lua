@@ -12,7 +12,9 @@
 --- the other pane along). So every other pane's cursor is kept on the counterpart of the
 --- current pane's cursor line — the same view row, or the nearest line above it where the
 --- other side is filler — clamped into what that pane shows, `scrolloff` included. Entering
---- a pane therefore never scrolls it.
+--- a pane therefore never scrolls it. Where the current pane cannot have a line on screen
+--- with room for its `scrolloff` (inside tall filler), Neovim moves it, and the other panes
+--- follow it there.
 ---
 --- A pane cannot always have a view row at its top: Neovim keeps `topfill` below the window
 --- height, so a top in the upper part of virtual rows taller than the window is out of
@@ -82,6 +84,7 @@ local WHEEL = {
 ---@field private augroup integer
 ---@field private expected table<integer, string> Last view the corrector left each pane in.
 ---@field private paused integer
+---@field private following boolean The panes are following the current window (`place_others`).
 local Sync = {}
 Sync.__index = Sync
 
@@ -246,14 +249,18 @@ end
 
 --- Put `pane` at view row `v` — at the top that shows it, else stopped — with its cursor on
 --- `lnum` when given, else on the counterpart of view row `cursor_v` when given, and its
---- horizontal offset at `leftcol` when given.
+--- horizontal offset at `leftcol` when given. Returns the view row it shows: another one
+--- when it is the current window and its `scrolloff` moved it (no line on screen leaves
+--- room around the cursor).
 ---@param pane NvimDiff.SyncPane
 ---@param v integer
 ---@param cursor_v? integer
 ---@param leftcol? integer
 ---@param lnum? integer
+---@return integer?
 function Sync:place(pane, v, cursor_v, leftcol, lnum)
   local win = pane.win
+  local current = win == api.nvim_get_current_win()
   local tl, tf = reach(pane, v)
   if tl then
     self:release(win)
@@ -278,12 +285,46 @@ function Sync:place(pane, v, cursor_v, leftcol, lnum)
       place_cursor(pane, view, cursor_v)
     end
     vim.fn.winrestview(view)
+    if current then
+      -- Let `scrolloff` move the current window now, not at the next redraw: moved back to
+      -- where it was before, it would get no `WinScrolled`, and the panes would stay apart.
+      vim.fn.winline()
+    end
   end)
   local now = save(win)
+  self.expected[win] = key(now)
   if self.stopped[win] then
     self.stopped[win].top = top_key(now)
+    return v
   end
-  self.expected[win] = key(now)
+  return pane.top_view(now.topline, now.topfill)
+end
+
+--- Put the other panes at view row `v` (`place`), `src` being where it is. When the current
+--- window could not land there, the panes follow it instead.
+---@param si integer Index of the pane at `v` already.
+---@param v integer
+---@param cursor_v? integer
+---@param leftcol? integer
+function Sync:place_others(si, v, cursor_v, leftcol)
+  local cur = api.nvim_get_current_win()
+  local drift
+  for i, dp in ipairs(self.panes) do
+    if i ~= si and api.nvim_win_is_valid(dp.win) then
+      local got = self:place(dp, v, cursor_v, leftcol)
+      if dp.win == cur and got ~= v then
+        drift = cur
+      end
+    end
+  end
+  if drift and not self.following then
+    self.following = true
+    local ok, err = pcall(self.sync, self, drift)
+    self.following = false
+    if not ok then
+      error(err, 0)
+    end
+  end
 end
 
 --- The view row at the top of `pane`, its view, and whether it is stopped. A stopped pane
@@ -346,11 +387,7 @@ function Sync:sync(src)
   else
     self.expected[src] = key(sv)
   end
-  for i, dp in ipairs(self.panes) do
-    if i ~= si and api.nvim_win_is_valid(dp.win) then
-      self:place(dp, v, cursor_v, sv.leftcol)
-    end
-  end
+  self:place_others(si, v, cursor_v, sv.leftcol)
 end
 
 --- Put every pane at view row `v` (within what they reach): `win`'s cursor on `lnum` when
@@ -365,13 +402,8 @@ function Sync:show(v, win, lnum)
   end
   v = math.max(0, math.min(v, self:limit()))
   local lead = self.panes[si]
-  self:place(lead, v, v, nil, lnum)
-  local cursor_v = lead.line_view(api.nvim_win_get_cursor(win)[1])
-  for i, p in ipairs(self.panes) do
-    if i ~= si and api.nvim_win_is_valid(p.win) then
-      self:place(p, v, cursor_v)
-    end
-  end
+  v = self:place(lead, v, v, nil, lnum) or v
+  self:place_others(si, v, lead.line_view(api.nvim_win_get_cursor(win)[1]))
 end
 
 --- Move the other panes' cursors to the counterpart of `src`'s cursor line, without
@@ -624,7 +656,7 @@ end
 ---@param panes NvimDiff.SyncPane[]
 ---@return NvimDiff.ScrollSync
 function M.attach(panes)
-  local self = setmetatable({ panes = panes, expected = {}, paused = 0, stopped = {} }, Sync)
+  local self = setmetatable({ panes = panes, expected = {}, paused = 0, stopped = {}, following = false }, Sync)
   self.augroup = api.nvim_create_augroup("nvim-diff.scrollsync." .. panes[1].win, { clear = true })
 
   api.nvim_create_autocmd("WinScrolled", {
