@@ -355,12 +355,17 @@ local function place_pair(p, side, bl, winline)
   p.sync:sync(win)
 end
 
---- Put `side`'s cursor on file line `lnum`, in whichever layout is showing, and bring the
---- other pane along (side-by-side) or just centre it (unified).
+--- Put `side`'s cursor on file line `lnum` (at byte `col`, default 0), in whichever layout
+--- is showing, and bring the other pane along (side-by-side) or just centre it (unified).
+--- A context fold over the line opens whole first, as `zv` does.
 ---@param side NvimDiff.Side
 ---@param lnum integer
-function View:jump(side, lnum)
-  self.scene:jump(side, lnum)
+---@param col? integer
+function View:jump(side, lnum, col)
+  if self.scene:fold_at(side, lnum) then
+    self.scene:expand(side, lnum)
+  end
+  self.scene:jump(side, lnum, col)
 end
 
 --- Put the cursor back where `at` says — a `cursor()` of this view or of another view of the
