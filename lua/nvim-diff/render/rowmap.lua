@@ -20,8 +20,8 @@
 --- display row, and what comes before the first line — leading filler, a block after row 0
 --- — hangs *above* buffer line 1 (anchor -1), shown only with `topfill`. The header is
 --- pair-wide, since the panes share view row 0. A side can also be denied the trailer (a
---- real file cannot grow a line): it then stops at its last line, `max_top` differs per
---- side, and the corrector keeps both panes at or above the smaller one.
+--- real file cannot grow a line): it then stops at its last line and `max_top` differs per
+--- side; past it, the corrector parks the side (`scene/park.lua`).
 ---
 --- Foreign virtual lines — ones another plugin draws in a pane, such as a diagnostic's
 --- `virtual_lines` or a code lens in the real file's pane — take rows only on their side.

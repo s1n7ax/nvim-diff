@@ -122,6 +122,47 @@ function M.scan(pane, first, last)
   return out
 end
 
+--- The virtual lines other plugins hang under buffer row `row` (0-based) in the pane window,
+--- or over it when `above`, in the order Neovim draws them: what a parked pane copies
+--- (`scene/park.lua`). Each starts at the window's left edge: one drawn after the number
+--- column gets `indent` blank cells first.
+---@param pane NvimDiff.ForeignPane
+---@param row integer
+---@param above boolean
+---@param indent integer
+---@return NvimDiff.VirtLine[]
+function M.lines_at(pane, row, above, indent)
+  local out = {}
+  if row < 0 or row >= api.nvim_buf_line_count(pane.buf) then
+    return out
+  end
+  local marks = api.nvim_buf_get_extmarks(
+    pane.buf,
+    -1,
+    { row, 0 },
+    { row, -1 },
+    { type = "virt_lines", details = true }
+  )
+  for _, m in ipairs(marks) do
+    local d = m[4]
+    if
+      d.virt_lines
+      and not pane.own[d.ns_id]
+      and not d.invalid
+      and (d.virt_lines_above or false) == above
+      and shows_in(d.ns_id, pane.win)
+    then
+      for _, line in ipairs(d.virt_lines) do
+        if not d.virt_lines_leftcol then
+          line = vim.list_extend({ { (" "):rep(indent), "" } }, line)
+        end
+        out[#out + 1] = line
+      end
+    end
+  end
+  return out
+end
+
 --- `f` with the counts of file lines `lo..hi` replaced by `fresh`'s, a new count of those
 --- lines; nil when that changes nothing.
 ---@param f NvimDiff.ForeignLines
