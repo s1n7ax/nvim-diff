@@ -393,8 +393,8 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- Applying new code shows the new diff's context folds, so the cursor's line sits higher on
-  screen than before when the folds above it leave too few rows.
+- Applying new code that changed the file showing folds it afresh, so the cursor's line sits
+  higher on screen than before when the folds above it leave too few rows.
 - An LSP jump from the review's head pane to another file fails (`winfixbuf`); jumps
   within the file work.
 - File-level comments need a GHES version that supports `subject_type=file`.

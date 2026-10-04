@@ -1043,6 +1043,8 @@ end
 ---@field at? NvimDiff.FileViewCursor The diff's cursor, when a diff showed.
 ---@field lines? string[] `at.side`'s lines as diffed, to find `at`'s line in the new code.
 ---@field folded boolean `at` is on a closed context fold.
+---@field stamp? string The entry's stamp: the same one after means the same diff.
+---@field folds? { list: NvimDiff.Fold[], rows: integer } The diff's folds, as `View:reshow` keeps them.
 ---@field area boolean The cursor was in the diff, not the panel.
 ---@field win integer The window the cursor was in.
 
@@ -1270,6 +1272,8 @@ function Review:spot()
     at = at,
     lines = at and file:lines(at.side) or nil,
     folded = at ~= nil and at.lnum ~= nil and file.scene:fold_at(at.side, at.lnum) ~= nil,
+    stamp = entry and entry.stamp,
+    folds = open and { list = file.scene.folds, rows = file.scene.diff.rows } or nil,
     area = open and view:diff_side(win) ~= nil or win == view.note_win,
     win = win,
   }
@@ -1315,10 +1319,10 @@ end
 
 --- Show `spot`'s file again, after new code was applied (or failed to be): the same file —
 --- under the path the new code renamed it to, else under its own — in the layout and diff
---- mode it was left in, with the cursor on the same code (`follow`) at the same screen row,
---- a context fold the new diff put over that line opened. When the new diff has no such
---- file, the first one not viewed, as on opening. The cursor goes back to the diff, or to
---- the window it was in.
+--- mode it was left in (and with its folds, when the new code left it alone), with the
+--- cursor on the same code (`follow`) at the same screen row, a context fold the new diff
+--- put over that line opened. When the new diff has no such file, the first one not
+--- viewed, as on opening. The cursor goes back to the diff, or to the window it was in.
 ---@param spot NvimDiff.ReviewSpot
 ---@param renames? table<string, string> Files the new code renamed, old path to new.
 function Review:return_to(spot, renames)
@@ -1335,10 +1339,11 @@ function Review:return_to(spot, renames)
     view.layouts[entry] = view.layouts[entry] or spot.layout
     view.modes[entry] = view.modes[entry] or spot.mode
   end
-  view:select(
-    entry or self:next_unviewed(nil) or view.tree.order[1],
-    { force = entry ~= nil and not same and spot.forced or nil }
-  )
+  view:select(entry or self:next_unviewed(nil) or view.tree.order[1], {
+    force = entry ~= nil and not same and spot.forced or nil,
+    -- The same diff — the new code left the file alone: its folds as they were.
+    folds = same and entry ~= nil and entry.stamp == spot.stamp and spot.folds or nil,
+  })
   local file = view.file
   local open = file ~= nil and not file:is_closed()
   local at = spot.at
