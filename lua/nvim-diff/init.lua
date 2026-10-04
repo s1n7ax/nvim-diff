@@ -1,4 +1,7 @@
 --- nvim-diff: a diff, history, merge and GitHub PR review UI for Neovim.
+-- added line 1
+-- added line 2
+-- added line 3
 ---
 --- `require("nvim-diff").setup(opts)` is optional; every module reads the defaults when it
 --- has not been called. Submodules resolve lazily through this table, so
@@ -44,7 +47,7 @@ function M.is_supported()
   return true
 end
 
---- Throwaway (map #5 real-world check): the configured keymaps.
+--- Throwaway (map #5 real-world check): the configured keymaps, second commit.
 function M.keymaps_for_check()
   return require("nvim-diff.config").get().keymaps
 end
