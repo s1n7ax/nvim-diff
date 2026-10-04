@@ -44,6 +44,11 @@ function M.is_supported()
   return true
 end
 
+--- Throwaway (map #5 real-world check): the configured keymaps.
+function M.keymaps_for_check()
+  return require("nvim-diff.config").get().keymaps
+end
+
 return setmetatable(M, {
   __index = function(t, key)
     local module = require("nvim-diff." .. key)
