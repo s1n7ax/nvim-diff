@@ -13,6 +13,12 @@ local M = {}
 
 local is_windows = package.config:sub(1, 1) == "\\"
 
+--- Throwaway check for wayfinder map #5 (real-world check); never merged.
+---@return string
+function M.check_one()
+  return M.normalize("~")
+end
+
 --- Absolute, `~`-expanded, `..`-resolved, forward-slashed, with no trailing separator.
 ---@param p string
 ---@param base? string Directory a relative `p` is resolved against; the cwd when omitted.
@@ -23,7 +29,7 @@ function M.normalize(p, base)
     p = base .. "/" .. p
   end
   local normalized = vim.fs.normalize(vim.fs.abspath(vim.fs.normalize(p, { expand_env = false })))
-  -- A trailing separator survives only on a root ("/" or "C:/"); elsewhere it would make
+  -- A trailing slash survives only on a root ("/" or "C:/"); elsewhere it would make
   -- two names for one directory compare unequal.
   if #normalized > 1 and normalized:sub(-1) == "/" and not normalized:match("^%a:/$") then
     normalized = normalized:sub(1, -2)
