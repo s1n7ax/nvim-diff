@@ -20,7 +20,8 @@
 ---    changes are never touched, and files git ignores there (`node_modules/`) are kept from
 ---    earlier reviews. Outside the repository, so a language server's root search from a
 ---    slot file finds the slot, not the user's checkout. Before a fork PR is checked out,
----    this Neovim's language servers with any root in the slot are killed (`core/lsp.lua`);
+---    this Neovim's language servers with any root in the slot are killed (`core/lsp.lua`),
+---    and after a no none may start on a file in the slot until a yes (`review/fork.lua`);
 --- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
 ---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
 ---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`) — for a
@@ -31,6 +32,7 @@
 --- closes the view, wipes any buffer on a file inside the slot, shuts down this Neovim's
 --- language servers rooted only in the slot (`core/lsp.lua`) and releases the slot. The
 --- slot's folder stays on disk for the next review; only the user removes it.
+--- A fork's block on the slot's files ends there too.
 ---
 --- Viewed state lives on GitHub only. `keymaps.review.mark_viewed` posts the mark, then
 --- jumps to the next file that is not viewed (unviewed or re-changed), in panel order;
@@ -138,6 +140,9 @@ local by_number = {}
 --- The PR comes from a fork (GitHub's `isCrossRepository`): LSP runs on its code only after
 --- the reviewer says yes.
 ---@field fork boolean
+--- A fork PR without a yes: no language server on any file in the slot (`review/fork.lua`
+--- `block`), lifted by a yes or the review's end — an apply in between keeps it.
+---@field block? NvimDiff.LspBlock
 --- Whether the head pane shows the real file, with LSP (`view.real_file`): for a same-repo
 --- PR from the start, for a fork once the reviewer said yes. The trust is kept here only and
 --- lasts until the review ends — a new push applied to the review keeps it, and reopening
@@ -245,7 +250,7 @@ function M.open(opts)
     fail(("cannot read PR #%d's comment threads: %s"):format(number, msg(err)))
   end
 
-  local wt_path
+  local wt_path, block
   wt_path, err = worktree.acquire(repo, head, {
     -- Yes or no, a server an earlier PR started in the slot must not see the fork's code.
     before_checkout = is_fork and function(slot)
@@ -253,9 +258,16 @@ function M.open(opts)
       if stopped > 0 then
         log.info("stopped %d language server(s) rooted in %s before checking a fork PR out there", stopped, slot)
       end
+      -- Without a yes, none may start on its files either, until a yes or the review's end.
+      if not lsp_on then
+        block = fork.block(slot, pr)
+      end
     end or nil,
   })
   if not wt_path then
+    if block then
+      block:lift()
+    end
     fail(("cannot check PR #%d out into a review slot: %s"):format(number, msg(err)))
   end
 
@@ -274,6 +286,9 @@ function M.open(opts)
     })
   end
   if not wt_repo or not view_ok then
+    if block then
+      block:lift()
+    end
     worktree.release(repo, wt_path)
     fail(wt_repo and tostring(view):gsub("^nvim%-diff: ", "") or msg(err))
   end
@@ -291,6 +306,7 @@ function M.open(opts)
     cwd = cwd,
     view = view,
     fork = is_fork,
+    block = block,
     lsp = lsp_on,
     unsubscribe = {},
     closed = false,
@@ -320,7 +336,7 @@ function M.open(opts)
   if is_fork and not lsp_on and opts.real_file ~= false then
     local key = config.get().keymaps.review.start_lsp
     local again = type(key) == "string" and ("; %s asks again"):format(key) or ""
-    log.warn("PR #%d is from a fork: no LSP in the head pane%s", number, again)
+    log.warn("PR #%d is from a fork: no language server on its files%s", number, again)
   end
   self.sync:start()
   return self
@@ -455,9 +471,10 @@ function Review:map_keys(buf)
 end
 
 --- Turn LSP on for the review: for a fork PR, after asking `Start LSP? [y/N]` again. From
---- then on the side-by-side head pane is the real file, with LSP; the file showing is
---- shown again at once, on the same line, with a warning when it still shows as a copy
---- (its file on disk changed, say). Lasts until the review ends.
+--- then on language servers may start on the slot's files — the ones open now get them —
+--- and the side-by-side head pane is the real file, with LSP; the file showing is shown
+--- again at once, on the same line, with a warning when it still shows as a copy (its file
+--- on disk changed, say). Lasts until the review ends.
 ---@return boolean on Whether LSP is on for the review now.
 function Review:start_lsp()
   if not self:is_valid() then
@@ -471,6 +488,10 @@ function Review:start_lsp()
     return false
   end
   self.lsp = true
+  if self.block then
+    self.block:lift({ start = true })
+    self.block = nil
+  end
   self.view.real_file = true
   self.view:reshow()
   -- The real file was refused (`scene/filebuf.lua`): say so, or the yes looks ignored.
@@ -1216,7 +1237,8 @@ function Review:show_new(new, why, threads_rev)
   view:show_note({ "", ("  Applying PR #%d's new code…"):format(number) })
   vim.cmd.redraw()
   if self.fork and not self.lsp then
-    -- As on opening: no server left in the slot may read a fork's code without a yes.
+    -- As on opening: no server left in the slot may read a fork's code without a yes. The
+    -- block (`self.block`) stays, so the files read again below start none either.
     local stopped = lsp.stop_in(self.path, "checkout")
     if stopped > 0 then
       log.info("stopped %d language server(s) rooted in %s before checking a fork PR out there", stopped, self.path)
@@ -1676,6 +1698,11 @@ function Review:close(opts)
   else
     -- Quitting: nothing saved on the way out (a session) may keep the cwd in the slot.
     self:leave_worktree(self.view.tab)
+  end
+  -- Its files are closed by now; the slot is no review's until the next one checks out.
+  if self.block then
+    self.block:lift()
+    self.block = nil
   end
   local ok, err = worktree.release(self.repo, self.path)
   if not ok then
