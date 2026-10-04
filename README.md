@@ -365,9 +365,11 @@ definition or implementation, `<C-]>`, a quickfix or location list entry (refere
 picker's pick, `:edit` — never replaces the pane's file. A file the PR changed is selected
 in the review, with the cursor on the jump's line (in its own layout: an added file opens
 unified). Any other file opens in a new tabpage on that line: read-only when it is the
-PR's code in the slot, served by the same language servers; as it is when it is outside
-the slot (a library, the standard library). A list entry no pane can take, which Neovim
-would split into the review's tabpage, goes the same way.
+PR's code in the slot, served by the same language servers (none on a fork PR after a
+no); as it is when it is outside the slot (a library, the standard library). A list entry
+no pane can take, which Neovim would split into the review's tabpage, goes the same way.
+Applying new code reads the slot files those tabpages show again; ending the review closes
+the ones that show only slot files and takes the rest out of the slot (`:tcd`).
 
 A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
 code (build scripts, macros, a linter config), so a fork's code gets none until you say

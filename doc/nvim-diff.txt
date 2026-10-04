@@ -329,7 +329,8 @@ its pick in the window it started from, and for |:edit| there:
   - Any other file opens in a new tabpage after the review's, on the jump's
     line, in the slot as cwd (|:tcd|). A file in the slot (the PR's code) is
     read-only there, as in the head pane ('readonly', 'nomodifiable'), and
-    the same language servers serve it. A file outside the slot (a library,
+    the same language servers serve it — none on a fork PR after a no, until
+    a yes (|nvim-diff-review-fork|). A file outside the slot (a library,
     the standard library, a file of yours) is not the review's: it opens as
     it is, editable if it was.
   - A file opened in a new window of the review's tabpage, split off a
@@ -472,9 +473,10 @@ new head out into the same review slot and shows it.
     after, so nothing prompts (no W11) and the language servers stay on — for
     a fork PR too, after a yes; after a no, they stay off every slot file
     (|nvim-diff-review-fork|). A file nvim-diff had loaded for the pane and
-    the checkout changed is closed; one you opened yourself is read again,
-    unless it has unsaved changes, which get a warning (Neovim asks about
-    them the next time it checks the file).
+    the checkout changed is closed; one you opened yourself, or a tabpage a
+    jump opened (|nvim-diff-review-jumps|) shows, is read again, unless it
+    has unsaved changes, which get a warning (Neovim asks about them the next
+    time it checks the file).
   - Refused while a comment or the verdict is being written (shown or
     hidden): it is written on the diff showing. Post or cancel it first.
   - With nothing new on GitHub, it says so. When reading or the checkout
