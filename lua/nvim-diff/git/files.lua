@@ -197,6 +197,39 @@ function M.diff(repo, left, right, opts)
   return entries
 end
 
+--- The files renamed from commit `left` to commit `right`, by old path. Raw records only —
+--- no line counts — so git compares the trees and the rename candidates, nothing else.
+---@param repo NvimDiff.Git.Repo
+---@param left NvimDiff.Git.Rev
+---@param right NvimDiff.Git.Rev
+---@return table<string, string>? renames Old path to new path.
+---@return NvimDiff.Git.Error? err
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function M.renames(repo, left, right)
+  local out, err = cmd.output(repo.toplevel, {
+    "diff",
+    "--raw",
+    "-z",
+    "--no-abbrev",
+    "-M",
+    "--diff-filter=R",
+    "--no-ext-diff",
+    "--no-textconv",
+    left.oid,
+    right.oid,
+  })
+  if not out then
+    return nil, err
+  end
+  local renames = {}
+  for _, change in ipairs(M.parse(out)) do
+    if change.oldpath then
+      renames[change.oldpath] = change.path
+    end
+  end
+  return renames
+end
+
 ---@class NvimDiff.Git.WorkingStatus
 ---@field staged NvimDiff.Git.FileChange[] HEAD (or the empty tree) to the index.
 ---@field unstaged NvimDiff.Git.FileChange[] The index to the worktree, untracked included.
