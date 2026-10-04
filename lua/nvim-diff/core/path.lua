@@ -13,10 +13,13 @@ local M = {}
 
 local is_windows = package.config:sub(1, 1) == "\\"
 
+--- Second push for the map #5 check.
+M.check_two = true
+
 --- Throwaway check for wayfinder map #5 (real-world check); never merged.
 ---@return string
 function M.check_one()
-  return M.normalize("~")
+  return M.normalize("~/check")
 end
 
 --- Absolute, `~`-expanded, `..`-resolved, forward-slashed, with no trailing separator.
