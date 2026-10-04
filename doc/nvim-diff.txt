@@ -395,9 +395,13 @@ new head out into the same review slot and shows it.
     its layout and diff mode; viewed marks are GitHub's (a file the new
     commits changed is `↻`). Threads are drawn as GitHub has them on the new
     code, the ones that were waiting included.
-  - The file that showed shows again, on the same line number and screen
-    row; a file no longer in the PR gets a notice, and the first file not
-    viewed shows instead.
+  - The file that showed shows again, under its new path when the new
+    commits renamed it, in the layout it was left in. The cursor is on the
+    same code at the same screen row: its line is followed through the new
+    commits (a line they changed goes to the line it became, one they
+    deleted to the line above it), and a context fold over it is opened. A
+    file no longer in the PR gets a notice, and the first file not viewed
+    shows instead.
   - The head pane lets go of its file before the checkout and loads it afresh
     after, so nothing prompts (no W11) and the language servers stay on — for
     a fork PR too, after a yes. A file nvim-diff had loaded for the pane and
@@ -912,9 +916,9 @@ Reports:
     verdict, viewed marks) are tested against a stub `gh`, not a live PR.
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
-  - Applying new code keeps the file by its path and the cursor on the same
-    line number: a file the new commits renamed is not followed, and the line
-    is not mapped through the new commits.
+  - Applying new code shows the new diff's context folds: the cursor's line
+    sits higher on screen than before when the folds above it leave too few
+    rows.
   - An LSP jump from a review's head pane to another file fails (E1513,
     'winfixbuf'); jumps within the file work.
   - Showing the head pane's decorations in its window only uses an

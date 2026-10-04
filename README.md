@@ -377,8 +377,9 @@ warning after three in a row), a rate limit pauses syncing until it lifts.
 
 `<leader>A` applies the new code in the same review: the commits are fetched in the
 background, then the new head is checked out into the same slot, and the file list, viewed
-marks and threads are the new code's. The file that showed shows again, on the same line
-number. The head pane lets go of its file before the checkout and loads it afresh after,
+marks and threads are the new code's. The file that showed shows again (under its new path
+if the new commits renamed it), with the cursor on the same code at the same screen row: its
+line is followed through the new commits. The head pane lets go of its file before the checkout and loads it afresh after,
 so nothing prompts and language servers stay on (a fork's yes included). It is refused
 while a comment or the verdict is being written, since that was written on the diff
 showing.
@@ -392,8 +393,8 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- Applying new code keeps the file by its path and the cursor on the same line number; a
-  renamed file is not followed and the line is not mapped through the new commits.
+- Applying new code shows the new diff's context folds, so the cursor's line sits higher on
+  screen than before when the folds above it leave too few rows.
 - An LSP jump from the review's head pane to another file fails (`winfixbuf`); jumps
   within the file work.
 - File-level comments need a GHES version that supports `subject_type=file`.
