@@ -313,12 +313,18 @@ an edit, a rename or a code action that edits fails.
     side-by-side for it.
 
                                                       *nvim-diff-review-jumps*
-A jump from the head pane to another file never replaces the pane's file and
-never splits the review's tabpage. It works for LSP jumps
+A jump to another file never replaces the file of a review window and never
+splits the review's tabpage. It works for LSP jumps from the head pane
 (|vim.lsp.buf.definition()|, declaration, type definition, implementation,
-`CTRL-]` through the LSP 'tagfunc'), for an entry picked from a quickfix or
-location list (|vim.lsp.buf.references()|, |:cnext|), for a picker that opens
-its pick in the window it started from, and for |:edit| there:
+`CTRL-]` through the LSP 'tagfunc'), and from every window of the review —
+the base pane, the head pane (the real file or a copy: a fork PR after a no,
+a file that changed on disk), the unified pane, the file panel, the note and
+the thread list — for an entry picked from a quickfix or location list
+(|vim.lsp.buf.references()|, |:cnext|), for a picker that opens its pick in
+the window it started from or in another of the review's, and for |:edit|
+and |:buffer| there. Those windows are not 'winfixbuf': the file opened in
+one is taken back out once the command is over, the window's own buffer,
+view and folds put back, and the file goes where it belongs:
 
   - A file the PR changed (at its path in the PR, so a renamed file's new
     one) is selected in the review, and its diff shows with the cursor on the
@@ -326,13 +332,18 @@ its pick in the window it started from, and for |:edit| there:
     opens. The file opens in its own layout, as when picked in the panel: an
     added file opens unified (no LSP there; `g<C-x>` flips it). A file over
     |nvim-diff-config.thresholds.defer_lines| is loaded.
-  - Any other file opens in a new tabpage after the review's, on the jump's
-    line, in the slot as cwd (|:tcd|). A file in the slot (the PR's code) is
-    read-only there, as in the head pane ('readonly', 'nomodifiable'), and
-    the same language servers serve it — none on a fork PR after a no, until
-    a yes (|nvim-diff-review-fork|). A file outside the slot (a library,
-    the standard library, a file of yours) is not the review's: it opens as
-    it is, editable if it was.
+  - Any other file opens in the review's files tabpage, on the jump's line.
+    The first such jump opens it right after the review's tabpage, in the
+    slot as cwd (|:tcd|); every later one shows its file there, in the
+    window last used there (a window you split off there yourself works
+    too). |CTRL-O| there goes back to the file and line shown before, as
+    after any jump. Close the files tabpage and the next jump opens a new
+    one. A file in the slot (the PR's code) is read-only there, as in the
+    head pane ('readonly', 'nomodifiable'), and the same language servers
+    serve it — none on a fork PR after a no, until a yes
+    (|nvim-diff-review-fork|). A file outside the slot (a library, the
+    standard library, a file of yours) is not the review's: it opens as it
+    is, editable if it was. The file shown before stays loaded, hidden.
   - A file opened in a new window of the review's tabpage, split off a
     quickfix or location list window or one of the review's windows by the
     command that opened it, goes the same way, and the window closes. That
@@ -342,10 +353,11 @@ its pick in the window it started from, and for |:edit| there:
     keeps what you open in it later.
   - A jump within the file just moves the cursor, as before; the file stays
     out of your buffer list.
+  - A jump to one of nvim-diff's own buffers (CTRL-^ or |CTRL-O| into an
+    earlier pane, the panel) does nothing: the window keeps its buffer.
 
-The review's end wipes the slot's buffers, which closes a tabpage that only
-showed slot files; any other tabpage a jump opened is |:tcd| back out of the
-slot.
+The review's end wipes the slot's buffers, which closes the files tabpage
+when it shows a slot file; otherwise it is |:tcd| back out of the slot.
 
                                                        *nvim-diff-review-fork*
 A PR from a fork (GitHub's `isCrossRepository`) asks before any language
@@ -361,8 +373,8 @@ copy without LSP. A PR from the same repository never asks.
     nothing is saved.
   - After a no, no language server runs on the PR's code while the review
     is open: none starts on, or attaches to, any file in the review slot,
-    however it is opened (|:edit|, a picker, |gf|, a quickfix entry, a
-    tabpage a jump opened) and in any tabpage — the review tabpage's cwd is
+    however it is opened (|:edit|, a picker, |gf|, a quickfix entry, the
+    review's files tabpage) and in any tabpage — the review tabpage's cwd is
     the slot, where your config would start your servers — and none starts
     rooted in the slot for a file outside it. The first one kept off gets a
     warning naming `<leader>L`; the rest are quiet. Files outside the slot,
@@ -464,19 +476,20 @@ new head out into the same review slot and shows it.
   - The file that showed shows again, under its new path when the new
     commits renamed it, in the layout it was left in, and with its folds as
     they were when the new commits left it alone. The cursor is on the same
-    code at the same screen row: its line is followed through the new
-    commits (a line they changed goes to the line it became, one they
-    deleted to the line above it), and a context fold over it is opened. A
+    code at the same screen row and column (the end of the line when the
+    line is now shorter): its line is followed through the new commits (a
+    line they changed goes to the line it became, one they deleted to the
+    line above it), and a context fold over it is opened. A
     file no longer in the PR gets a notice, and the first file not viewed
     shows instead.
   - The head pane lets go of its file before the checkout and loads it afresh
     after, so nothing prompts (no W11) and the language servers stay on — for
     a fork PR too, after a yes; after a no, they stay off every slot file
     (|nvim-diff-review-fork|). A file nvim-diff had loaded for the pane and
-    the checkout changed is closed; one you opened yourself, or a tabpage a
-    jump opened (|nvim-diff-review-jumps|) shows, is read again, unless it
-    has unsaved changes, which get a warning (Neovim asks about them the next
-    time it checks the file).
+    the checkout changed is closed; one you opened yourself, or one the
+    review's files tabpage (|nvim-diff-review-jumps|) has, is read again,
+    unless it has unsaved changes, which get a warning (Neovim asks about them
+    the next time it checks the file).
   - Refused while a comment or the verdict is being written (shown or
     hidden): it is written on the diff showing. Post or cancel it first.
   - With nothing new on GitHub, it says so. When reading or the checkout
@@ -988,9 +1001,9 @@ Reports:
   - Applying new code that changed the file showing folds it afresh: the
     cursor's line sits higher on screen than before when the folds above it
     leave too few rows.
-  - |CTRL-O| and |CTRL-T| do not go back across a jump the review routed
-    (|nvim-diff-review-jumps|): the file it left is no longer in the pane
-    window, which is a new window after a file is selected.
+  - |CTRL-O| and |CTRL-T| do not go back from the review's files tabpage
+    into the review (|nvim-diff-review-jumps|): |CTRL-O| there goes back only
+    through the files shown there.
   - A pane stopped in filler it cannot scroll to keeps one line of its file
     on screen, drawn over: 'cursorline' still tints that line's number
     column, a search match on it does not show, and another plugin's virtual

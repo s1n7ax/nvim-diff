@@ -70,6 +70,9 @@ local M = {}
 --- line and has no sign column.
 ---@field winbar? boolean
 ---@field signs? boolean
+--- A jump to another file in any pane of either layout goes here instead of replacing the
+--- pane's buffer (`NvimDiff.PairSpec.on_jump`).
+---@field on_jump? fun(jump: NvimDiff.PaneJump)
 
 ---@class NvimDiff.FileView
 ---@field layout NvimDiff.Layout
@@ -95,6 +98,8 @@ View.__index = View
 ---@field side NvimDiff.Side
 ---@field lnum? integer Nil on the header or the trailer.
 ---@field winline integer
+--- 0-based byte column of the cursor; 0 on a closed fold. `place` clamps it to the line.
+---@field col? integer
 
 ---@param spec NvimDiff.FileViewSpec
 ---@return NvimDiff.FileView
@@ -211,7 +216,15 @@ end
 ---@param folds? NvimDiff.Fold[] Folds to carry over from the scene being replaced.
 function View:open_unified(win, folds)
   local s = self.spec
-  self.scene = unified.open({ diff = self:diff(), old = s.old, new = s.new, win = win, fold = s.fold, folds = folds })
+  self.scene = unified.open({
+    diff = self:diff(),
+    old = s.old,
+    new = s.new,
+    win = win,
+    fold = s.fold,
+    folds = folds,
+    on_jump = s.on_jump,
+  })
   self:after_open({ self.scene.buf })
 end
 
@@ -228,6 +241,7 @@ function View:open_pair(wins, folds)
     folds = folds,
     winbar = s.winbar,
     signs = s.signs,
+    on_jump = s.on_jump,
   })
   self:after_open({ self.scene.bufs.old, self.scene.bufs.new })
 end
@@ -273,7 +287,7 @@ function View:cursor()
   if self.layout == "unified" then
     local u = self.scene --[[@as NvimDiff.Unified]]
     local winline = u:winline()
-    local bl = api.nvim_win_get_cursor(u.win)[1]
+    local bl, col = unpack(api.nvim_win_get_cursor(u.win))
     local f = u:fold_on_line(bl)
     if f then
       -- The band is neither side in particular: keep the remembered side if it has lines.
@@ -283,14 +297,14 @@ function View:cursor()
         side = side == "old" and "new" or "old"
         first = fold.side_lines(u.diff, f, side)
       end
-      return { side = side, lnum = first, winline = winline }
+      return { side = side, lnum = first, winline = winline, col = 0 }
     end
     local side, lnum = u:cursor_pos()
     local l = u.layout.lines[bl - 1]
     if l and l.kind == "context" then
       side, lnum = self.side, l[self.side]
     end
-    return { side = side or self.side, lnum = lnum, winline = winline }
+    return { side = side or self.side, lnum = lnum, winline = winline, col = col }
   end
   local p = self.scene --[[@as NvimDiff.Pair]]
   local side = p:side_of(cur) or "new"
@@ -299,15 +313,17 @@ function View:cursor()
   local closed = api.nvim_win_call(win, function()
     return vim.fn.foldclosed(".")
   end)
+  local col = api.nvim_win_get_cursor(win)[2]
   if closed > 0 then
     lnum = p.map:file_line(side, closed)
+    col = 0
   elseif not lnum and api.nvim_win_get_cursor(win)[1] == p.map:trailer_line(side) then
     lnum = p.diff[side .. "_count"] -- the trailer: the side's last line
   end
   local view = api.nvim_win_call(win, vim.fn.winsaveview)
   local at, top = p.map:line_view(side, view.lnum), p.map:top_view(side, view.topline, view.topfill)
   local winline = at and top and at - top + 1 or api.nvim_win_call(win, vim.fn.winline)
-  return { side = side, lnum = lnum, winline = winline }
+  return { side = side, lnum = lnum, winline = winline, col = col }
 end
 
 --- The file line buffer line `bl` of scene window `win` shows, and its side. In
@@ -363,9 +379,21 @@ function View:jump(side, lnum, col)
   self.scene:jump(side, lnum, col)
 end
 
+--- Put `win`'s cursor on byte `col` of its line, or the line's end when it is shorter.
+---@param win integer
+---@param col? integer
+local function set_col(win, col)
+  if col and col > 0 and api.nvim_win_is_valid(win) then
+    local lnum = api.nvim_win_get_cursor(win)[1]
+    local len = #(api.nvim_buf_get_lines(api.nvim_win_get_buf(win), lnum - 1, lnum, false)[1] or "")
+    api.nvim_win_set_cursor(win, { lnum, math.max(0, math.min(col, len - 1)) })
+  end
+end
+
 --- Put the cursor back where `at` says — a `cursor()` of this view or of another view of the
 --- same diff: the same file line of the same side, on the same screen row as far as the
---- file allows (the other pane comes along). Moves no focus.
+--- file allows (the other pane comes along), at the same column as far as the line is long.
+--- Moves no focus.
 ---@param at NvimDiff.FileViewCursor
 function View:place(at)
   if self:is_closed() then
@@ -374,6 +402,9 @@ function View:place(at)
   if self.layout == "unified" then
     local u = self.scene --[[@as NvimDiff.Unified]]
     u:place(at.lnum and u:buf_line(at.side, at.lnum) or 1, at.winline)
+    if at.lnum then
+      set_col(u.win, at.col)
+    end
     return
   end
   local p = self.scene --[[@as NvimDiff.Pair]]
@@ -382,6 +413,9 @@ function View:place(at)
     bl = p:buf_line(at.lnum)
   end
   place_pair(p, at.side, bl, at.winline)
+  if at.lnum and api.nvim_win_get_cursor(p.wins[at.side])[1] == bl then
+    set_col(p.wins[at.side], at.col)
+  end
 end
 
 --- Flip to the other layout.

@@ -18,6 +18,7 @@
 ---     })
 
 local buffer = require("nvim-diff.scene.buffer")
+local catch = require("nvim-diff.scene.catch")
 local event = require("nvim-diff.core.event")
 local filebuf = require("nvim-diff.scene.filebuf")
 local fold = require("nvim-diff.render.fold")
@@ -59,19 +60,6 @@ local SIDES = { "old", "new" }
 --- With `file`: called when the file changed on disk while the pane showed it. The pane
 --- keeps the diffed lines; the owner opens the file again, which then shows a copy.
 ---@field on_changed? fun()
---- With `file`, when the pane shows it: the pane window is not fixed to its buffer
---- ('winfixbuf' off), so a jump to another file there (an LSP jump, a quickfix entry,
---- `:edit`) does not fail. The other buffer is taken back out at once — the pane's
---- buffer, view and folds put back — and `on_jump` is told where the jump went.
----@field on_jump? fun(jump: NvimDiff.PaneJump)
-
---- Where a jump out of a real file's pane went (`PairSide.on_jump`).
----@class NvimDiff.PaneJump
----@field buf integer The buffer it showed in the pane.
----@field lnum integer The cursor there.
----@field col integer 0-based byte column.
---- The jump loaded `buf`: it was read from disk in the pane window, so nobody else had it.
----@field read boolean
 
 ---@class NvimDiff.PairSpec
 ---@field diff NvimDiff.Diff
@@ -83,9 +71,14 @@ local SIDES = { "old", "new" }
 ---@field winbar? boolean
 --- A sign column (`signcolumn=yes:1`) on both panes, the same width so rows stay aligned.
 ---@field signs? boolean
---- Windows to show the panes in. They become panes: `winfixbuf` (but see
---- `PairSide.on_jump`), the pane options, and they are closed with the pair. Omitted: a
---- new tabpage with two vertical splits.
+--- Neither pane window is fixed to its buffer ('winfixbuf' off), so a jump to another file
+--- in either (an LSP jump, a quickfix entry, `:edit`, a picker's pick) does not fail. The
+--- other buffer is taken back out at once — the pane's buffer, view and folds put back —
+--- and `on_jump` is told where the jump went (`scene/catch.lua`).
+---@field on_jump? fun(jump: NvimDiff.PaneJump)
+--- Windows to show the panes in. They become panes: `winfixbuf` (but see `on_jump`), the
+--- pane options, and they are closed with the pair. Omitted: a new tabpage with two
+--- vertical splits.
 ---@field wins? { old: integer, new: integer }
 --- Context folding: `false` to show every line; otherwise `context` rows kept next to each
 --- hunk (default 3, at least 1) and `step` rows revealed per expand (default 10).
@@ -205,6 +198,8 @@ function M.open(spec)
         name = s.name,
         lang = s.lang,
         keep = s.keep,
+        -- Not wiped when a jump takes the pane window for a moment.
+        hold = spec.on_jump ~= nil,
       })
     assert(
       api.nvim_buf_line_count(self.bufs[side]) == diff[side .. "_count"] + map:head() + (map.trailer[side] and 1 or 0),
@@ -228,9 +223,14 @@ function M.open(spec)
       signcolumn = self.cols.signs and "yes:1" or nil,
     })
     folds_scene.setup_window(self.wins[side])
-    if self.claims[side] and spec[side].on_jump then
-      -- Before `attach`: the claim guards the pane options as they are then.
-      api.nvim_set_option_value("winfixbuf", false, { win = self.wins[side], scope = "local" })
+    if spec.on_jump then
+      -- Before `attach`: the claim guards the pane options as they are then ('winfixbuf' off).
+      catch.watch(self.wins[side], self.bufs[side], {
+        on_jump = spec.on_jump,
+        on_back = function(win)
+          self.sync:sync(win)
+        end,
+      })
     end
     if self.claims[side] then
       -- After every pane option is set: the claim guards them as they are now.
@@ -283,11 +283,6 @@ function M.open(spec)
     end,
   })
   folds_scene.attach(self, { self.bufs.old, self.bufs.new }, self.augroup)
-  for _, side in ipairs(SIDES) do
-    if self.claims[side] and spec[side].on_jump then
-      self:catch_jumps(side, spec[side].on_jump)
-    end
-  end
   api.nvim_create_autocmd("VimResized", {
     group = self.augroup,
     callback = function()
@@ -329,7 +324,7 @@ function Pair:sync_pane(side)
   return {
     win = self.wins[side],
     top_view = function(topline, topfill)
-      -- Another buffer, for as long as a jump out of the pane takes (`catch_jumps`): its
+      -- Another buffer, for as long as a jump out of the pane takes (`scene/catch.lua`): its
       -- top is no view row, and the other pane stays where it is.
       if api.nvim_win_get_buf(self.wins[side]) ~= self.bufs[side] then
         return nil
@@ -486,87 +481,6 @@ function Pair:jump(side, lnum, col)
   self.sync:sync(win)
 end
 
--- Jumps out of a real file's pane --------------------------------------------------------
-
---- Take another buffer shown in `side`'s pane window (`PairSide.on_jump`) back out, and
---- tell `on_jump` where it went. Not at once: when the buffer comes in (`BufWinEnter`) the
---- jump has not put the cursor on its target yet. Once it is over — at the next cursor
---- move, before the screen is redrawn, or the next tick, whichever comes first — the pane
---- gets its buffer back: Neovim restores its window options and folds, which it keeps per
---- buffer and window, and the view is the one the pane left with.
----@param side NvimDiff.Side
----@param on_jump fun(jump: NvimDiff.PaneJump)
-function Pair:catch_jumps(side, on_jump)
-  local win, buf = self.wins[side], self.bufs[side]
-  local view
-  -- Buffers read from disk in the pane window: only a jump puts one there.
-  local read = {}
-  local pending = false
-
-  local function back()
-    if not pending then
-      return
-    end
-    pending = false
-    if self.closed or not api.nvim_win_is_valid(win) then
-      return
-    end
-    local now = api.nvim_win_get_buf(win)
-    if now == buf then
-      return
-    end
-    local cursor = api.nvim_win_get_cursor(win)
-    local jump = { buf = now, lnum = cursor[1], col = cursor[2], read = read[now] == true }
-    read = {}
-    -- Hidden, as with `:hide`: with 'nohidden' the jump's buffer would be unloaded on its
-    -- way out, its language server detached (which redraws the screen, the pane showing it).
-    local hidden = vim.o.hidden
-    vim.o.hidden = true
-    local ok, err = pcall(api.nvim_win_set_buf, win, buf)
-    vim.o.hidden = hidden
-    if not ok then
-      error(err, 0)
-    end
-    if view then
-      api.nvim_win_call(win, function()
-        vim.fn.winrestview(view)
-      end)
-    end
-    self.sync:sync(win)
-    on_jump(jump)
-  end
-
-  api.nvim_create_autocmd("BufLeave", {
-    group = self.augroup,
-    buffer = buf,
-    callback = function()
-      if api.nvim_get_current_win() == win then
-        view = vim.fn.winsaveview()
-      end
-    end,
-  })
-  api.nvim_create_autocmd("BufReadPost", {
-    group = self.augroup,
-    callback = function(args)
-      if args.buf ~= buf and api.nvim_get_current_win() == win then
-        read[args.buf] = true
-      end
-    end,
-  })
-  api.nvim_create_autocmd("BufWinEnter", {
-    group = self.augroup,
-    callback = function(args)
-      -- `nvim_win_set_buf` on the pane makes it current while its autocmds run.
-      if pending or args.buf == buf or api.nvim_get_current_win() ~= win then
-        return
-      end
-      pending = true
-      api.nvim_create_autocmd("CursorMoved", { group = self.augroup, once = true, callback = back })
-      vim.schedule(back)
-    end,
-  })
-end
-
 --- The blocks in insertion order.
 ---@return NvimDiff.Block[]
 function Pair:block_list()
@@ -706,8 +620,11 @@ end
 ---@return NvimDiff.Side?
 ---@return integer?
 function Pair:fold_cursor()
-  local side = self:side_of(api.nvim_get_current_win())
-  if not side then
+  local win = api.nvim_get_current_win()
+  local side = self:side_of(win)
+  -- Not while another buffer is in the pane for a jump (`scene/catch.lua`): the head pane's
+  -- real file opened in the base pane would read as the base side there.
+  if not side or api.nvim_win_get_buf(win) ~= self.bufs[side] then
     return nil, nil
   end
   return side, self:cursor_line(side)
@@ -916,6 +833,7 @@ function Pair:close(opts)
   for _, side in ipairs(SIDES) do
     local win = self.wins[side]
     park.clear(win)
+    catch.unwatch(win, self.bufs[side])
     if api.nvim_win_is_valid(win) then
       api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
       if self.claims[side] and api.nvim_win_get_buf(win) == self.bufs[side] then

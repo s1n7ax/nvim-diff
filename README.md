@@ -360,16 +360,21 @@ disk while the pane shows it is not reloaded and does not prompt: the pane shows
 instead, with a warning. Ending the review shuts down the language servers rooted only in
 its slot (killed if still running after 5 seconds).
 
-A jump from the head pane to another file — go to definition, declaration, type
-definition or implementation, `<C-]>`, a quickfix or location list entry (references), a
-picker's pick, `:edit` — never replaces the pane's file. A file the PR changed is selected
-in the review, with the cursor on the jump's line (in its own layout: an added file opens
-unified). Any other file opens in a new tabpage on that line: read-only when it is the
-PR's code in the slot, served by the same language servers (none on a fork PR after a
-no); as it is when it is outside the slot (a library, the standard library). A list entry
-no pane can take, which Neovim would split into the review's tabpage, goes the same way.
-Applying new code reads the slot files those tabpages show again; ending the review closes
-the ones that show only slot files and takes the rest out of the slot (`:tcd`).
+A jump to another file never replaces a review window's file: go to definition,
+declaration, type definition or implementation and `<C-]>` from the head pane, and from
+any window of the review — base, head (real file or copy), unified, the file panel, the
+note, the thread list — a quickfix or location list entry (references), a picker's pick,
+`:edit`, `:buffer`. A file the PR changed is selected in the review, with the cursor on
+the jump's line (in its own layout: an added file opens unified). Any other file opens on
+that line in the review's files tabpage, one per review: the first such jump opens it next
+to the review, every later one shows its file there (in the window last used, if you split
+it), and `<C-o>` there goes back to the file and line shown before. A file there is
+read-only when it is the PR's code in the slot, served by the same language servers (none
+on a fork PR after a no); as it is when it is outside the slot (a library, the standard
+library). A list entry no pane can take, which Neovim would split into the review's
+tabpage, goes the same way. Applying new code reads the slot files the files tabpage shows
+again; ending the review closes it when it shows a slot file and otherwise takes it out of
+the slot (`:tcd`).
 
 A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
 code (build scripts, macros, a linter config), so a fork's code gets none until you say
@@ -398,8 +403,8 @@ warning after three in a row), a rate limit pauses syncing until it lifts.
 `<leader>A` applies the new code in the same review: the commits are fetched in the
 background, then the new head is checked out into the same slot, and the file list, viewed
 marks and threads are the new code's. The file that showed shows again (under its new path
-if the new commits renamed it), with the cursor on the same code at the same screen row: its
-line is followed through the new commits. The head pane lets go of its file before the checkout and loads it afresh after,
+if the new commits renamed it), with the cursor on the same code at the same screen row and
+column: its line is followed through the new commits. The head pane lets go of its file before the checkout and loads it afresh after,
 so nothing prompts and language servers stay on (a fork's yes included). It is refused
 while a comment or the verdict is being written, since that was written on the diff
 showing.
@@ -415,7 +420,8 @@ and only when you run it.
   verdict — is tested against a stub `gh`, not a live PR.
 - Applying new code that changed the file showing folds it afresh, so the cursor's line sits
   higher on screen than before when the folds above it leave too few rows.
-- `<C-o>` and `<C-t>` do not go back across a jump the review routed to another file.
+- `<C-o>` and `<C-t>` do not go back from the files tabpage into the review: `<C-o>` there
+  goes back only through the files shown there.
 - File-level comments need a GHES version that supports `subject_type=file`.
 - Structural diff ignores injected languages and has no notion of moved code; it runs
   synchronously when a file opens.

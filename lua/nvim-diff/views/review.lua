@@ -26,13 +26,15 @@
 ---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
 ---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`) — for a
 ---    fork PR only after a yes; after a no it is a scratch copy, and
----    `keymaps.review.start_lsp` asks again. An LSP jump from there to a file the PR
----    changed selects that file at the jump's line; one to any other file opens it in a
----    new tabpage, read-only when it is the PR's code (`views/diff.lua` `route_jump`).
+---    `keymaps.review.start_lsp` asks again. A jump from any of the review's windows — an
+---    LSP jump from there, `:edit`, a picker's pick, a list entry — to a file the PR
+---    changed selects that file at the jump's line; one to any other file shows it in the
+---    review's one files tabpage, read-only when it is the PR's code (`views/diff.lua`
+---    `route_jump`).
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
---- closes the view, wipes any buffer on a file inside the slot (a tabpage a jump opened on
---- one closes with it; any still in the slot is `:tcd` back out), shuts down this Neovim's
+--- closes the view, wipes any buffer on a file inside the slot (the files tabpage closes
+--- with it when it shows one; otherwise it is `:tcd` back out of the slot), shuts down this Neovim's
 --- language servers rooted only in the slot (`core/lsp.lua`) and releases the slot. The
 --- slot's folder stays on disk for the next review; only the user removes it.
 --- A fork's block on the slot's files ends there too.
@@ -151,8 +153,9 @@ local by_number = {}
 --- lasts until the review ends — a new push applied to the review keeps it, and reopening
 --- the PR asks again.
 ---@field lsp boolean
---- Tabpages jumps opened for files the diff does not list (`views/diff.lua` `on_tab`): they
---- start in the slot, as the review's own does.
+--- Files tabpages jumps opened for files the diff does not list (`views/diff.lua` `on_tab`):
+--- one at a time, a new one only after the last was closed. They start in the slot, as the
+--- review's own does.
 ---@field tabs integer[]
 ---@field augroup integer
 ---@field unsubscribe fun()[]
@@ -1330,7 +1333,7 @@ end
 --- the line taken across (`NvimDiff.Diff:counterpart`) — an unchanged line to itself, a
 --- changed one to the line it became (paired by likeness, `diff/line.lua`), a deleted one to
 --- the line above it. A side the file no longer has (a new base without it) is followed
---- into the other. The screen row stays.
+--- into the other. The screen row and the column stay (the column clamped to the line).
 ---@param file NvimDiff.FileView
 ---@param at NvimDiff.FileViewCursor
 ---@param lines string[]
@@ -1347,7 +1350,7 @@ local function follow(file, at, lines)
     -- 0: deleted along with every line above it.
     lnum = math.max(1, math.min(d:counterpart("old", math.min(at.lnum, #lines)) or 1, #now))
   end
-  return { side = side, lnum = lnum, winline = at.winline }
+  return { side = side, lnum = lnum, winline = at.winline, col = at.col }
 end
 
 --- Show `spot`'s file again, after new code was applied (or failed to be): the same file —

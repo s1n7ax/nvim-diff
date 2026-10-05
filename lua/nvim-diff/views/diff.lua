@@ -40,13 +40,16 @@
 --- list of outdated and file-level ones (`review/sidelist.lua`).
 ---
 --- A PR review's jumps to another file (`route_jump`) — an LSP jump from the head pane
---- showing the real file, a quickfix or location list entry, `:edit` there — never replace
---- a pane's buffer and never split the review's tabpage: a file the diff lists is selected
---- and shown at the jump's line; any other opens in a new tabpage, read-only when it is in
---- the review's worktree (the PR's code).
+--- showing the real file, a quickfix or location list entry, `:edit` or a picker's pick in
+--- any pane, the file panel, the note or the thread list — never replace that window's
+--- buffer and never split the review's tabpage: a file the diff lists is selected and shown
+--- at the jump's line; any other opens in the review's files tabpage (one per review,
+--- reused, so `<C-o>` there goes back), read-only when it is in the review's worktree (the
+--- PR's code).
 
 local blob = require("nvim-diff.git.blob")
 local buffer = require("nvim-diff.scene.buffer")
+local catch = require("nvim-diff.scene.catch")
 local config = require("nvim-diff.config")
 local conflict_view = require("nvim-diff.views.conflict")
 local entry_mod = require("nvim-diff.scene.entry")
@@ -107,9 +110,12 @@ local by_tab = {}
 ---@field real_file? boolean
 --- Auto-refresh autocmds, for a worktree or index right side; a review's jump routing.
 ---@field augroup? integer
---- Called with each tabpage a jump opens for a file the diff does not list (`route_jump`),
---- which starts in the view's tab-local directory.
+--- Called with each files tabpage a jump opens for a file the diff does not list
+--- (`route_jump`), which starts in the view's tab-local directory. A new one opens only
+--- when the last is gone.
 ---@field on_tab? fun(tab: integer)
+--- The tabpage jumps to files the diff does not list show in (`open_tab`), once one did.
+---@field files_tab? integer
 ---@field list NvimDiff.FileList
 ---@field listing NvimDiff.Listing
 ---@field collapsed table<string, boolean> Directory path to the user's own fold choice.
@@ -246,6 +252,10 @@ function M.open(opts)
 
   self.panel = panel_mod.new({ width = cfg.panel.width })
   self.panel:open(area)
+  if self.review then
+    self:route_from(self.panel.win, self.panel.buf)
+    self:route_from(area, self.note_buf)
+  end
   self:map_panel()
   self:map_view(self.note_buf)
   self:render()
@@ -458,6 +468,9 @@ function View:show_note(lines)
   set_note(self.note_buf, lines)
   self.note_win = self:area_windows(1)[1]
   setup_note_win(self.note_win)
+  if self.review then
+    self:route_from(self.note_win, self.note_buf)
+  end
 end
 
 --- Treesitter language for a git path, when a parser for it is installed.
@@ -716,12 +729,12 @@ function View:show_diff(entry, folds)
       on_changed = function()
         self:head_changed(entry)
       end,
-      on_jump = self.review and function(jump)
-        self:route_jump(jump)
-      end or nil,
     },
     winbar = self.review,
     signs = self.review,
+    on_jump = self.review and function(jump)
+      self:route_jump(jump)
+    end or nil,
     folds = folds and folds.rows == d.rows and folds.list or nil,
     wins = layout == "unified" and { win = wins[1] } or { old = wins[1], new = wins[2] },
     on_scene = function(file)
@@ -1031,14 +1044,43 @@ function View:entry_of(buf)
   return nil
 end
 
---- A jump went to another file (`NvimDiff.PaneJump`): out of the head pane showing the real
---- file (which got its buffer back), or into a window the review's tabpage just split for
---- it (`catch_splits`, which closed it). A file the diff lists is selected — a deferred one
+--- Whether `buf` is one of nvim-diff's own scratch buffers: a pane's copy, a panel, a note,
+--- a thread list, a comment being written. A jump to one (`<C-^>`, `<C-o>` in a pane) shows
+--- it nowhere. Not a real file a head pane shows, which carries the pane mark too.
+---@param buf integer
+---@return boolean
+function View:ours(buf)
+  if self:in_worktree(buf) ~= nil then
+    return false
+  end
+  return buf == self.note_buf
+    or vim.b[buf][buffer.VAR] ~= nil
+    or vim.startswith(api.nvim_buf_get_name(buf), "nvim-diff://")
+end
+
+--- Route jumps out of `win`, one of the review's own windows showing `buf` (the file panel,
+--- the note, the thread list), as out of a pane: `win` is not 'winfixbuf', and another
+--- buffer opened there (`:edit`, a picker's pick) goes to `route_jump` once `win` has
+--- `buf` back (`scene/catch.lua`).
+---@param win integer
+---@param buf integer
+function View:route_from(win, buf)
+  catch.watch(win, buf, {
+    on_jump = function(jump)
+      self:route_jump(jump)
+    end,
+  })
+end
+
+--- A jump went to another file (`NvimDiff.PaneJump`): out of one of the review's windows —
+--- a pane, the file panel, the note, the thread list —, which got its buffer back
+--- (`scene/catch.lua`), or into a window the review's tabpage just split for it
+--- (`catch_splits`, which closed it). A file the diff lists is selected — a deferred one
 --- loaded — and its diff shows on the jump's line, on the head side; any other file opens
---- in a new tabpage (`open_tab`).
+--- in the review's files tabpage (`open_tab`). One of nvim-diff's own buffers goes nowhere.
 ---@param jump NvimDiff.PaneJump
 function View:route_jump(jump)
-  if not self:is_valid() or not api.nvim_buf_is_valid(jump.buf) then
+  if not self:is_valid() or not api.nvim_buf_is_valid(jump.buf) or self:ours(jump.buf) then
     return
   end
   local entry = self:entry_of(jump.buf)
@@ -1064,13 +1106,46 @@ function View:route_jump(jump)
   file:jump("new", jump.lnum, jump.col)
 end
 
---- Show `jump.buf` on the jump's line in a new tabpage right after the view's, in the
---- view's tab-local directory (`on_tab` is told). A file of the worktree — the PR's code —
---- is made read-only, as in the head pane ('readonly', 'nomodifiable'); one from elsewhere
---- (a library, the standard library) is not the review's, and is left as it is.
----@param jump NvimDiff.PaneJump
-function View:open_tab(jump)
-  local buf = jump.buf
+--- Whether `win` can take a file a jump routes to the files tabpage: a plain window, not a
+--- float, a list, a help or terminal window, nor one fixed to its buffer.
+---@param win integer
+---@return boolean
+local function takes_file(win)
+  local bt = vim.bo[api.nvim_win_get_buf(win)].buftype
+  return api.nvim_win_get_config(win).relative == ""
+    and vim.fn.win_gettype(win) == ""
+    and not vim.wo[win].winfixbuf
+    and bt ~= "help"
+    and bt ~= "terminal"
+    and bt ~= "prompt"
+    and bt ~= "quickfix"
+end
+
+--- The window of the files tabpage the next jump shows in: the one last used there, else
+--- the first that can take a file. Nil when there is no files tabpage (never opened, or
+--- closed since) or no window there can.
+---@return integer?
+function View:files_window()
+  local tab = self.files_tab
+  if not tab or not api.nvim_tabpage_is_valid(tab) or tab == self.tab then
+    return nil
+  end
+  local last = api.nvim_tabpage_get_win(tab)
+  if takes_file(last) then
+    return last
+  end
+  for _, win in ipairs(api.nvim_tabpage_list_wins(tab)) do
+    if takes_file(win) then
+      return win
+    end
+  end
+  return nil
+end
+
+--- A new files tabpage right after the view's, in the view's tab-local directory, with an
+--- empty jump list (`on_tab` is told). Returns its window, on an empty buffer.
+---@return integer win
+function View:new_files_tab()
   local nr = api.nvim_tabpage_get_number(self.tab)
   local cwd = vim.fn.getcwd(-1, nr)
   local tcd = vim.fn.haslocaldir(-1, nr) == 1
@@ -1078,11 +1153,49 @@ function View:open_tab(jump)
   if tcd and vim.fn.getcwd() ~= cwd then
     vim.cmd.tcd(vim.fn.fnameescape(cwd))
   end
-  local win = api.nvim_get_current_win()
-  local placeholder = api.nvim_win_get_buf(win)
-  api.nvim_win_set_buf(win, buf)
+  -- A new window starts with the jump list of the one it came from: a review pane's, whose
+  -- entries are the review's own buffers.
+  vim.cmd("clearjumps")
+  self.files_tab = api.nvim_get_current_tabpage()
+  if self.on_tab then
+    self.on_tab(self.files_tab)
+  end
+  return api.nvim_get_current_win()
+end
+
+--- Show `jump.buf` on the jump's line in the review's files tabpage: one per review, opened
+--- by the first such jump right after the view's, in the view's tab-local directory, and
+--- reused by every later one — in the window last used there — so `<C-o>` there goes back
+--- to the file and line shown before. A file of the worktree — the PR's code — is made
+--- read-only, as in the head pane ('readonly', 'nomodifiable'); one from elsewhere (a
+--- library, the standard library) is not the review's, and is left as it is. The file shown
+--- before stays loaded, hidden, as with `:hide`.
+---@param jump NvimDiff.PaneJump
+function View:open_tab(jump)
+  local buf = jump.buf
+  local win = self:files_window()
+  local placeholder
+  if win then
+    api.nvim_set_current_win(win)
+    -- Where `<C-o>` comes back to.
+    vim.cmd("normal! m'")
+  else
+    win = self:new_files_tab()
+    placeholder = api.nvim_win_get_buf(win)
+  end
+  if api.nvim_win_get_buf(win) ~= buf then
+    local hidden = vim.o.hidden
+    vim.o.hidden = true
+    local ok, err = pcall(api.nvim_win_set_buf, win, buf)
+    vim.o.hidden = hidden
+    if not ok then
+      log.error("cannot show %s: %s", api.nvim_buf_get_name(buf), err)
+      return
+    end
+  end
   if
-    placeholder ~= buf
+    placeholder
+    and placeholder ~= buf
     and api.nvim_buf_is_valid(placeholder)
     and api.nvim_buf_get_name(placeholder) == ""
     and not vim.bo[placeholder].modified
@@ -1098,16 +1211,16 @@ function View:open_tab(jump)
     -- Open the user's folds over the line, as an LSP jump does.
     vim.cmd("silent! normal! zv")
   end)
-  if self.on_tab then
-    self.on_tab(api.nvim_get_current_tabpage())
-  end
 end
 
---- Whether `win` is one of the view's own windows: the panel, the note, the diff's panes.
+--- Whether `win` is one of the view's own windows: the panel, the note, the diff's panes,
+--- the thread list.
 ---@param win integer
 ---@return boolean
 function View:owns_window(win)
   if win == self.panel.win or win == self.note_win then
+    return true
+  elseif self.thread_list and win == self.thread_list.win then
     return true
   end
   return self.file ~= nil and not self.file:is_closed() and vim.tbl_contains(self.file:wins(), win)
@@ -1116,8 +1229,8 @@ end
 --- Route a file opened in a new window of the view's tabpage as a jump (`route_jump`) when
 --- the window was split off a quickfix or location list window or one of the view's own
 --- windows, by the command that opened the file: a list entry or `:cnext` no pane could
---- take (Neovim splits when every window is 'winfixbuf' or a scratch buffer: the head pane
---- is a copy, the layout is unified), a jump that opens a window of its own. The window
+--- take (Neovim splits when no window shows a file of its own: the head pane is a copy, the
+--- layout is unified), a jump that opens a window of its own. The window
 --- closes once the jump is over: the tabpage holds the review only. A window split off one
 --- of the user's own, or a file opened in a split later, is left alone.
 function View:catch_splits()
@@ -1270,7 +1383,11 @@ function View:open_thread_list()
   self.thread_list = require("nvim-diff.review.sidelist").open({
     items = self:thread_items(),
     win = wins[#wins],
+    hold = self.review,
   })
+  if self.review then
+    self:route_from(self.thread_list.win, self.thread_list.buf)
+  end
   if self.on_thread_list then
     self.on_thread_list(self.thread_list)
   end
