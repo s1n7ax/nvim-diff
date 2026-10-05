@@ -998,9 +998,12 @@ function View:close()
   end
   self:clear_area()
   if api.nvim_tabpage_is_valid(self.tab) and #api.nvim_list_tabpages() > 1 then
-    local tabnr = api.nvim_tabpage_get_number(self.tab)
     self.panel:close()
-    pcall(vim.cmd, "tabclose " .. tabnr)
+    -- Closing the panel closes the tabpage when it was its last window; the number is read
+    -- after, so the tabpage after this one (a review's files tabpage) is never closed.
+    if api.nvim_tabpage_is_valid(self.tab) then
+      pcall(vim.cmd, "tabclose " .. api.nvim_tabpage_get_number(self.tab))
+    end
   else
     -- The last tabpage: leave an empty window behind.
     if self.panel:is_open() then
