@@ -94,6 +94,23 @@ M.PARK_VAR = "nvim_diff_park"
 --- `hl` and `tail` statusline strings, `num` plain text of the number's width.
 M.PARK_COL_VAR = "nvim_diff_park_col"
 
+--- `expr`, a `statuscolumn` expression for a row that is no virtual line, with `{l}` the
+--- buffer line the row is — which `v:lnum` is not always. Neovim 0.12 gives the top line of
+--- a window the number of the line above it when `topfill` shows fewer than all of the
+--- virtual lines that line has below it (`draw_statuscol()` counts them all as still to
+--- come): the line after filler or a thread, at the top of a pane with only the end of those
+--- rows above it, would read as the line before, and a trailer as the last line — whenever
+--- the pane is drawn afresh, as the pane the corrector moves always is. Only then is
+--- `v:lnum` above the window's top line.
+---
+--- The top line is read once, and from `winsaveview()`: `line('w0')` may scroll the window
+--- it is drawing.
+---@param expr string
+---@return string
+function M.at_line(expr)
+  return ("(v:lnum<winsaveview().topline?%s:%s)"):format((expr:gsub("{l}", "(v:lnum+1)")), (expr:gsub("{l}", "v:lnum")))
+end
+
 --- A `statuscolumn` showing the file's own line numbers: blank on virtual rows, on the
 --- header and on the trailer. Both panes should get the same `width` so their text starts
 --- in the same column.
@@ -111,8 +128,10 @@ M.PARK_COL_VAR = "nvim_diff_park_col"
 function M.statuscolumn(count, width, cols)
   cols = cols or {}
   local head = cols.header == false and 0 or 1
-  local folded = "v:virtnum==0&&foldclosed(v:lnum)>0"
-  local hidden = cols.park and ("get(w:,'%s',0)==v:lnum&&v:virtnum==0"):format(M.PARK_VAR)
+  local folded = "v:virtnum==0&&" .. M.at_line("foldclosed({l})>0")
+  -- The window variable first: unparked, the line is not worked out for it.
+  local hidden = cols.park
+    and ("get(w:,'%s',0)>0&&v:virtnum==0&&%s"):format(M.PARK_VAR, M.at_line(("get(w:,'%s',0)=={l}"):format(M.PARK_VAR)))
   -- Each part asks first whether this is the hidden line, and shows its own piece of it.
   local function park(piece)
     return hidden and ("%s?w:%s.%s:"):format(hidden, M.PARK_COL_VAR, piece) or ""
@@ -127,15 +146,18 @@ function M.statuscolumn(count, width, cols)
   end
   vim.list_extend(parts, {
     ("%%{%%%s%s?'%%#NvimDiffContextSeparator#':'%%#NonText#'%%}"):format(park("hl"), folded),
-    ("%%%d{%sv:virtnum<0%s||v:lnum>%d?'':%s?repeat('%s',%d):v:lnum-%d}"):format(
+    ("%%%d{%sv:virtnum<0?'':%s}"):format(
       width,
       park("num"),
-      head == 1 and "||v:lnum==1" or "",
-      count + head,
-      folded,
-      fold.FILL,
-      width,
-      head
+      M.at_line(
+        ("{l}>%d%s?'':foldclosed({l})>0?repeat('%s',%d):{l}-%d"):format(
+          count + head,
+          head == 1 and "||{l}==1" or "",
+          fold.FILL,
+          width,
+          head
+        )
+      )
     ),
     ("%%{%%%s%s?'%s':'%%#Normal# '%%}"):format(park("tail"), folded, fold.FILL),
   })
