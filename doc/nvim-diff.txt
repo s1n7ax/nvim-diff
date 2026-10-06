@@ -263,10 +263,11 @@ the rest of the filler over it.
                                                   *nvim-diff-review-head-pane*
 In the side-by-side layout the head (right) pane is the file itself, in the
 review slot, not a copy: its 'filetype' is set, so filetype plugins run and
-language servers attach, rooted in the slot. Hover, go to definition within
-the file, references and diagnostics work there, with diagnostic signs in the
-sign column (your |vim.diagnostic.config()| applies). The pane is read-only
-('nomodifiable'): an edit, a rename or a code action that edits fails.
+language servers attach, rooted in the slot. Hover, go to definition,
+references and diagnostics work there, with diagnostic signs in the sign
+column (your |vim.diagnostic.config()| applies); a jump to another file goes
+where |nvim-diff-review-jumps| says. The pane is read-only ('nomodifiable'):
+an edit, a rename or a code action that edits fails.
 
   - The diff colours, filler rows and comment threads are drawn in the pane's
     window only. The same file open in another window shows none of them and
@@ -308,6 +309,40 @@ sign column (your |vim.diagnostic.config()| applies). The pane is read-only
     file.
   - The unified layout (`g<C-x>`) shows a copy, without LSP; flip back to
     side-by-side for it.
+
+                                                      *nvim-diff-review-jumps*
+A jump from the head pane to another file never replaces the pane's file and
+never splits the review's tabpage. It works for LSP jumps
+(|vim.lsp.buf.definition()|, declaration, type definition, implementation,
+`CTRL-]` through the LSP 'tagfunc'), for an entry picked from a quickfix or
+location list (|vim.lsp.buf.references()|, |:cnext|), for a picker that opens
+its pick in the window it started from, and for |:edit| there:
+
+  - A file the PR changed (at its path in the PR, so a renamed file's new
+    one) is selected in the review, and its diff shows with the cursor on the
+    jump's line and column, in the head pane; a context fold over the line
+    opens. The file opens in its own layout, as when picked in the panel: an
+    added file opens unified (no LSP there; `g<C-x>` flips it). A file over
+    |nvim-diff-config.thresholds.defer_lines| is loaded.
+  - Any other file opens in a new tabpage after the review's, on the jump's
+    line, in the slot as cwd (|:tcd|). A file in the slot (the PR's code) is
+    read-only there, as in the head pane ('readonly', 'nomodifiable'), and
+    the same language servers serve it. A file outside the slot (a library,
+    the standard library, a file of yours) is not the review's: it opens as
+    it is, editable if it was.
+  - A file opened in a new window of the review's tabpage, split off a
+    quickfix or location list window or one of the review's windows by the
+    command that opened it, goes the same way, and the window closes. That
+    is a list entry no pane can take (Neovim splits when the head pane shows
+    a copy, or the layout is unified), `:split {file}` in a pane, a picker
+    that opens its pick in a new window. A window you split off yourself
+    keeps what you open in it later.
+  - A jump within the file just moves the cursor, as before; the file stays
+    out of your buffer list.
+
+The review's end wipes the slot's buffers, which closes a tabpage that only
+showed slot files; any other tabpage a jump opened is |:tcd| back out of the
+slot.
 
                                                        *nvim-diff-review-fork*
 A PR from a fork (GitHub's `isCrossRepository`) asks before any language
@@ -846,8 +881,9 @@ Reports:
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
   - Nothing is refetched while a review is open.
-  - An LSP jump from a review's head pane to another file fails (E1513,
-    'winfixbuf'); jumps within the file work.
+  - |CTRL-O| and |CTRL-T| do not go back across a jump the review routed
+    (|nvim-diff-review-jumps|): the file it left is no longer in the pane
+    window, which is a new window after a file is selected.
   - A pane stopped in filler it cannot scroll to keeps one line of its file
     on screen, drawn over: 'cursorline' still tints that line's number
     column, a search match on it does not show, and another plugin's virtual

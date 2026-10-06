@@ -13,7 +13,8 @@
 --- loaded, hidden, so going back to the file is instant and its language server keeps it
 --- open; beyond `buffers.lru_size` of them, the least recently used one that no window
 --- shows is wiped. A buffer the user already had (or took over, by opening the file) is
---- borrowed: read-only while a pane shows it, handed back as it was, never wiped.
+--- borrowed: read-only and 'bufhidden' `hide` while a pane shows it, handed back as it was,
+--- never wiped.
 ---
 --- The buffer outlives the pane, and may show in the user's own windows at the same time:
 ---
@@ -112,7 +113,7 @@ local FOLD_OPTIONS = { foldmethod = true, foldenable = true, foldlevel = true, f
 --- The buffer's other mappings, to put back where the plugin's replaced them.
 ---@field private theirs table<string, table>
 ---@field private active boolean Whether the plugin's mappings are in place.
----@field private saved? { modifiable: boolean, readonly: boolean } A borrowed buffer's own.
+---@field private saved? { modifiable: boolean, readonly: boolean, bufhidden: string } A borrowed buffer's own.
 ---@field private root? string
 ---@field private on_changed? fun()
 ---@field private on_guard? fun(refold: boolean)
@@ -669,7 +670,11 @@ function M.claim(opts)
     api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   end
   if not own then
-    self.saved = { modifiable = vim.bo[buf].modifiable, readonly = vim.bo[buf].readonly }
+    self.saved =
+      { modifiable = vim.bo[buf].modifiable, readonly = vim.bo[buf].readonly, bufhidden = vim.bo[buf].bufhidden }
+    -- Kept loaded, with the pane's marks, while a jump out of the pane shows another
+    -- buffer in its window (`scene/pair.lua`), also with 'nohidden'.
+    api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
   end
   api.nvim_set_option_value("modifiable", false, { buf = buf })
   api.nvim_set_option_value("readonly", true, { buf = buf })
@@ -769,6 +774,22 @@ function Claim:attach(win, opts)
       end
     end,
   })
+  -- An LSP jump lists the buffer it goes to, this one too on a jump within the file: an
+  -- owned buffer listed in the pane window stays unlisted, the plugin's (listed means the
+  -- user opened the file).
+  api.nvim_create_autocmd("BufAdd", {
+    group = self.augroup,
+    buffer = buf,
+    callback = function()
+      if owned[buf] and api.nvim_get_current_win() == self.win then
+        vim.schedule(function()
+          if owned[buf] and not self.released and api.nvim_buf_is_valid(buf) then
+            api.nvim_set_option_value("buflisted", false, { buf = buf })
+          end
+        end)
+      end
+    end,
+  })
   -- Servers attached already: a running one attaches while the buffer loads.
   if package.loaded["vim.lsp"] then
     for _, client in ipairs(vim.lsp.get_clients({ bufnr = buf })) do
@@ -829,6 +850,7 @@ function Claim:release()
   if self.saved then
     api.nvim_set_option_value("modifiable", self.saved.modifiable, { buf = buf })
     api.nvim_set_option_value("readonly", self.saved.readonly, { buf = buf })
+    api.nvim_set_option_value("bufhidden", self.saved.bufhidden, { buf = buf })
   end
   if self.autoread.value == nil then
     api.nvim_buf_call(buf, function()
@@ -849,6 +871,13 @@ function Claim:release()
     drop_stale(buf)
   end
   M.evict()
+end
+
+--- Whether `buf` is a buffer this module loaded for a pane and still owns (see the top).
+---@param buf integer
+---@return boolean
+function M.owns(buf)
+  return owned[buf] ~= nil
 end
 
 --- Wipe the least recently used owned buffers that no pane holds and no window shows,

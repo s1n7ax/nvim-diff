@@ -167,11 +167,12 @@ function Unified:buf_line(side, lnum)
   return unified.buf_line(self.layout, side, math.max(1, math.min(lnum, count)))
 end
 
---- Put the cursor on `side`'s file line `lnum`, centred.
+--- Put the cursor on `side`'s file line `lnum` (at byte `col`, default 0), centred.
 ---@param side NvimDiff.Side
 ---@param lnum integer
-function Unified:jump(side, lnum)
-  api.nvim_win_set_cursor(self.win, { self:buf_line(side, lnum), 0 })
+---@param col? integer
+function Unified:jump(side, lnum, col)
+  api.nvim_win_set_cursor(self.win, { self:buf_line(side, lnum), col or 0 })
   api.nvim_win_call(self.win, function()
     vim.cmd("normal! zz")
   end)
