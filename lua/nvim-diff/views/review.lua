@@ -26,10 +26,13 @@
 ---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
 ---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`) — for a
 ---    fork PR only after a yes; after a no it is a scratch copy, and
----    `keymaps.review.start_lsp` asks again.
+---    `keymaps.review.start_lsp` asks again. An LSP jump from there to a file the PR
+---    changed selects that file at the jump's line; one to any other file opens it in a
+---    new tabpage, read-only when it is the PR's code (`views/diff.lua` `route_jump`).
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
---- closes the view, wipes any buffer on a file inside the slot, shuts down this Neovim's
+--- closes the view, wipes any buffer on a file inside the slot (a tabpage a jump opened on
+--- one closes with it; any still in the slot is `:tcd` back out), shuts down this Neovim's
 --- language servers rooted only in the slot (`core/lsp.lua`) and releases the slot. The
 --- slot's folder stays on disk for the next review; only the user removes it.
 --- A fork's block on the slot's files ends there too.
@@ -148,6 +151,9 @@ local by_number = {}
 --- lasts until the review ends — a new push applied to the review keeps it, and reopening
 --- the PR asks again.
 ---@field lsp boolean
+--- Tabpages jumps opened for files the diff does not list (`views/diff.lua` `on_tab`): they
+--- start in the slot, as the review's own does.
+---@field tabs integer[]
 ---@field augroup integer
 ---@field unsubscribe fun()[]
 ---@field closed boolean
@@ -308,10 +314,14 @@ function M.open(opts)
     fork = is_fork,
     block = block,
     lsp = lsp_on,
+    tabs = {},
     unsubscribe = {},
     closed = false,
   }, Review)
   by_number[number] = self
+  view.on_tab = function(tab)
+    self.tabs[#self.tabs + 1] = tab
+  end
 
   -- `views.open` leaves its new tabpage current.
   vim.cmd.tcd(vim.fn.fnameescape(wt_path))
@@ -363,6 +373,7 @@ function Review:trap()
       -- Before `VimLeavePre`, where session plugins save the tabpage cwd; a session
       -- restored into the slot would land in whatever PR the slot holds by then.
       self:leave_worktree(self.view.tab)
+      self:leave_tabs()
     end,
   })
   api.nvim_create_autocmd("VimLeavePre", {
@@ -1644,6 +1655,20 @@ function Review:leave_worktree(tab)
   end
 end
 
+--- `leave_worktree` for the tabpages jumps opened (`tabs`) whose tab-local directory is
+--- still in the slot.
+function Review:leave_tabs()
+  local root = path.real(self.path)
+  for _, tab in ipairs(self.tabs) do
+    if api.nvim_tabpage_is_valid(tab) then
+      local nr = api.nvim_tabpage_get_number(tab)
+      if vim.fn.haslocaldir(-1, nr) == 1 and path.is_under(path.real(vim.fn.getcwd(-1, nr)), root) then
+        self:leave_worktree(tab)
+      end
+    end
+  end
+end
+
 --- End the review: stop syncing, close its view and tabpage, wipe buffers on the slot's
 --- files and release the slot, keeping its folder. Idempotent.
 ---@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
@@ -1686,8 +1711,10 @@ function Review:close(opts)
     if not self.view.closed then
       pcall(self.view.close, self.view)
     end
-    -- The last tabpage survives its view; take it back out of the slot.
+    -- The last tabpage survives its view; take it back out of the slot, and the tabpages
+    -- jumps opened that wiping their slot file does not close.
     self:leave_worktree(tab)
+    self:leave_tabs()
     self:wipe_buffers()
     -- No file of the slot is open any more, and the next review checks another PR out under
     -- them. Quitting Neovim stops every server anyway.
@@ -1698,6 +1725,7 @@ function Review:close(opts)
   else
     -- Quitting: nothing saved on the way out (a session) may keep the cwd in the slot.
     self:leave_worktree(self.view.tab)
+    self:leave_tabs()
   end
   -- Its files are closed by now; the slot is no review's until the next one checks out.
   if self.block then

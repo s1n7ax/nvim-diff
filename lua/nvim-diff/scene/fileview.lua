@@ -346,21 +346,21 @@ end
 ---@param bl integer
 ---@param winline integer
 local function place_pair(p, side, bl, winline)
-  local win = p.wins[side]
-  local v = math.max(0, math.min((p.map:line_view(side, bl) or 0) - (winline - 1), p:max_top()))
-  local tl, tf = p.map:view_top(side, v)
-  api.nvim_win_call(win, function()
-    vim.fn.winrestview({ topline = tl or 1, topfill = tf or 0, lnum = bl, col = 0, curswant = 0 })
-  end)
-  p.sync:sync(win)
+  local v = math.max(0, math.min((p.map:line_view(side, bl) or 0) - (winline - 1), p.map:max_top(side)))
+  p.sync:show(v, p.wins[side], bl)
 end
 
---- Put `side`'s cursor on file line `lnum`, in whichever layout is showing, and bring the
---- other pane along (side-by-side) or just centre it (unified).
+--- Put `side`'s cursor on file line `lnum` (at byte `col`, default 0), in whichever layout
+--- is showing, and bring the other pane along (side-by-side) or just centre it (unified).
+--- A context fold over the line opens whole first, as `zv` does.
 ---@param side NvimDiff.Side
 ---@param lnum integer
-function View:jump(side, lnum)
-  self.scene:jump(side, lnum)
+---@param col? integer
+function View:jump(side, lnum, col)
+  if self.scene:fold_at(side, lnum) then
+    self.scene:expand(side, lnum)
+  end
+  self.scene:jump(side, lnum, col)
 end
 
 --- Put the cursor back where `at` says — a `cursor()` of this view or of another view of the

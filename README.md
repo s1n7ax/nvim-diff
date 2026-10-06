@@ -342,13 +342,15 @@ root from a slot file finds the slot, not your checkout. Review slots are kept:
   ones). `:checkhealth nvim-diff` lists those too, from any directory, for you to remove.
 
 In side-by-side, the head (right) pane is the file itself in the slot, read-only, so your
-language servers attach to it: hover, go to definition within the file, references, and
-diagnostics with signs in the sign column. The diff colours stay in that pane — the same
+language servers attach to it: hover, go to definition, references, and diagnostics with
+signs in the sign column. The diff colours stay in that pane — the same
 file in another window looks and maps keys as usual. Virtual lines other plugins draw there
 (code lens, diagnostics as `virtual_lines`) get matching blank rows in the base pane, so
-rows stay aligned. A file on disk that is not exactly the PR's (changed since the checkout, an
-encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
-unified layout.
+rows stay aligned. A real file cannot scroll past its last line, so through lines deleted at
+the end of a file the head pane stays on its last line and draws the rest of the filler over
+it; the base pane scrolls to the end. A file on disk that is not exactly the PR's (changed
+since the checkout, an encoding conversion, a BOM, an LFS filter) shows as a copy without
+LSP, and so does the unified layout.
 
 The pane keeps its own window options: an `LspAttach` handler or another plugin setting
 `foldmethod=expr`, a `statuscolumn` or a `winbar` there is undone at once, and what it set
@@ -357,6 +359,15 @@ too). A language server rooted outside the slot gets a warning. A file that chan
 disk while the pane shows it is not reloaded and does not prompt: the pane shows a copy
 instead, with a warning. Ending the review shuts down the language servers rooted only in
 its slot (killed if still running after 5 seconds).
+
+A jump from the head pane to another file — go to definition, declaration, type
+definition or implementation, `<C-]>`, a quickfix or location list entry (references), a
+picker's pick, `:edit` — never replaces the pane's file. A file the PR changed is selected
+in the review, with the cursor on the jump's line (in its own layout: an added file opens
+unified). Any other file opens in a new tabpage on that line: read-only when it is the
+PR's code in the slot, served by the same language servers; as it is when it is outside
+the slot (a library, the standard library). A list entry no pane can take, which Neovim
+would split into the review's tabpage, goes the same way.
 
 A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
 code (build scripts, macros, a linter config), so a fork's code gets none until you say
@@ -402,8 +413,7 @@ and only when you run it.
   verdict — is tested against a stub `gh`, not a live PR.
 - Applying new code that changed the file showing folds it afresh, so the cursor's line sits
   higher on screen than before when the folds above it leave too few rows.
-- An LSP jump from the review's head pane to another file fails (`winfixbuf`); jumps
-  within the file work.
+- `<C-o>` and `<C-t>` do not go back across a jump the review routed to another file.
 - File-level comments need a GHES version that supports `subject_type=file`.
 - Structural diff ignores injected languages and has no notion of moved code; it runs
   synchronously when a file opens.

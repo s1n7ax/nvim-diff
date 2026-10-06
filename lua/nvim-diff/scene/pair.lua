@@ -24,6 +24,7 @@ local fold = require("nvim-diff.render.fold")
 local foreign = require("nvim-diff.scene.foreign")
 local folds_scene = require("nvim-diff.scene.folds")
 local hl = require("nvim-diff.ui.hl")
+local park = require("nvim-diff.scene.park")
 local rowmap = require("nvim-diff.render.rowmap")
 local scrollsync = require("nvim-diff.scene.scrollsync")
 local sidebyside = require("nvim-diff.render.sidebyside")
@@ -45,8 +46,8 @@ local SIDES = { "old", "new" }
 --- closes (`scene/buffer.lua`, `buffers.lru_size`).
 ---@field keep? boolean
 --- `false`: the buffer never ends with the trailer line (`render/rowmap.lua`), as a real
---- file cannot; the pane then cannot scroll into filler below its last line, and neither
---- pane scrolls past it.
+--- file cannot; the pane then cannot scroll into filler below its last line, and is
+--- parked there instead (`scene/park.lua`).
 ---@field trailer? boolean
 --- Absolute path of the file on disk to show instead of a scratch copy of `lines`, with
 --- filetype and language servers (`scene/filebuf.lua`). Needs `winbar` and `trailer =
@@ -58,6 +59,19 @@ local SIDES = { "old", "new" }
 --- With `file`: called when the file changed on disk while the pane showed it. The pane
 --- keeps the diffed lines; the owner opens the file again, which then shows a copy.
 ---@field on_changed? fun()
+--- With `file`, when the pane shows it: the pane window is not fixed to its buffer
+--- ('winfixbuf' off), so a jump to another file there (an LSP jump, a quickfix entry,
+--- `:edit`) does not fail. The other buffer is taken back out at once — the pane's
+--- buffer, view and folds put back — and `on_jump` is told where the jump went.
+---@field on_jump? fun(jump: NvimDiff.PaneJump)
+
+--- Where a jump out of a real file's pane went (`PairSide.on_jump`).
+---@class NvimDiff.PaneJump
+---@field buf integer The buffer it showed in the pane.
+---@field lnum integer The cursor there.
+---@field col integer 0-based byte column.
+--- The jump loaded `buf`: it was read from disk in the pane window, so nobody else had it.
+---@field read boolean
 
 ---@class NvimDiff.PairSpec
 ---@field diff NvimDiff.Diff
@@ -69,8 +83,9 @@ local SIDES = { "old", "new" }
 ---@field winbar? boolean
 --- A sign column (`signcolumn=yes:1`) on both panes, the same width so rows stay aligned.
 ---@field signs? boolean
---- Windows to show the panes in. They become panes: `winfixbuf`, the pane options, and
---- they are closed with the pair. Omitted: a new tabpage with two vertical splits.
+--- Windows to show the panes in. They become panes: `winfixbuf` (but see
+--- `PairSide.on_jump`), the pane options, and they are closed with the pair. Omitted: a
+--- new tabpage with two vertical splits.
 ---@field wins? { old: integer, new: integer }
 --- Context folding: `false` to show every line; otherwise `context` rows kept next to each
 --- hunk (default 3, at least 1) and `step` rows revealed per expand (default 10).
@@ -103,6 +118,11 @@ local SIDES = { "old", "new" }
 --- Virtual lines other plugins draw in each pane (`scene/foreign.lua`), as last counted
 --- (the part off screen may be stale): the map pads the other pane to match.
 ---@field foreign { old: NvimDiff.ForeignLines, new: NvimDiff.ForeignLines }
+--- Each pane's virtual rows as painted, by mark (`scene/park.lua`).
+---@field private marks { old: table<integer, NvimDiff.VirtRows>, new: table<integer, NvimDiff.VirtRows> }
+--- Each pane's park, while the scroll corrector has it stopped and painted to show a view row
+--- no top of its can (`scene/park.lua`).
+---@field private parks { old?: NvimDiff.Park, new?: NvimDiff.Park }
 --- Buffer rows of each pane redrawn since the last count, `{ first, last }`.
 ---@field private foreign_due { old?: integer[], new?: integer[] }
 ---@field private foreign_scheduled boolean A count is scheduled.
@@ -111,6 +131,8 @@ local SIDES = { "old", "new" }
 ---@field private block_order any[] Ids in insertion order, so equal rows keep it.
 ---@field private augroup integer
 ---@field private filler_width integer
+--- Rows kept at each end of a tall mark when painted (`sidebyside.virt_keep`).
+---@field private virt_keep integer
 local Pair = {}
 Pair.__index = Pair
 
@@ -152,10 +174,12 @@ function M.open(spec)
     fold_step = fold_opts and fold_opts.step or fold.STEP,
     fold_opts = fold_opts,
     layout = layout,
-    cols = { header = map.header, signs = spec.signs or false },
+    cols = { header = map.header, signs = spec.signs or false, park = true },
     claims = {},
     refused = {},
     ns = { old = sidebyside.SHARED_NS, new = sidebyside.SHARED_NS },
+    marks = {},
+    parks = {},
   }, Pair)
 
   local headers = {}
@@ -204,6 +228,10 @@ function M.open(spec)
       signcolumn = self.cols.signs and "yes:1" or nil,
     })
     folds_scene.setup_window(self.wins[side])
+    if self.claims[side] and spec[side].on_jump then
+      -- Before `attach`: the claim guards the pane options as they are then.
+      api.nvim_set_option_value("winfixbuf", false, { win = self.wins[side], scope = "local" })
+    end
     if self.claims[side] then
       -- After every pane option is set: the claim guards them as they are now.
       self.ns[side] = self.claims[side]:attach(self.wins[side], {
@@ -225,7 +253,8 @@ function M.open(spec)
   self.foreign = self:count_foreign()
   self.map = rowmap.new(diff, nil, folds, layout, self.foreign)
   self.filler_width = sidebyside.filler_width()
-  sidebyside.render(self.bufs, self.map, self.cols, self.ns)
+  self.virt_keep = sidebyside.virt_keep()
+  self:painted(sidebyside.render(self.bufs, self.map, self.cols, self.ns))
 
   self.sync = scrollsync.attach({ self:sync_pane("old"), self:sync_pane("new") })
   self.foreign_due = {}
@@ -254,10 +283,15 @@ function M.open(spec)
     end,
   })
   folds_scene.attach(self, { self.bufs.old, self.bufs.new }, self.augroup)
+  for _, side in ipairs(SIDES) do
+    if self.claims[side] and spec[side].on_jump then
+      self:catch_jumps(side, spec[side].on_jump)
+    end
+  end
   api.nvim_create_autocmd("VimResized", {
     group = self.augroup,
     callback = function()
-      if sidebyside.filler_width() > self.filler_width then
+      if sidebyside.filler_width() > self.filler_width or sidebyside.virt_keep() > self.virt_keep then
         self:repaint_virt()
       end
     end,
@@ -295,6 +329,11 @@ function Pair:sync_pane(side)
   return {
     win = self.wins[side],
     top_view = function(topline, topfill)
+      -- Another buffer, for as long as a jump out of the pane takes (`catch_jumps`): its
+      -- top is no view row, and the other pane stays where it is.
+      if api.nvim_win_get_buf(self.wins[side]) ~= self.bufs[side] then
+        return nil
+      end
       return self.map:top_view(side, topline, topfill)
     end,
     view_top = function(v)
@@ -306,38 +345,87 @@ function Pair:sync_pane(side)
     max_top = function()
       return self.map:max_top(side)
     end,
+    park = function(v, height)
+      return self:park(side, v, height)
+    end,
+    unpark = function()
+      self:unpark(side)
+    end,
   }
 end
 
---- The last view row both panes can have at their top.
----@return integer
-function Pair:max_top()
-  return math.min(self.map:max_top("old"), self.map:max_top("new"))
+--- What parking `side`'s pane needs (`scene/park.lua`).
+---@param side NvimDiff.Side
+---@return NvimDiff.ParkPane?
+function Pair:park_pane(side)
+  local fp = self:foreign_pane(side)
+  if not fp then
+    return nil
+  end
+  return {
+    buf = self.bufs[side],
+    win = self.wins[side],
+    ns = self.ns[side].virt,
+    map = self.map,
+    side = side,
+    cols = self.cols,
+    marks = self.marks[side],
+    foreign = fp,
+  }
+end
+
+--- Paint `side`'s pane so a window `height` rows tall shows view row `v` first, which no top
+--- of the pane shows as it is (`scene/park.lua`). Returns the top to put it at and the line
+--- its cursor stays on; nil when it cannot be parked.
+---@param side NvimDiff.Side
+---@param v integer
+---@param height integer
+---@return integer? topline
+---@return integer? topfill
+---@return integer? lnum
+function Pair:park(side, v, height)
+  local pane = self:park_pane(side)
+  if not pane then
+    return nil
+  end
+  local p, tl, tf = park.park(pane, v, height, self.parks[side])
+  self.parks[side] = p
+  return tl, tf, p and p.line
+end
+
+--- Paint `side`'s pane as it is again, after `park`.
+---@param side NvimDiff.Side
+function Pair:unpark(side)
+  local p = self.parks[side]
+  self.parks[side] = nil
+  local pane = p and self:park_pane(side)
+  if pane and p then
+    park.unpark(pane, p)
+  else
+    park.clear(self.wins[side])
+  end
+end
+
+--- Record what a paint of the panes' virtual rows put there: a park painted over is gone.
+---@param rows { old?: NvimDiff.VirtRows[], new?: NvimDiff.VirtRows[] }
+function Pair:painted(rows)
+  for _, side in ipairs(SIDES) do
+    if rows[side] then
+      self.marks[side] = park.index(rows[side])
+      self.parks[side] = nil
+    end
+  end
 end
 
 --- Put `win`'s pane at view row 0, cursor on its first line, and bring the other pane
 --- along: what `gg` does in a pane with a header line. Without one, the rows above the
---- first line show only with `topfill`, which `gg`, `:1` and `zz` reset.
----
---- `topfill` stays below the window height (measured: `winrestview` clamps it at once), so
---- a pane with more rows above its first line than that cannot show view row 0. The other
---- pane leads then: it shows its first lines, and this one stops as near the top as it can.
+--- first line show only with `topfill`, which `gg`, `:1` and `zz` reset. A pane with more
+--- rows above its first line than the window holds is parked to show them.
 ---@param win integer
 function Pair:top(win)
-  local side = self:side_of(win)
-  if not side then
-    return
+  if self:side_of(win) then
+    self.sync:show(0, win)
   end
-  local tl, tf = self.map:view_top(side, 0)
-  if (tf or 0) > vim.fn.winheight(win) - 1 then
-    side = side == "old" and "new" or "old"
-    tl, tf = self.map:view_top(side, 0)
-  end
-  local lead = self.wins[side]
-  api.nvim_win_call(lead, function()
-    vim.fn.winrestview({ topline = tl or 1, topfill = tf or 0, lnum = 1, col = 0, curswant = 0 })
-  end)
-  self.sync:sync(lead)
 end
 
 --- Map `gg` and `<C-Home>` in both panes to `top`, which also shows the rows above the
@@ -383,17 +471,100 @@ function Pair:cursor_line(side)
   return self.map:file_line(side, api.nvim_win_get_cursor(self.wins[side])[1])
 end
 
---- Put `side`'s cursor on the file's line `lnum` and bring the other pane along.
+--- Put `side`'s cursor on the file's line `lnum` (at byte `col`, default 0) and bring the
+--- other pane along.
 ---@param side NvimDiff.Side
 ---@param lnum integer
-function Pair:jump(side, lnum)
+---@param col? integer
+function Pair:jump(side, lnum, col)
   local win = self.wins[side]
   local bl = math.max(1, math.min(self:buf_line(lnum), api.nvim_buf_line_count(self.bufs[side])))
-  api.nvim_win_set_cursor(win, { bl, 0 })
+  api.nvim_win_set_cursor(win, { bl, col or 0 })
   api.nvim_win_call(win, function()
     vim.cmd("normal! zz")
   end)
   self.sync:sync(win)
+end
+
+-- Jumps out of a real file's pane --------------------------------------------------------
+
+--- Take another buffer shown in `side`'s pane window (`PairSide.on_jump`) back out, and
+--- tell `on_jump` where it went. Not at once: when the buffer comes in (`BufWinEnter`) the
+--- jump has not put the cursor on its target yet. Once it is over — at the next cursor
+--- move, before the screen is redrawn, or the next tick, whichever comes first — the pane
+--- gets its buffer back: Neovim restores its window options and folds, which it keeps per
+--- buffer and window, and the view is the one the pane left with.
+---@param side NvimDiff.Side
+---@param on_jump fun(jump: NvimDiff.PaneJump)
+function Pair:catch_jumps(side, on_jump)
+  local win, buf = self.wins[side], self.bufs[side]
+  local view
+  -- Buffers read from disk in the pane window: only a jump puts one there.
+  local read = {}
+  local pending = false
+
+  local function back()
+    if not pending then
+      return
+    end
+    pending = false
+    if self.closed or not api.nvim_win_is_valid(win) then
+      return
+    end
+    local now = api.nvim_win_get_buf(win)
+    if now == buf then
+      return
+    end
+    local cursor = api.nvim_win_get_cursor(win)
+    local jump = { buf = now, lnum = cursor[1], col = cursor[2], read = read[now] == true }
+    read = {}
+    -- Hidden, as with `:hide`: with 'nohidden' the jump's buffer would be unloaded on its
+    -- way out, its language server detached (which redraws the screen, the pane showing it).
+    local hidden = vim.o.hidden
+    vim.o.hidden = true
+    local ok, err = pcall(api.nvim_win_set_buf, win, buf)
+    vim.o.hidden = hidden
+    if not ok then
+      error(err, 0)
+    end
+    if view then
+      api.nvim_win_call(win, function()
+        vim.fn.winrestview(view)
+      end)
+    end
+    self.sync:sync(win)
+    on_jump(jump)
+  end
+
+  api.nvim_create_autocmd("BufLeave", {
+    group = self.augroup,
+    buffer = buf,
+    callback = function()
+      if api.nvim_get_current_win() == win then
+        view = vim.fn.winsaveview()
+      end
+    end,
+  })
+  api.nvim_create_autocmd("BufReadPost", {
+    group = self.augroup,
+    callback = function(args)
+      if args.buf ~= buf and api.nvim_get_current_win() == win then
+        read[args.buf] = true
+      end
+    end,
+  })
+  api.nvim_create_autocmd("BufWinEnter", {
+    group = self.augroup,
+    callback = function(args)
+      -- `nvim_win_set_buf` on the pane makes it current while its autocmds run.
+      if pending or args.buf == buf or api.nvim_get_current_win() ~= win then
+        return
+      end
+      pending = true
+      api.nvim_create_autocmd("CursorMoved", { group = self.augroup, once = true, callback = back })
+      vim.schedule(back)
+    end,
+  })
 end
 
 --- The blocks in insertion order.
@@ -413,12 +584,15 @@ function Pair:rebuild_virt(sides)
   self.map = rowmap.new(self.diff, self:block_list(), self.folds, self.layout, self.foreign)
   if not sides then
     self.filler_width = sidebyside.filler_width()
+    self.virt_keep = sidebyside.virt_keep()
   end
+  local rows = {}
   for _, side in ipairs(SIDES) do
     if not sides or sides[side] then
-      sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols, self.ns[side].virt)
+      rows[side] = sidebyside.paint_virt(self.bufs[side], self.map, side, self.cols, self.ns[side].virt)
     end
   end
+  self:painted(rows)
 end
 
 --- Rebuild the map from the current blocks and folds, repaint every virtual row, realign.
@@ -594,6 +768,7 @@ function Pair:set_folds(list, leader, cursor)
       local other = side ~= lside and api.nvim_win_call(win, vim.fn.winsaveview)
       folds_scene.apply(self, side)
       if other then
+        other.skipcol = 0
         api.nvim_win_call(win, function()
           vim.fn.winrestview(other)
         end)
@@ -604,6 +779,7 @@ function Pair:set_folds(list, leader, cursor)
         view.lnum = self:buf_line(cursor)
         view.col, view.curswant = 0, 0
       end
+      view.skipcol = 0
       api.nvim_win_call(leader, function()
         vim.fn.winrestview(view)
         -- Scroll now if the cursor left the view, so the other pane follows the real top.
@@ -683,7 +859,7 @@ function Pair:set_diff(diff)
   self.fold_base = base
   self.folds = list
   self.map = rowmap.new(diff, self:block_list(), list, self.layout, self.foreign)
-  sidebyside.render(self.bufs, self.map, self.cols, self.ns)
+  self:painted(sidebyside.render(self.bufs, self.map, self.cols, self.ns))
   self:set_folds(list)
 end
 
@@ -739,6 +915,7 @@ function Pair:close(opts)
   pcall(api.nvim_del_augroup_by_id, self.augroup)
   for _, side in ipairs(SIDES) do
     local win = self.wins[side]
+    park.clear(win)
     if api.nvim_win_is_valid(win) then
       api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
       if self.claims[side] and api.nvim_win_get_buf(win) == self.bufs[side] then
