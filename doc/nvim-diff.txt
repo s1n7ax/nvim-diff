@@ -265,8 +265,13 @@ sign column (your |vim.diagnostic.config()| applies). The pane is read-only
   - nvim-diff's keys win in the pane, also over keys a language server's
     |LspAttach| handler maps there. In any other window on the file your own
     keys apply, and they are back on the file once the pane moves on.
-  - Code lens is off for the file while the pane shows it: its lines would
-    push the pane's rows out of line with the base pane.
+  - Virtual lines other plugins draw in the pane stay: code lenses
+    (|vim.lsp.codelens.enable()|), diagnostics shown as virtual lines
+    (|vim.diagnostic.Opts.VirtualLines|), any plugin's `virt_lines`. The base
+    pane gets as many blank rows in the same place, so rows stay aligned. The
+    rows in view are counted each time the pane is redrawn; lines that change
+    off screen are counted once scrolled into view. Lines on a folded line are
+    not drawn, so they take no rows until the fold opens.
   - A file nvim-diff opened stays loaded, hidden and read-only after the pane
     moves on, so going back is instant and the language server keeps it; up to
     |nvim-diff-config.buffers.lru_size| of them. A file you already had open is

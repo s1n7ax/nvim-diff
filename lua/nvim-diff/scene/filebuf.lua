@@ -22,8 +22,8 @@
 ---   other window on the buffer, and once the pane lets go, the keys they shadowed (the
 ---   user's own, a language server's) are back. Keys an `LspAttach` handler maps over the
 ---   plugin's are taken back right after it;
---- * code lens is off for the buffer while the pane holds it: its lines would push the head
----   pane's rows down, out of line with the base pane;
+--- * other plugins' virtual lines (a code lens, a diagnostic's `virtual_lines`) stay: the
+---   pair pads the other pane to match (`scene/foreign.lua`);
 --- * the pane's window options and folds are taken back (`scene/window.lua` `reset`) before
 ---   the buffer leaves the pane window, and from another window that got them with the
 ---   buffer: Neovim gives a window newly showing a buffer the options of a window showing
@@ -70,7 +70,6 @@ local PREFIX = "nvim-diff"
 ---@field private theirs table<string, table>
 ---@field private active boolean Whether the plugin's mappings are in place.
 ---@field private saved? { modifiable: boolean, readonly: boolean } A borrowed buffer's own.
----@field private lens boolean Code lens was on for the buffer when the pane turned it off.
 local Claim = {}
 Claim.__index = Claim
 
@@ -263,20 +262,6 @@ function Claim:on_enter()
   end)
 end
 
---- Turn code lens off for the buffer, when it is on.
-function Claim:lens_off()
-  -- No `vim.lsp` loaded, no client, no lens; and no need to load it here.
-  local lens = package.loaded["vim.lsp"] and vim.lsp.codelens
-  if not (lens and lens.enable and lens.is_enabled) then
-    return
-  end
-  local filter = { bufnr = self.buf }
-  if lens.is_enabled(filter) then
-    pcall(lens.enable, false, filter)
-    self.lens = true
-  end
-end
-
 -- Claims ---------------------------------------------------------------------------------
 
 --- Whether the claim's pane window still shows its buffer.
@@ -355,7 +340,6 @@ function M.claim(opts)
     ours = {},
     theirs = {},
     active = true,
-    lens = false,
   }, Claim)
   if new then
     api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
@@ -412,7 +396,6 @@ function Claim:attach(win)
         if self.released then
           return
         end
-        self:lens_off()
         if self.active then
           self:map_ours()
         end
@@ -429,7 +412,6 @@ function Claim:attach(win)
       end
     end,
   })
-  self:lens_off()
   -- The scene, the view and the review map their keys after this, in this same tick.
   vim.schedule(function()
     if not self.released and self.active then
@@ -473,9 +455,6 @@ function Claim:release()
   -- `ui/help.lua` maps `?` again once this is gone.
   vim.b[buf].nvim_diff_help = nil
   vim.b[buf][buffer.VAR] = nil
-  if self.lens then
-    pcall(vim.lsp.codelens.enable, true, { bufnr = buf })
-  end
   if self.saved then
     api.nvim_set_option_value("modifiable", self.saved.modifiable, { buf = buf })
     api.nvim_set_option_value("readonly", self.saved.readonly, { buf = buf })

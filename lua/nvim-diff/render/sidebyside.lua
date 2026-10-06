@@ -7,10 +7,12 @@
 --- * `ns` — the header band, the changed-line backgrounds (priority 150, a range extmark
 ---   with `hl_eol`, never `line_hl_group`, whose background no token can beat) and the
 ---   changed tokens (priority 250, background only), both above treesitter's 100.
---- * `ns_virt` — every virtual row: filler and inserted blocks. One extmark per side per
----   anchor line, holding everything below that line in display order, so filler and a
----   block that share an anchor can never be drawn in the wrong order. Without a header
----   line, what comes before the first line is one `virt_lines_above` mark on it.
+--- * `ns_virt` — every virtual row: filler, inserted blocks, and the padding opposite
+---   another plugin's virtual lines. One extmark per side per anchor line, holding
+---   everything below that line in display order, so filler and a block that share an
+---   anchor can never be drawn in the wrong order. Without a header line, what comes before
+---   the first line is one `virt_lines_above` mark on it; so is padding after a closed
+---   fold, on the line after it.
 ---
 --- A pane showing a real file's buffer (`scene/filebuf.lua`) is painted into namespaces of
 --- its own instead, scoped to its window, so the marks never show in another window on the
@@ -213,22 +215,44 @@ function M.separator_line(diff, f, cols)
   }
 end
 
---- The virtual rows of one side, grouped by anchor: `{ anchor = <0-based buffer row>,
---- lines = VirtLine[] }`, ascending; anchor -1 is above buffer row 0. Filler blocks are cut
---- where a block sits inside them, so display order holds within an anchor. Filler inside a
---- closed reformat fold is not drawn: a side with lines there folds them, a side without
---- shows one separator row.
+--- One mark's worth of virtual rows: `lines` hang under buffer row `row` (0-based), or over
+--- it when `above`.
+---@class NvimDiff.VirtRows
+---@field row integer
+---@field above boolean
+---@field lines NvimDiff.VirtLine[]
+
+--- The virtual rows of one side, grouped by where they hang, in display order. Filler
+--- blocks are cut where a block sits inside them, so display order holds within a mark.
+--- Filler inside a closed reformat fold is not drawn: a side with lines there folds them, a
+--- side without shows one separator row. The rows another plugin draws (a block's `ext`)
+--- are left out: they follow these (`render/rowmap.lua`).
 ---@param map NvimDiff.RowMap
 ---@param side NvimDiff.Side
 ---@param cols? NvimDiff.PaneColumns
----@return { anchor: integer, lines: NvimDiff.VirtLine[] }[]
+---@return NvimDiff.VirtRows[]
 function M.virt_rows(map, side, cols)
-  -- Entries keyed by position in display order: filler row `d` at `d`, a block after row
-  -- `d` at `d + 0.5`. Sorting by position sorts by anchor too, since anchors only grow.
-  local entries = {}
+  -- Pushed in display order: filler row `d` at `d`, a block after row `d` at `d + 0.5`.
+  -- Where the rows hang only moves down that order, so a mark's rows are contiguous.
+  local out = {}
   local blocks = map.blocks
   local filler_line = { { string.rep(M.FILLER_CHAR, M.filler_width()), "NvimDiffFiller" } }
   local bi = 1
+
+  ---@param row integer
+  ---@param above boolean
+  ---@param lines NvimDiff.VirtLine[]
+  local function push(row, above, lines)
+    if #lines == 0 then
+      return
+    end
+    local last = out[#out]
+    if last and last.row == row and last.above == above then
+      vim.list_extend(last.lines, lines)
+    else
+      out[#out + 1] = { row = row, above = above, lines = lines }
+    end
+  end
 
   ---@param upto number
   local function flush_blocks(upto)
@@ -236,23 +260,26 @@ function M.virt_rows(map, side, cols)
       local b = blocks[bi]
       local own = b[side] or {}
       local lines = {}
-      for i = 1, rowmap.block_height(b) do
+      for i = 1, rowmap.own_rows(b, side) do
         lines[i] = own[i] or BLANK_LINE
       end
-      entries[#entries + 1] = { anchor = map:anchor(side, b.row), lines = lines }
+      local row, above = map:block_anchor(side, b.row)
+      push(row, above, lines)
       bi = bi + 1
     end
   end
 
   for _, f in ipairs(map.diff.fillers[side]) do
+    -- Hung under the line before it, or over the first line when there is none.
     local anchor = map:buf_line(f.after) - 1
+    local row, above = math.max(0, anchor), anchor < 0
     -- Filler never straddles a hunk boundary, so its first row says whether it is folded.
     local fi = fold.find(map.folds, f.row)
     if fi then
       local fd = map.folds[fi]
       if not fold.side_lines(map.diff, fd, side) then
         flush_blocks(f.row)
-        entries[#entries + 1] = { anchor = anchor, lines = { M.separator_line(map.diff, fd, cols) } }
+        push(row, above, { M.separator_line(map.diff, fd, cols) })
       end
       goto continue
     end
@@ -269,23 +296,12 @@ function M.virt_rows(map, side, cols)
       for i = 1, stop - d + 1 do
         lines[i] = filler_line
       end
-      entries[#entries + 1] = { anchor = anchor, lines = lines }
+      push(row, above, lines)
       d = stop + 1
     end
     ::continue::
   end
   flush_blocks(math.huge)
-
-  -- Merge consecutive entries on the same anchor.
-  local out = {}
-  for _, e in ipairs(entries) do
-    local last = out[#out]
-    if last and last.anchor == e.anchor then
-      vim.list_extend(last.lines, e.lines)
-    else
-      out[#out + 1] = { anchor = e.anchor, lines = e.lines }
-    end
-  end
   return out
 end
 
@@ -299,10 +315,13 @@ function M.paint_virt(buf, map, side, cols, ns)
   ns = ns or M.ns_virt
   api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, v in ipairs(M.virt_rows(map, side, cols)) do
-    api.nvim_buf_set_extmark(buf, ns, math.max(0, v.anchor), 0, {
+    api.nvim_buf_set_extmark(buf, ns, v.row, 0, {
       virt_lines = v.lines,
-      virt_lines_above = v.anchor < 0,
+      virt_lines_above = v.above,
       virt_lines_leftcol = true,
+      -- Sorts before another plugin's mark on the same spot (right gravity, the default),
+      -- so its virtual lines come after these, where the row map counts them.
+      right_gravity = false,
     })
   end
 end

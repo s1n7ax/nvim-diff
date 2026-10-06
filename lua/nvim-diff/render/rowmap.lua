@@ -23,6 +23,16 @@
 --- real file cannot grow a line): it then stops at its last line, `max_top` differs per
 --- side, and the corrector keeps both panes at or above the smaller one.
 ---
+--- Foreign virtual lines — ones another plugin draws in a pane, such as a diagnostic's
+--- `virtual_lines` or a code lens in the real file's pane — take rows only on their side.
+--- They become blocks too (`ext`): after the display row just before the next thing their
+--- side shows, after every other block there, with blank rows on the other side. The
+--- painter hangs its own rows first at a place (`right_gravity = false` sorts a mark before
+--- the default right-gravity ones at the same spot, measured), so another plugin's rows
+--- there follow nvim-diff's, and its padding lines up. A foreign line on a line inside a
+--- closed fold is not drawn (Neovim skips every virtual line anchored in one), so it takes
+--- no rows.
+---
 --- Pure data: no windows, no buffers.
 
 local fold = require("nvim-diff.render.fold")
@@ -38,6 +48,15 @@ local M = {}
 ---@field row integer Display row it follows; 0 = above the first row (under the header).
 ---@field old? NvimDiff.VirtLine[]
 ---@field new? NvimDiff.VirtLine[]
+--- Rows of a side that something else draws (foreign virtual lines), after the side's own:
+--- they count toward the height, and the painter leaves them out.
+---@field ext? { old?: integer, new?: integer }
+
+--- Virtual lines another plugin draws in one pane, by the file line they hang off:
+--- `below[l]` rows under line `l` (0: under the header line), `above[l]` rows over it.
+---@class NvimDiff.ForeignLines
+---@field below table<integer, integer>
+---@field above table<integer, integer>
 
 --- How the pane buffers are laid out around the file's lines.
 ---@class NvimDiff.RowMapLayout
@@ -64,7 +83,9 @@ end
 ---@field header boolean Whether both buffers start with the header line.
 ---@field trailer { old: boolean, new: boolean } Which buffers end with the extra trailer line.
 ---@field blocks NvimDiff.Block[] Sorted by `row`, stable.
----@field folds NvimDiff.Fold[] Sorted, disjoint; no block sits after a row inside one.
+--- Sorted, disjoint; no block sits after a row inside one, but foreign rows may follow its
+--- last row.
+---@field folds NvimDiff.Fold[]
 ---@field private hidden integer[] `hidden[i]`: rows `folds[1..i]` take out of the view.
 ---@field private block_rows integer[] `block_rows[i]`: rows of `blocks[i]`, i.e. the taller side.
 ---@field private cum integer[] `cum[i]`: rows of `blocks[1..i]`.
@@ -98,21 +119,92 @@ local function trailers(diff, header, allow)
   return out
 end
 
+--- Rows of a block `side` draws itself: its content, then blank rows up to the height; not
+--- the rows something else draws there (`ext`).
+---@param block NvimDiff.Block
+---@param side NvimDiff.Side
+---@return integer
+function M.own_rows(block, side)
+  return M.block_height(block) - (block.ext and block.ext[side] or 0)
+end
+
 --- Height of a block, the same on both sides.
 ---@param block NvimDiff.Block
 ---@return integer
 function M.block_height(block)
-  return math.max(block.old and #block.old or 0, block.new and #block.new or 0)
+  local ext = block.ext or {}
+  return math.max((block.old and #block.old or 0) + (ext.old or 0), (block.new and #block.new or 0) + (ext.new or 0))
+end
+
+--- The blocks foreign virtual lines take, given the closed folds.
+---
+--- Rows between a side's lines `l` and `l + 1` (under `l`, over `l + 1`, each only when its
+--- line is not folded) come just before the next thing that side shows: line `l + 1`'s row,
+--- or the first row of the fold holding it; after the last line, the end. The block follows
+--- the display row before that, so it can sit after the last row of a fold (a code lens
+--- over the line after a context fold), never inside one.
+---@param diff NvimDiff.Diff
+---@param folds NvimDiff.Fold[]
+---@param foreign { old?: NvimDiff.ForeignLines, new?: NvimDiff.ForeignLines }
+---@return NvimDiff.Block[] # Sorted by row.
+local function foreign_blocks(diff, folds, foreign)
+  local at = {}
+  for _, side in ipairs({ "old", "new" }) do
+    local f = foreign[side]
+    local count = diff[side .. "_count"]
+    local function folded(l)
+      return l >= 1 and fold.find(folds, diff:row_of(side, l)) ~= nil
+    end
+    ---@param gap integer Rows between lines `gap` and `gap + 1`.
+    ---@param n integer
+    local function add(gap, n)
+      local d = gap < count and diff:row_of(side, gap + 1) or diff.rows + 1
+      local fi = d <= diff.rows and fold.find(folds, d)
+      if fi then
+        d = folds[fi].first
+      end
+      local b = at[d - 1]
+      if not b then
+        b = { row = d - 1, ext = { old = 0, new = 0 } }
+        at[d - 1] = b
+      end
+      b.ext[side] = b.ext[side] + n
+    end
+    if f then
+      for l, n in pairs(f.below) do
+        if n > 0 and l >= 0 and l <= count and not folded(l) then
+          add(l, n)
+        end
+      end
+      for l, n in pairs(f.above) do
+        if n > 0 and l >= 1 and l <= count and not folded(l) then
+          add(l - 1, n)
+        end
+      end
+    end
+  end
+  local list = vim.tbl_values(at)
+  table.sort(list, function(a, b)
+    return a.row < b.row
+  end)
+  return list
 end
 
 ---@param diff NvimDiff.Diff
 ---@param blocks? NvimDiff.Block[] Any order; sorted here (stably, by `row`).
 ---@param folds? NvimDiff.Fold[] Closed folds, sorted and disjoint.
 ---@param layout? NvimDiff.RowMapLayout
+--- Virtual lines other plugins draw in each pane; they follow every block at their row.
+---@param foreign? { old?: NvimDiff.ForeignLines, new?: NvimDiff.ForeignLines }
 ---@return NvimDiff.RowMap
-function M.new(diff, blocks, folds, layout)
+function M.new(diff, blocks, folds, layout, foreign)
+  folds = folds or {}
+  local all = blocks or {}
+  if foreign and (foreign.old or foreign.new) then
+    all = vim.list_extend(vim.list_extend({}, all), foreign_blocks(diff, folds, foreign))
+  end
   local sorted = {}
-  for i, b in ipairs(blocks or {}) do
+  for i, b in ipairs(all) do
     assert(b.row >= 0 and b.row <= diff.rows, "nvim-diff: block row out of range")
     sorted[i] = { b, i }
   end
@@ -130,7 +222,6 @@ function M.new(diff, blocks, folds, layout)
     total = total + heights[i]
     cum[i] = total
   end
-  folds = folds or {}
   local hidden, h = {}, 0
   for i, f in ipairs(folds) do
     assert(f.first >= 1 and f.first <= f.last and f.last <= diff.rows, "nvim-diff: fold out of range")
@@ -139,7 +230,9 @@ function M.new(diff, blocks, folds, layout)
     hidden[i] = h
   end
   for _, b in ipairs(list) do
-    assert(not fold.find(folds, b.row), "nvim-diff: block inside a fold")
+    -- Foreign rows may follow a fold's last row: they hang past it (`block_anchor`).
+    local fi = fold.find(folds, b.row)
+    assert(not fi or (b.ext and folds[fi].last == b.row), "nvim-diff: block inside a fold")
   end
   local header = not layout or layout.header ~= false
   return setmetatable({
@@ -367,6 +460,27 @@ function RowMap:anchor(side, d)
     lnum = self:filler_at(side, d).after
   end
   return self:buf_line(lnum) - 1
+end
+
+--- Where the rows of a block after display row `d` hang on `side`: under `anchor`, or —
+--- after the last row of a closed fold, whose lines draw no virtual lines — over the
+--- side's line on the next row, when it has one there. Only foreign rows sit there.
+---@param side NvimDiff.Side
+---@param d integer
+---@return integer row 0-based buffer row.
+---@return boolean above Over the row, not under it.
+function RowMap:block_anchor(side, d)
+  if d >= 1 and d < self.diff.rows and fold.find(self.folds, d) then
+    local lnum = side_line(self.diff, side, d + 1)
+    if lnum then
+      return self:buf_line(lnum) - 1, true
+    end
+  end
+  local a = self:anchor(side, d)
+  if a < 0 then
+    return 0, true
+  end
+  return a, false
 end
 
 --- The filler block of `side` covering display row `d`.
