@@ -18,6 +18,9 @@
 --- its own instead, scoped to its window, so the marks never show in another window on the
 --- file: the painters take the namespaces to use, these two by default.
 ---
+--- A pane parked inside virtual rows it cannot scroll to has one mark painted again with
+--- the rows in view, and its one buffer line covered (`scene/park.lua`).
+---
 --- All marks are persistent and placed eagerly; no decoration provider (ephemeral marks
 --- cannot draw `virt_lines`).
 
@@ -81,6 +84,15 @@ M.SIGN_WIDTH = 2
 ---@field header? boolean
 --- A sign column (`%s`, `SIGN_WIDTH` cells) before the numbers. Default false.
 ---@field signs? boolean
+--- The pane can be parked (`scene/park.lua`): the line it hides shows the column of the
+--- row drawn over it instead (`PARK_VAR`, `PARK_COL_VAR`). Default false.
+---@field park? boolean
+
+--- Window variable: the buffer line a parked pane hides (`scene/park.lua`), 0 for none.
+M.PARK_VAR = "nvim_diff_park"
+--- Window variable: what the `statuscolumn` shows on that line, in its parts — `sign`,
+--- `hl` and `tail` statusline strings, `num` plain text of the number's width.
+M.PARK_COL_VAR = "nvim_diff_park_col"
 
 --- A `statuscolumn` showing the file's own line numbers: blank on virtual rows, on the
 --- header and on the trailer. Both panes should get the same `width` so their text starts
@@ -90,7 +102,8 @@ M.SIGN_WIDTH = 2
 --- measured, a `%{}` result loses a leading space, which shifted the digits a column.
 ---
 --- On a closed fold the column is part of the separator band instead — the fill in the
---- separator's colour — so the band runs from column 1 to the window edge.
+--- separator's colour — so the band runs from column 1 to the window edge. On the line a
+--- parked pane hides, it is the start of the row drawn over that line.
 ---@param count integer Lines in this side's file.
 ---@param width integer Digits.
 ---@param cols? NvimDiff.PaneColumns
@@ -99,17 +112,24 @@ function M.statuscolumn(count, width, cols)
   cols = cols or {}
   local head = cols.header == false and 0 or 1
   local folded = "v:virtnum==0&&foldclosed(v:lnum)>0"
+  local hidden = cols.park and ("get(w:,'%s',0)==v:lnum&&v:virtnum==0"):format(M.PARK_VAR)
+  -- Each part asks first whether this is the hidden line, and shows its own piece of it.
+  local function park(piece)
+    return hidden and ("%s?w:%s.%s:"):format(hidden, M.PARK_COL_VAR, piece) or ""
+  end
   local parts = {}
   if cols.signs then
-    parts[#parts + 1] = ("%%{%%%s?'%%#NvimDiffContextSeparator#%s':'%%s'%%}"):format(
+    parts[#parts + 1] = ("%%{%%%s%s?'%%#NvimDiffContextSeparator#%s':'%%s'%%}"):format(
+      park("sign"),
       folded,
       fold.FILL:rep(M.SIGN_WIDTH)
     )
   end
   vim.list_extend(parts, {
-    ("%%{%%%s?'%%#NvimDiffContextSeparator#':'%%#NonText#'%%}"):format(folded),
-    ("%%%d{v:virtnum<0%s||v:lnum>%d?'':%s?repeat('%s',%d):v:lnum-%d}"):format(
+    ("%%{%%%s%s?'%%#NvimDiffContextSeparator#':'%%#NonText#'%%}"):format(park("hl"), folded),
+    ("%%%d{%sv:virtnum<0%s||v:lnum>%d?'':%s?repeat('%s',%d):v:lnum-%d}"):format(
       width,
+      park("num"),
       head == 1 and "||v:lnum==1" or "",
       count + head,
       folded,
@@ -117,7 +137,7 @@ function M.statuscolumn(count, width, cols)
       width,
       head
     ),
-    ("%%{%%%s?'%s':'%%#Normal# '%%}"):format(folded, fold.FILL),
+    ("%%{%%%s%s?'%s':'%%#Normal# '%%}"):format(park("tail"), folded, fold.FILL),
   })
   return table.concat(parts)
 end
@@ -221,6 +241,7 @@ end
 ---@field row integer
 ---@field above boolean
 ---@field lines NvimDiff.VirtLine[]
+---@field id? integer The mark, once painted.
 
 --- The virtual rows of one side, grouped by where they hang, in display order. Filler
 --- blocks are cut where a block sits inside them, so display order holds within a mark.
@@ -305,38 +326,86 @@ function M.virt_rows(map, side, cols)
   return out
 end
 
---- Replace every virtual row of one side.
+--- Rows kept from each end of a tall mark of virtual rows (`set_virt`): no window is taller.
+---@return integer
+function M.virt_keep()
+  return vim.o.lines
+end
+
+--- `lines` with the rows no window can show blanked. Neovim shows the virtual rows between
+--- two buffer lines only next to one of them — under the first line, or over the second
+--- with `topfill`, which stays below the window height — so a row further than a window's
+--- height from both ends of its mark is never drawn (a parked pane draws its own copy,
+--- `scene/park.lua`). Blank rows are cheap to place; a filler row to the screen edge is not
+--- (measured: 190 ms for a 20,000-row deleted tail, 4 ms blank).
+---@param lines NvimDiff.VirtLine[]
+---@return NvimDiff.VirtLine[]
+local function sparse(lines)
+  local keep = M.virt_keep()
+  local n = #lines
+  if n <= 2 * keep then
+    return lines
+  end
+  local out = {}
+  for i = 1, n do
+    out[i] = (i <= keep or i > n - keep) and lines[i] or BLANK_LINE
+  end
+  return out
+end
+
+--- Place (or, with `id`, replace) one mark of virtual rows: `lines` under buffer row `row`,
+--- or over it when `above`.
+---@param buf integer
+---@param ns integer
+---@param row integer 0-based
+---@param above boolean
+---@param lines NvimDiff.VirtLine[]
+---@param id? integer
+---@return integer id
+function M.set_virt(buf, ns, row, above, lines, id)
+  return api.nvim_buf_set_extmark(buf, ns, row, 0, {
+    id = id,
+    virt_lines = sparse(lines),
+    virt_lines_above = above,
+    virt_lines_leftcol = true,
+    -- Sorts before another plugin's mark on the same spot (right gravity, the default),
+    -- so its virtual lines come after these, where the row map counts them.
+    right_gravity = false,
+  })
+end
+
+--- Replace every virtual row of one side. Returns them, with their marks.
 ---@param buf integer
 ---@param map NvimDiff.RowMap
 ---@param side NvimDiff.Side
 ---@param cols? NvimDiff.PaneColumns
 ---@param ns? integer Default `ns_virt`.
+---@return NvimDiff.VirtRows[]
 function M.paint_virt(buf, map, side, cols, ns)
   ns = ns or M.ns_virt
   api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-  for _, v in ipairs(M.virt_rows(map, side, cols)) do
-    api.nvim_buf_set_extmark(buf, ns, v.row, 0, {
-      virt_lines = v.lines,
-      virt_lines_above = v.above,
-      virt_lines_leftcol = true,
-      -- Sorts before another plugin's mark on the same spot (right gravity, the default),
-      -- so its virtual lines come after these, where the row map counts them.
-      right_gravity = false,
-    })
+  local rows = M.virt_rows(map, side, cols)
+  for _, v in ipairs(rows) do
+    v.id = M.set_virt(buf, ns, v.row, v.above, v.lines)
   end
+  return rows
 end
 
---- Paint both panes in full. Idempotent: clears its own namespaces first.
+--- Paint both panes in full. Idempotent: clears its own namespaces first. Returns each
+--- side's virtual rows (`paint_virt`).
 ---@param bufs { old: integer, new: integer }
 ---@param map NvimDiff.RowMap
 ---@param cols? NvimDiff.PaneColumns
 ---@param nss? { old?: NvimDiff.PaneNs, new?: NvimDiff.PaneNs } Default `SHARED_NS` for both.
+---@return { old: NvimDiff.VirtRows[], new: NvimDiff.VirtRows[] }
 function M.render(bufs, map, cols, nss)
+  local out = {}
   for _, side in ipairs({ "old", "new" }) do
     local ns = nss and nss[side] or M.SHARED_NS
     paint_lines(bufs[side], map, side, ns.line)
-    M.paint_virt(bufs[side], map, side, cols, ns.virt)
+    out[side] = M.paint_virt(bufs[side], map, side, cols, ns.virt)
   end
+  return out
 end
 
 return M
