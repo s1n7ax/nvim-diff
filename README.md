@@ -73,6 +73,7 @@ defined at startup and load the rest on first use.
 | `:NvimDiffConflict [path]` | resolve the conflicts in a file (default: the current one) three-way |
 | `:NvimDiffPR <n>` | review GitHub PR `n` (`42` or `#42`) |
 | `:NvimDiffVerdict [approve\|request-changes\|comment]` | submit the review verdict with a summary |
+| `:NvimDiffMerge [merge\|squash\|rebase]` | merge the reviewed PR, after asking (no argument: pick the method) |
 
 `:NvimDiffOpen` also takes `--imply-local`, which shows the files on disk when the right
 side is `HEAD`'s commit. From Lua: `require("nvim-diff").open({ range = "main...feature",
@@ -147,6 +148,9 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | `<leader><BS>` | clear the viewed mark |
 | `<C-r>` | check GitHub now for new commits, a new base branch or a merge |
 | `<leader>A` | apply the new code a check found, in the same review |
+| `<leader>ra` | approve the PR, after asking (no summary; `:NvimDiffVerdict approve` for one with a summary) |
+| `<leader>rr` | request changes: open the verdict split with a required summary |
+| `<leader>rm` | merge the PR: pick merge / squash / rebase, then ask before sending |
 | `<leader>L` | a PR from a fork, after no: ask `Start LSP? [y/N]` again |
 | `<leader>cc` | in the file panel: a file-level comment on the file under the cursor |
 
@@ -256,6 +260,9 @@ require("nvim-diff").setup({
       unmark_viewed = "<leader><BS>",
       sync = "<C-r>",
       apply = "<leader>A",
+      approve = "<leader>ra", -- approve at once, after asking
+      request_changes = "<leader>rr", -- verdict split with required summary
+      merge = "<leader>rm", -- pick merge/squash/rebase, then ask
       start_lsp = "<leader>L", -- a fork PR: ask `Start LSP? [y/N]` again
     },
     threads = {
