@@ -539,6 +539,7 @@ FILE PANEL (diff view and PR review)                    *nvim-diff-keys-panel*
   `<Tab>` `<S-Tab>`    next / previous file
   `gm`               flip a branch diff between merge-base (`a...b`) and tip
                    to tip (`a..b`)
+  `<leader>e`        focus the file panel (also from diff panes)
 
 HISTORY PANEL                                         *nvim-diff-keys-history*
 
@@ -557,6 +558,7 @@ DIFF PANES                                               *nvim-diff-keys-diff*
   `gm`               flip merge-base / tip to tip, as in the panel
   `gL`               history of the line under the cursor, at the pane's
                    revision
+  `<leader>e`        focus the file panel
 
 FOLDS (diff panes)                                      *nvim-diff-keys-folds*
 
@@ -802,7 +804,10 @@ keymaps.view.prev_file                 (default: `"<S-Tab>"`)
 keymaps.view.toggle_range              (default: `"gm"`)
                                   *nvim-diff-config.keymaps.view.line_history*
 keymaps.view.line_history              (default: `"gL"`)
-    Panels and diff panes (`line_history`: diff panes). `next_file` and
+                                 *nvim-diff-config.keymaps.view.focus_panel*
+keymaps.view.focus_panel               (default: `"<leader>e"`)
+    Panels and diff panes (`line_history`: diff panes; `focus_panel` focuses
+    the file panel, or the history panel in a history view). `next_file` and
     `prev_file` also step across the conflicted files in a conflict view.
 
                                        *nvim-diff-config.keymaps.history.mark*

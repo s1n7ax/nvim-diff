@@ -270,7 +270,7 @@ function M.open(opts)
   return self
 end
 
---- Map the view-wide keys (next/previous file) in `buf`.
+--- Map the view-wide keys (next/previous file, focus panel) in `buf`.
 ---@param buf integer
 function View:map_view(buf)
   local keys = config.get().keymaps.view
@@ -291,6 +291,9 @@ function View:map_view(buf)
   map(keys.line_history, function()
     self:line_history()
   end, "Diff: Line history")
+  map(keys.focus_panel, function()
+    self:focus_panel()
+  end, "Files: Focus file panel")
   help.attach(buf)
 end
 
@@ -862,6 +865,13 @@ end
 
 function View:prev_file()
   self:step(-1)
+end
+
+--- Focus the file panel, keeping its cursor where it is.
+function View:focus_panel()
+  if self:is_valid() then
+    api.nvim_set_current_win(self.panel.win)
+  end
 end
 
 --- Switch between tree and flat listing.

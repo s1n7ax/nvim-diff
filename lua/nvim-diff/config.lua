@@ -73,6 +73,8 @@ local M = {}
 ---@field toggle_range NvimDiff.Config.Key
 --- History of the line under the cursor (`git log -L`), from a diff pane.
 ---@field line_history NvimDiff.Config.Key
+--- Focus the file panel (history panel in a history view), from any pane.
+---@field focus_panel NvimDiff.Config.Key
 
 ---@class NvimDiff.Config.HistoryKeymaps
 --- Mark the commit under the panel's cursor for range compare. A third mark drops the
@@ -267,6 +269,7 @@ local defaults = {
       prev_file = "<S-Tab>",
       toggle_range = "gm",
       line_history = "gL",
+      focus_panel = "<leader>e",
     },
     history = {
       mark = "m",
@@ -406,6 +409,7 @@ local schema = {
       prev_file = KEY,
       toggle_range = KEY,
       line_history = KEY,
+      focus_panel = KEY,
     },
     history = {
       mark = KEY,
