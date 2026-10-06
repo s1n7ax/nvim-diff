@@ -566,6 +566,9 @@ DIFF PANES                                               *nvim-diff-keys-diff*
   `gL`               history of the line under the cursor, at the pane's
                    revision
   `<leader>e`        focus the file panel
+  `gf`               goto the file under the cursor, with its `:line` when the
+                   text has one: a file the diff lists opens in the view, any
+                   other in a new tabpage (a review's files tabpage in a review)
 
 FOLDS (diff panes)                                      *nvim-diff-keys-folds*
 
@@ -819,9 +822,12 @@ keymaps.view.toggle_range              (default: `"gm"`)
 keymaps.view.line_history              (default: `"gL"`)
                                  *nvim-diff-config.keymaps.view.focus_panel*
 keymaps.view.focus_panel               (default: `"<leader>e"`)
+                                  *nvim-diff-config.keymaps.view.goto_file*
+keymaps.view.goto_file                 (default: `"gf"`)
     Panels and diff panes (`line_history`: diff panes; `focus_panel` focuses
     the file panel, or the history panel in a history view). `next_file` and
     `prev_file` also step across the conflicted files in a conflict view.
+    `goto_file` works in the panels and the diff panes.
 
                                        *nvim-diff-config.keymaps.history.mark*
 keymaps.history.mark                   (default: `"m"`)

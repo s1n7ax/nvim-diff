@@ -294,6 +294,9 @@ function View:map_view(buf)
   map(keys.focus_panel, function()
     self:focus_panel()
   end, "Files: Focus file panel")
+  map(keys.goto_file, function()
+    self:goto_file()
+  end, "Files: Goto file under cursor")
   help.attach(buf)
 end
 
@@ -332,6 +335,158 @@ function View:line_history()
     line = at.lnum,
     rev = rev.oid,
   })
+end
+
+--- The `:line[:col]` suffix the text right after the file under the cursor carries, if
+--- any. `col` is the 1-based byte column of the cursor, used to pick which occurrence
+--- of `fname` on the line the cursor is on.
+---@param line string
+---@param fname string
+---@param col integer
+---@return integer lnum
+---@return integer col 0-based byte column.
+local function file_position(line, fname, col)
+  local lnum, cnum = 1, 0
+  local from, stop = 1, nil
+  while true do
+    local first, last = line:find(fname, from, true)
+    if not first or first > col then
+      break
+    end
+    stop = last
+    from = last + 1
+  end
+  if stop then
+    local rest = line:sub(stop + 1)
+    local ln = rest:match("^:(%d+)")
+    if ln then
+      lnum = math.max(1, tonumber(ln) or 1)
+      local cc = rest:match("^:%d+:(%d+)")
+      cnum = cc and math.max(0, (tonumber(cc) or 1) - 1) or 0
+    end
+  end
+  return lnum, cnum
+end
+
+--- The file `fname` names, as an absolute path: absolute as it is, else the first hit
+--- under `dirs` in order, with 'suffixesadd' tried for each. A leading `a/` or `b/` (a
+--- diff header's side) is also tried stripped. Nil when nothing on disk matches.
+---@param fname string
+---@param dirs string[]
+---@return string?
+local function resolve_file(fname, dirs)
+  local names = { fname }
+  if fname:match("^[ab]/") then
+    names[#names + 1] = fname:sub(3)
+  end
+  for i, name in ipairs(names) do
+    if name:sub(1, 1) == "~" then
+      names[i] = vim.fn.expand("~") .. name:sub(2)
+    end
+  end
+  local suffixes = vim.split(vim.o.suffixesadd, ",", { trimempty = true })
+  local function try(candidate)
+    if vim.uv.fs_stat(candidate) then
+      return path.normalize(candidate)
+    end
+    for _, suffix in ipairs(suffixes) do
+      if vim.uv.fs_stat(candidate .. suffix) then
+        return path.normalize(candidate .. suffix)
+      end
+    end
+    return nil
+  end
+  if path.is_absolute(names[1]) then
+    return try(names[1])
+  end
+  for _, dir in ipairs(dirs) do
+    for _, name in ipairs(names) do
+      local found = try(path.join(dir, name))
+      if found then
+        return found
+      end
+    end
+  end
+  return nil
+end
+
+--- Open the file under the cursor (`gf`), with its `:line[:col]` when the cursor's
+--- text has one. The file is looked for in the directory of the file showing, the
+--- repository root and the cwd, in that order. A file the diff lists is selected in the
+--- view — a deferred one loaded — with the cursor on the jump's line, on the cursor's
+--- side; any other file opens in a new tabpage, or in the review's files tabpage when
+--- this view belongs to a review.
+function View:goto_file()
+  local ok, fname = pcall(vim.fn.expand, "<cfile>")
+  if not ok or fname == "" then
+    log.warn("no file under the cursor")
+    return
+  end
+  if fname:find("^%a[%w+.-]*://") then
+    log.warn("%s is not a file on disk", fname)
+    return
+  end
+  local lnum, col = file_position(vim.fn.getline("."), fname, vim.fn.col("."))
+  local side = self:diff_side(api.nvim_get_current_win()) or "new"
+  local toplevel = path.real(self.repo.toplevel)
+  local dirs = {}
+  local entry = self.current
+  if entry then
+    local shown = side == "old" and (entry.oldpath or entry.path) or entry.path
+    dirs[#dirs + 1] = path.normalize(path.from_git(self.repo.toplevel, path.parent(shown)))
+  end
+  dirs[#dirs + 1] = toplevel
+  local cwd = path.normalize(vim.fn.getcwd())
+  if cwd ~= toplevel then
+    dirs[#dirs + 1] = cwd
+  end
+  local abs = resolve_file(fname, dirs)
+  if not abs then
+    log.warn("can't find file %s", fname)
+    return
+  end
+  local rel = path.relative(path.real(abs), toplevel)
+  local target
+  if rel and rel ~= "." then
+    local git_path = path.to_git(rel)
+    for _, e in ipairs(self.list.entries) do
+      if e.path == git_path then
+        target = e
+        break
+      end
+    end
+  end
+  if target then
+    if target.change.status == "D" then
+      side = "old"
+    elseif target.change.status == "A" or target.change.status == "?" then
+      side = "new"
+    end
+    if target ~= self.current or not self.file or self.file:is_closed() then
+      self:select(target, { force = true })
+    end
+    local file = self.file
+    if self.current ~= target or not file or file:is_closed() then
+      return
+    end
+    api.nvim_set_current_win(self:diff_win(side))
+    file:jump(side, lnum, col)
+    return
+  end
+  if self.review then
+    local buf = vim.fn.bufadd(abs)
+    if pcall(vim.fn.bufload, buf) then
+      self:route_jump({ buf = buf, lnum = lnum, col = col, read = true })
+    else
+      log.warn("can't open %s", abs)
+    end
+    return
+  end
+  vim.cmd("tabedit " .. vim.fn.fnameescape(abs))
+  pcall(api.nvim_win_set_cursor, 0, { lnum, col })
+  api.nvim_win_call(0, function()
+    vim.cmd("silent! normal! zv")
+  end)
 end
 
 --- Re-list the files when the view's tabpage is entered or Neovim regains focus, for a

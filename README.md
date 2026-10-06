@@ -106,6 +106,7 @@ keys that work there — `<CR>` on one runs it.
 | `gs` | structural ↔ line diff, for this file |
 | `gL` | history of the line under the cursor, at this pane's revision |
 | `<leader>e` | focus the file panel |
+| `gf` | goto the file under the cursor (`:line` too): a file the diff lists opens in the view, any other in a new tab |
 
 **Folds** (diff panes; mirrored across both panes)
 
@@ -244,7 +245,7 @@ require("nvim-diff").setup({
   keymaps = {
     help = "?",
     panel = { select = "<CR>", toggle_listing = "i", refresh = "R" },
-    view = { next_file = "<Tab>", prev_file = "<S-Tab>", toggle_range = "gm", line_history = "gL", focus_panel = "<leader>e" },
+    view = { next_file = "<Tab>", prev_file = "<S-Tab>", toggle_range = "gm", line_history = "gL", focus_panel = "<leader>e", goto_file = "gf" },
     history = { mark = "m", compare = "M" },
     conflict = {
       take_ours = "<leader>co",
