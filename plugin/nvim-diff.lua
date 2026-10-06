@@ -63,3 +63,13 @@ end, {
   end,
   desc = "nvim-diff: submit the review verdict (approve, request-changes, comment) with an optional summary",
 })
+
+vim.api.nvim_create_user_command("NvimDiffMerge", function(args)
+  require("nvim-diff.review.merge").command(args.args)
+end, {
+  nargs = "?",
+  complete = function(arglead)
+    return require("nvim-diff.review.merge").complete(arglead)
+  end,
+  desc = "nvim-diff: merge the reviewed PR (merge, squash, rebase), after asking",
+})

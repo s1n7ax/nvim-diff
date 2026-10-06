@@ -152,6 +152,13 @@ the view, or `nil` and a message.
     review is posted with no inline comments, since those were posted as they
     were written. Never submitted automatically.
 
+                                                              *:NvimDiffMerge*
+:NvimDiffMerge [merge | squash | rebase]
+    Merge the PR reviewed in this tabpage. Without an argument, asks which of
+    GitHub's methods to use. Always asks before sending anything; the head
+    sent is the one the review shows. On success the review checks GitHub at
+    once, which announces the merge.
+
 ==============================================================================
 5. VIEWS                                                     *nvim-diff-views*
 
@@ -583,6 +590,12 @@ In the file panel and the diff panes:
   `<C-r>`            check GitHub now for new commits, a new base branch or
                    a merge (|nvim-diff-review-sync|)
   `<leader>A`        apply the new code a check found (|nvim-diff-review-apply|)
+  `<leader>ra`       approve the PR, after asking (no summary; |:NvimDiffVerdict|
+                   `approve` for one with a summary)
+  `<leader>rr`       request changes: open the verdict split, whose summary is
+                   required; posting it there submits the verdict
+  `<leader>rm`       merge the PR: pick merge / squash / rebase, then ask
+                   before sending (|:NvimDiffMerge|)
   `<leader>L`        a PR from a fork, after no: ask `Start LSP? [y/N]` again
                    (|nvim-diff-review-fork|)
 
@@ -840,6 +853,12 @@ keymaps.review.unmark_viewed           (default: `"<leader><BS>"`)
 keymaps.review.sync                    (default: `"<C-r>"`)
                                        *nvim-diff-config.keymaps.review.apply*
 keymaps.review.apply                   (default: `"<leader>A"`)
+                                 *nvim-diff-config.keymaps.review.approve*
+keymaps.review.approve                 (default: `"<leader>ra"`)
+                         *nvim-diff-config.keymaps.review.request_changes*
+keymaps.review.request_changes         (default: `"<leader>rr"`)
+                                   *nvim-diff-config.keymaps.review.merge*
+keymaps.review.merge                   (default: `"<leader>rm"`)
                                    *nvim-diff-config.keymaps.review.start_lsp*
 keymaps.review.start_lsp               (default: `"<leader>L"`)
     File panel and diff panes of a PR review; `start_lsp` only in the review

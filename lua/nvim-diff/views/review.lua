@@ -477,6 +477,15 @@ function Review:map_keys(buf)
   map(keys.apply, function()
     self:apply()
   end, "Review: Apply new code")
+  map(keys.approve, function()
+    self:approve()
+  end, "Review: Approve PR")
+  map(keys.request_changes, function()
+    self:request_changes()
+  end, "Review: Request changes")
+  map(keys.merge, function()
+    self:merge()
+  end, "Review: Merge PR")
   if self.fork then
     map(keys.start_lsp, function()
       self:start_lsp()
@@ -608,6 +617,63 @@ function Review:mark_viewed(entry)
   else
     log.warn("all %d files viewed", #self.view.list.entries)
   end
+  return true
+end
+
+--- Asks whether to approve. Replaceable, so specs can answer without a prompt.
+---@param prompt string
+---@return boolean approve
+function M.confirm_approve(prompt)
+  return vim.fn.confirm(prompt, "&Approve\n&Cancel", 2) == 1
+end
+
+--- Approve the PR after a confirmation, without a summary. For an approval with a
+--- summary, `:NvimDiffVerdict approve` opens the verdict split instead.
+---@return boolean approved False when cancelled, or when GitHub refused.
+function Review:approve()
+  if not self:is_valid() then
+    return false
+  end
+  if not M.confirm_approve(("Approve PR #%d?"):format(self.number)) then
+    return false
+  end
+  if not self:is_valid() then
+    return false
+  end
+  vim.notify(("nvim-diff: approving PR #%d…"):format(self.number), vim.log.levels.INFO)
+  vim.cmd.redraw()
+  local result, err = require("nvim-diff.github.review").submit(self.pr, "APPROVE")
+  if not result then
+    ---@cast err NvimDiff.GitHub.Error
+    log.error("PR #%d not approved: %s", self.number, err.message)
+    return false
+  end
+  vim.notify(("nvim-diff: PR #%d approved"):format(self.number), vim.log.levels.INFO)
+  return true
+end
+
+--- Ask for changes: opens the verdict split with `REQUEST_CHANGES`, keeping any text
+--- already typed there. GitHub needs a summary, so the verdict is written there and the
+--- split's post key submits it — typing the summary and posting it is the confirmation.
+---@return boolean opened False when the review ended or a comment draft is open.
+function Review:request_changes()
+  if not self:is_valid() or self:resume_draft() then
+    return false
+  end
+  require("nvim-diff.review.verdict").open(self, "REQUEST_CHANGES")
+  return true
+end
+
+--- Merge the PR: a picker asks which of GitHub's methods to use, then a confirmation
+--- asks before anything is sent (`review/merge.lua`). The head sent is the one the
+--- review shows. `:NvimDiffMerge [merge|squash|rebase]` skips the picker.
+---@return boolean started False when the review ended or the picker was dismissed; the
+---merge itself reports through `review/merge.lua` once confirmed.
+function Review:merge()
+  if not self:is_valid() then
+    return false
+  end
+  require("nvim-diff.review.merge").command("")
   return true
 end
 

@@ -111,6 +111,15 @@ local M = {}
 --- Apply the new code a check found (new commits, a new base branch): check it out into the
 --- review slot and show its diff, viewed marks and threads, in the same review.
 ---@field apply NvimDiff.Config.Key
+--- Approve the PR at once, after asking. Without a summary; `:NvimDiffVerdict approve`
+--- opens the verdict split for one with a summary.
+---@field approve NvimDiff.Config.Key
+--- Open the verdict split to request changes (GitHub needs a summary there); posting it
+--- from the split submits the verdict.
+---@field request_changes NvimDiff.Config.Key
+--- Merge the PR: a picker asks which of GitHub's methods (merge, squash, rebase) to use,
+--- then asks before sending anything.
+---@field merge NvimDiff.Config.Key
 
 --- Buffer-local to the diff panes of a view showing PR review comment threads.
 ---@class NvimDiff.Config.ThreadKeymaps
@@ -295,6 +304,9 @@ local defaults = {
       start_lsp = "<leader>L",
       sync = "<C-r>",
       apply = "<leader>A",
+      approve = "<leader>ra",
+      request_changes = "<leader>rr",
+      merge = "<leader>rm",
     },
     threads = {
       toggle = "<CR>",
@@ -430,6 +442,9 @@ local schema = {
       start_lsp = KEY,
       sync = KEY,
       apply = KEY,
+      approve = KEY,
+      request_changes = KEY,
+      merge = KEY,
     },
     threads = {
       toggle = KEY,
