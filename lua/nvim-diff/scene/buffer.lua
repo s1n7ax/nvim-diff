@@ -1,9 +1,11 @@
 --- Diff pane buffers: read-only scratch buffers holding one side of a diff.
 ---
---- Layout, fixed for every renderer: buffer line 1 is the header (`virt_lines_above` on
---- row 0 never renders, so filler above the file's first line needs a real line to hang
---- from), the file's lines follow, and an optional empty trailer line ends it (see
---- `render/rowmap.lua` for when).
+--- Layout: buffer line 1 is the header (`virt_lines_above` on row 0 renders only with
+--- `topfill`, which `gg` and `zz` reset, so filler above the file's first line needs a real
+--- line to hang from), the file's lines follow, and an optional empty trailer line ends it
+--- (see `render/rowmap.lua` for when). A PR review's side-by-side panes leave the header
+--- out and show it as a winbar instead; its head pane is usually no scratch buffer at all,
+--- but the real file's (`scene/filebuf.lua`).
 ---
 --- Buffers of immutable content — a blob at a commit, asked for with `keep` — outlive the
 --- scene that showed them: `release` hides such a buffer instead of wiping it, and the
@@ -21,7 +23,7 @@ local M = {}
 
 ---@class NvimDiff.PaneBufOpts
 ---@field lines string[] The file's lines, no terminators.
----@field header string Text of buffer line 1.
+---@field header? string Text of buffer line 1; nil for no header line.
 ---@field trailer? boolean Append the empty trailer line.
 --- Buffer name, set **before** the content so concurrent requests for one blob dedupe on
 --- it (`nvim-diff://<gitdir>/<rev>/<path>`). Unnamed when omitted, and when another
@@ -33,6 +35,10 @@ local M = {}
 --- The content never changes under this name (a blob at a commit): keep the buffer after
 --- `release`, for reuse. Only honoured for a named buffer.
 ---@field keep? boolean
+--- Hidden, not wiped, when another buffer takes its window: a PR review's pane window takes
+--- a jump to another file and then shows the pane again (`scene/catch.lua`). `release`
+--- still wipes it.
+---@field hold? boolean
 
 --- Buffer variable (`b:nvim_diff_pane`) set on every pane buffer, before any window shows
 --- it, so other plugins can leave the pane alone — e.g. nvim-ufo's `provider_selector`
@@ -82,14 +88,14 @@ local function touch(buf)
   kept[buf] = tick
 end
 
---- The pane's full text: header, file lines, optional trailer.
+--- The pane's full text: optional header, file lines, optional trailer.
 ---@param opts NvimDiff.PaneBufOpts
 ---@return string[]
 local function text_of(opts)
   local text = { opts.header }
-  for i, line in ipairs(opts.lines) do
+  for _, line in ipairs(opts.lines) do
     -- A NUL in a blob arrives as `\n` when split on newlines; the buffer stores NUL as NL.
-    text[i + 1] = line:find("\n", 1, true) and line:gsub("\n", "\0") or line
+    text[#text + 1] = line:find("\n", 1, true) and line:gsub("\n", "\0") or line
   end
   if opts.trailer then
     text[#text + 1] = ""
@@ -178,6 +184,9 @@ function M.create(opts)
     api.nvim_set_option_value(option, value, { buf = buf })
   end
   vim.b[buf][M.VAR] = true
+  if opts.hold then
+    api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  end
   if name then
     api.nvim_buf_set_name(buf, name)
     if opts.keep then

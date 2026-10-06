@@ -12,7 +12,7 @@
 --- | `not_installed`    | yes       | `gh` is not on PATH                                    |
 --- | `not_authenticated`| yes       | `gh` has no working credentials for the host           |
 --- | `forbidden`        | yes       | authenticated, but not permitted (403, not a rate limit)|
---- | `rate_limited`     | yes       | a primary or secondary rate limit was hit (403/429)    |
+--- | `rate_limited`     | yes       | a primary or secondary rate limit was hit (403/429, or GraphQL `RATE_LIMITED`) |
 --- | `not_found`        | yes       | the repository, PR or resource does not exist or is not visible |
 --- | `no_remote`        | yes       | the repository has no remote to resolve a host/owner/repo from |
 --- | `bad_remote`       | yes       | the remote URL did not parse into a host and owner/repo |

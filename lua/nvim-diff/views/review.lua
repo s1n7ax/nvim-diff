@@ -1,26 +1,43 @@
---- A GitHub PR review: the PR checked out into its own worktree, diffed in its own tabpage,
---- with GitHub's per-file viewed marks in the file panel.
+--- A GitHub PR review: the PR checked out into a review slot (a kept worktree), diffed in
+--- its own tabpage, with GitHub's per-file viewed marks in the file panel.
 ---
 ---     local review = require("nvim-diff.views.review").open({ number = 42 })
 ---     review:mark_viewed() -- marks the current file viewed on GitHub, jumps to the next unviewed
----     review:close()       -- closes the tab and removes the worktree
+---     review:close()       -- closes the tab and releases the review slot
 ---
 --- Opening a review:
 ---
---- 1. fetches the PR's node id, head and base (`github/pr.lua`);
+--- 1. fetches the PR's node id, head and base (`github/pr.lua`); for a PR from a fork, asks
+---    `Start LSP? [y/N]` (`review/fork.lua`);
 --- 2. fetches `refs/pull/<n>/head` and the base branch from the remote when either commit
 ---    is missing locally (`git/fetch.lua`) — nothing is written to the user's refs;
 --- 3. diffs `merge-base(base, head)` against `head`, both as commits, locally with git —
 ---    never GitHub's `/pulls/{n}/files`;
 --- 4. reads every file's viewed state (`github/viewed.lua`);
---- 5. checks `head` out, detached, into `<common git dir>/nvim-diff/pr-<n>`
----    (`git/worktree.lua`), so LSP, tests and the debugger see the PR's code while the
----    user's branch and uncommitted changes are never touched;
---- 6. opens a `views/diff.lua` view on the worktree in a new tabpage, `:tcd` to the
----    worktree, and selects the first file not yet viewed.
+--- 5. checks `head` out, detached, into the lowest free review slot
+---    `stdpath("data")/nvim-diff/slots/<repo>-<hash>/review-<k>` (`git/worktree.lua`), so
+---    LSP, tests and the debugger see the PR's code while the user's branch and uncommitted
+---    changes are never touched, and files git ignores there (`node_modules/`) are kept from
+---    earlier reviews. Outside the repository, so a language server's root search from a
+---    slot file finds the slot, not the user's checkout. Before a fork PR is checked out,
+---    this Neovim's language servers with any root in the slot are killed (`core/lsp.lua`),
+---    and after a no none may start on a file in the slot until a yes (`review/fork.lua`);
+--- 6. opens a `views/diff.lua` view on the slot in a new tabpage, `:tcd` to the slot, and
+---    selects the first file not yet viewed. In side-by-side the head pane is the slot's
+---    real file, read-only, so language servers attach to it (`scene/filebuf.lua`) — for a
+---    fork PR only after a yes; after a no it is a scratch copy, and
+---    `keymaps.review.start_lsp` asks again. A jump from any of the review's windows — an
+---    LSP jump from there, `:edit`, a picker's pick, a list entry — to a file the PR
+---    changed selects that file at the jump's line; one to any other file shows it in the
+---    review's one files tabpage, read-only when it is the PR's code (`views/diff.lua`
+---    `route_jump`).
 ---
 --- Ending the review — `:tabclose`, `:NvimDiffClose`, `review:close()` or quitting Neovim —
---- closes the view, wipes any buffer on a file inside the worktree and removes the worktree.
+--- closes the view, wipes any buffer on a file inside the slot (the files tabpage closes
+--- with it when it shows one; otherwise it is `:tcd` back out of the slot), shuts down this Neovim's
+--- language servers rooted only in the slot (`core/lsp.lua`) and releases the slot. The
+--- slot's folder stays on disk for the next review; only the user removes it.
+--- A fork's block on the slot's files ends there too.
 ---
 --- Viewed state lives on GitHub only. `keymaps.review.mark_viewed` posts the mark, then
 --- jumps to the next file that is not viewed (unviewed or re-changed), in panel order;
@@ -40,6 +57,24 @@
 --- `reply_resolve` after a reply written in the same split, `unresolve` to undo. The thread
 --- is redrawn from GitHub's answer and stays on screen, dimmed with a ✓ — even while
 --- resolved threads are hidden, until the resolved mode is next flipped.
+---
+--- While the review is open it checks GitHub every `github.sync_interval_ms`, and at once on
+--- `keymaps.review.sync` (`review/sync.lua`): new commits, a new base branch and a merge or
+--- close are announced and marked in the panel. What GitHub has now is kept as
+--- `review.latest`; what the review shows (`review.pr`) is unchanged by a check.
+---
+--- New code is shown only on `keymaps.review.apply` (`review:apply()`), in the same review:
+--- read in the background, then checked out into the same slot — the head pane's file let go
+--- before and loaded afresh after, LSP left on — and the file list, viewed marks and threads
+--- shown for it, on the file and code that showed, followed through renames and the new
+--- commits' changes (`return_to`). Refused while a comment or the verdict is being written:
+--- it would be posted against code it was not written on.
+---
+--- Every check redraws the threads, in place, when anything about them changed: new
+--- threads, replies, edits and resolves by others show at once. Threads are fitted to the
+--- head shown (`review/live.lua`): one on code newer than that is held back (`review.held`)
+--- and counted in the panel until the new code is applied. A check that started before a
+--- comment was posted, edited, deleted or resolved here is not drawn: it may predate it.
 
 local comment_mod = require("nvim-diff.review.comment")
 local comments_mod = require("nvim-diff.github.comments")
@@ -47,12 +82,20 @@ local compose = require("nvim-diff.review.compose")
 local config = require("nvim-diff.config")
 local event = require("nvim-diff.core.event")
 local fetch = require("nvim-diff.git.fetch")
+local filebuf = require("nvim-diff.scene.filebuf")
+local files = require("nvim-diff.git.files")
+local fork = require("nvim-diff.review.fork")
+local job = require("nvim-diff.core.job")
+local line_diff = require("nvim-diff.diff.line")
+local live = require("nvim-diff.review.live")
 local log = require("nvim-diff.core.log")
+local lsp = require("nvim-diff.core.lsp")
 local path = require("nvim-diff.core.path")
 local pr_mod = require("nvim-diff.github.pr")
 local repo_mod = require("nvim-diff.git.repo")
 local rev = require("nvim-diff.git.rev")
 local revparse = require("nvim-diff.git.revparse")
+local sync_mod = require("nvim-diff.review.sync")
 local threads_mod = require("nvim-diff.github.threads")
 local viewed_mod = require("nvim-diff.github.viewed")
 local views = require("nvim-diff.views.diff")
@@ -62,7 +105,7 @@ local api = vim.api
 
 local M = {}
 
---- Open reviews by PR number. One worktree per PR, so one review per PR.
+--- Open reviews by PR number: reopening an open PR enters its tab. Each holds its own slot.
 ---@type table<integer, NvimDiff.Review>
 local by_number = {}
 
@@ -70,18 +113,55 @@ local by_number = {}
 ---@field number integer The PR number.
 ---@field repo? NvimDiff.Git.Repo Discovered from the cwd when omitted.
 ---@field remote? string The remote the PR lives on and is fetched from. Defaults to `origin`.
+--- The side-by-side head pane shows the slot's real file, with filetype and LSP, rather
+--- than a scratch copy (`views/diff.lua` `real_file`). Default true; for a PR from a fork,
+--- only when the reviewer says yes to `Start LSP? [y/N]` (`false` skips the question).
+---@field real_file? boolean
 
 ---@class NvimDiff.Review
----@field repo NvimDiff.Git.Repo The user's repository, which owns the worktree.
+---@field repo NvimDiff.Git.Repo The user's repository, which owns the review slot.
+---@field remote string The remote the PR's commits are fetched from.
 ---@field number integer
+--- The PR as the review shows it: its head is the diffed and checked-out commit, and what
+--- every comment is posted against. A sync never changes it; applying new code does.
 ---@field pr NvimDiff.GitHub.PR
----@field path string The worktree.
+--- The PR as GitHub last answered — at open, then on every sync. Its `head.oid` or
+--- `base.ref` differing from `pr`'s is new code the review does not show (`stale`).
+---@field latest? NvimDiff.GitHub.Snapshot
+---@field sync NvimDiff.ReviewSync
+--- Where each thread drawn hangs in the head shown, so it keeps its place once GitHub's head
+--- moves on (`review/live.lua`).
+---@field anchors NvimDiff.ThreadAnchors
+--- Threads GitHub has on code newer than the head shown, as last read: not drawn, counted in
+--- the panel. What applying the new code shows.
+---@field held NvimDiff.GitHub.Thread[]
+--- Bumped by every change to the threads made here: a write to GitHub, or a redraw after
+--- one. A sync that started before carries an older value, and is not drawn.
+---@field threads_rev integer
+---@field drawn? string `live.fingerprint` of the threads drawn, so an unchanged sync skips them.
+---@field path string The review slot the PR is checked out in.
 ---@field cwd string The cwd before the review opened, restored on a tabpage that outlives it.
 ---@field view NvimDiff.DiffView
+--- The PR comes from a fork (GitHub's `isCrossRepository`): LSP runs on its code only after
+--- the reviewer says yes.
+---@field fork boolean
+--- A fork PR without a yes: no language server on any file in the slot (`review/fork.lua`
+--- `block`), lifted by a yes or the review's end — an apply in between keeps it.
+---@field block? NvimDiff.LspBlock
+--- Whether the head pane shows the real file, with LSP (`view.real_file`): for a same-repo
+--- PR from the start, for a fork once the reviewer said yes. The trust is kept here only and
+--- lasts until the review ends — a new push applied to the review keeps it, and reopening
+--- the PR asks again.
+---@field lsp boolean
+--- Files tabpages jumps opened for files the diff does not list (`views/diff.lua` `on_tab`):
+--- one at a time, a new one only after the last was closed. They start in the slot, as the
+--- review's own does.
+---@field tabs integer[]
 ---@field augroup integer
 ---@field unsubscribe fun()[]
 ---@field closed boolean
 ---@field compose? NvimDiff.Compose The comment or reply being written, if any.
+---@field applying? NvimDiff.Job.Task Reading the new code to apply (`apply`), while it runs.
 local Review = {}
 Review.__index = Review
 
@@ -141,6 +221,14 @@ function M.open(opts)
     fail(("cannot fetch PR #%d: %s"):format(number, msg(err)))
   end
 
+  -- A fork's code gets a language server only when the reviewer says so. Asked first, so
+  -- the question comes before the slow part.
+  local is_fork = pr.cross_repository
+  local lsp_on = opts.real_file ~= false
+  if is_fork and lsp_on then
+    lsp_on = fork.ask(pr)
+  end
+
   local refs = { ("refs/pull/%d/head"):format(number) }
   if pr.base.ref then
     refs[#refs + 1] = "refs/heads/" .. pr.base.ref
@@ -165,16 +253,31 @@ function M.open(opts)
     fail(("cannot read PR #%d's viewed files: %s"):format(number, msg(err)))
   end
 
-  local threads
-  threads, err = threads_mod.fetch(pr.target, number)
-  if not threads then
+  local snap
+  snap, err = threads_mod.snapshot(pr.target, number)
+  if not snap then
     fail(("cannot read PR #%d's comment threads: %s"):format(number, msg(err)))
   end
 
-  local wt_path
-  wt_path, err = worktree.add(repo, number, head)
+  local wt_path, block
+  wt_path, err = worktree.acquire(repo, head, {
+    -- Yes or no, a server an earlier PR started in the slot must not see the fork's code.
+    before_checkout = is_fork and function(slot)
+      local stopped = lsp.stop_in(slot, "checkout")
+      if stopped > 0 then
+        log.info("stopped %d language server(s) rooted in %s before checking a fork PR out there", stopped, slot)
+      end
+      -- Without a yes, none may start on its files either, until a yes or the review's end.
+      if not lsp_on then
+        block = fork.block(slot, pr)
+      end
+    end or nil,
+  })
   if not wt_path then
-    fail(("cannot check PR #%d out into a worktree: %s"):format(number, msg(err)))
+    if block then
+      block:lift()
+    end
+    fail(("cannot check PR #%d out into a review slot: %s"):format(number, msg(err)))
   end
 
   local cwd = vim.fn.getcwd()
@@ -187,24 +290,41 @@ function M.open(opts)
       left = left,
       right = head,
       title = ("#%d %s"):format(number, pr.title or ""),
+      review = true,
+      real_file = lsp_on,
     })
   end
   if not wt_repo or not view_ok then
-    worktree.remove(repo, number)
+    if block then
+      block:lift()
+    end
+    worktree.release(repo, wt_path)
     fail(wt_repo and tostring(view):gsub("^nvim%-diff: ", "") or msg(err))
   end
 
   local self = setmetatable({
     repo = repo,
+    remote = remote,
     number = number,
     pr = pr,
+    latest = snap,
+    anchors = live.anchors(pr.head.oid),
+    held = {},
+    threads_rev = 0,
     path = wt_path,
     cwd = cwd,
     view = view,
+    fork = is_fork,
+    block = block,
+    lsp = lsp_on,
+    tabs = {},
     unsubscribe = {},
     closed = false,
   }, Review)
   by_number[number] = self
+  view.on_tab = function(tab)
+    self.tabs[#self.tabs + 1] = tab
+  end
 
   -- `views.open` leaves its new tabpage current.
   vim.cmd.tcd(vim.fn.fnameescape(wt_path))
@@ -212,7 +332,8 @@ function M.open(opts)
     entry.viewed = states[entry.path] or "unviewed"
   end
   view:render()
-  view:set_threads(threads)
+  self.sync = sync_mod.new(self)
+  self:show_threads(snap)
   self:trap()
   self:map_keys(view.panel.buf)
   self:map_keys(view.note_buf)
@@ -225,6 +346,12 @@ function M.open(opts)
   if first then
     view:select(first)
   end
+  if is_fork and not lsp_on and opts.real_file ~= false then
+    local key = config.get().keymaps.review.start_lsp
+    local again = type(key) == "string" and ("; %s asks again"):format(key) or ""
+    log.warn("PR #%d is from a fork: no language server on its files%s", number, again)
+  end
+  self.sync:start()
   return self
 end
 
@@ -247,14 +374,15 @@ function Review:trap()
     group = self.augroup,
     callback = function()
       -- Before `VimLeavePre`, where session plugins save the tabpage cwd; a session
-      -- restored into the removed worktree fails its `:tcd`.
+      -- restored into the slot would land in whatever PR the slot holds by then.
       self:leave_worktree(self.view.tab)
+      self:leave_tabs()
     end,
   })
   api.nvim_create_autocmd("VimLeavePre", {
     group = self.augroup,
     callback = function()
-      -- Neovim is going away with its windows; only the worktree needs removing.
+      -- Neovim is going away with its windows; only the slot needs releasing.
       self:close({ windows = false })
     end,
   })
@@ -343,6 +471,50 @@ function Review:map_keys(buf)
   map(keys.unmark_viewed, function()
     self:unmark_viewed()
   end, "Review: Unmark viewed")
+  map(keys.sync, function()
+    self:sync_now()
+  end, "Review: Check GitHub for updates")
+  map(keys.apply, function()
+    self:apply()
+  end, "Review: Apply new code")
+  if self.fork then
+    map(keys.start_lsp, function()
+      self:start_lsp()
+    end, "Review: Start LSP")
+  end
+end
+
+--- Turn LSP on for the review: for a fork PR, after asking `Start LSP? [y/N]` again. From
+--- then on language servers may start on the slot's files — the ones open now get them —
+--- and the side-by-side head pane is the real file, with LSP; the file showing is shown
+--- again at once, on the same line, with a warning when it still shows as a copy (its file
+--- on disk changed, say). Lasts until the review ends.
+---@return boolean on Whether LSP is on for the review now.
+function Review:start_lsp()
+  if not self:is_valid() then
+    return false
+  end
+  if self.lsp then
+    log.warn("LSP is already on in this review")
+    return true
+  end
+  if self.fork and not fork.ask(self.pr) then
+    return false
+  end
+  self.lsp = true
+  if self.block then
+    self.block:lift({ start = true })
+    self.block = nil
+  end
+  self.view.real_file = true
+  self.view:reshow()
+  -- The real file was refused (`scene/filebuf.lua`): say so, or the yes looks ignored.
+  local file, entry = self.view.file, self.view.current
+  local refused = file and not file:is_closed() and file.layout == "side_by_side" and file.scene.refused.new
+  if entry and refused then
+    log.warn("LSP is on, but %s shows as a copy without it: %s", entry.path, refused)
+  end
+  return true
 end
 
 --- The file a viewed key acts on: the file row under the cursor in the panel, else the file
@@ -385,6 +557,35 @@ end
 ---@return boolean
 function Review:is_valid()
   return not self.closed and self.view:is_valid()
+end
+
+--- What GitHub has that the review does not show: new commits, or the PR retargeted to
+--- another base branch. A push to the base branch alone is not here — the diff is from the
+--- merge-base, which it does not move.
+---@return { head?: string, base?: string }? stale `head`: GitHub's head commit, when not the
+---one shown; `base`: GitHub's base branch, when not the one shown. Nil when nothing is new.
+function Review:stale()
+  local latest = self.latest
+  if not latest then
+    return nil
+  end
+  local head = latest.head.oid ~= self.pr.head.oid and latest.head.oid or nil
+  local base = latest.base.ref ~= self.pr.base.ref and latest.base.ref or nil
+  if head or base then
+    return { head = head, base = base }
+  end
+  return nil
+end
+
+--- Check GitHub for new commits, a new base branch or a merge now.
+function Review:sync_now()
+  if not self:is_valid() then
+    return
+  elseif self.applying then
+    log.warn("PR #%d: applying its new code already reads GitHub", self.number)
+    return
+  end
+  self.sync:now()
 end
 
 --- Mark a file viewed on GitHub, then show the next file that is not viewed.
@@ -475,6 +676,7 @@ function Review:open_compose(header, post, opts)
     lines = opts.lines,
     suggestion = opts.suggestion,
     on_submit = function(text)
+      self:touch_threads()
       local posted, err = post(text)
       if not posted then
         return false, post_error(err)
@@ -674,6 +876,7 @@ function Review:delete()
     if not self:is_valid() or not M.confirm_delete(prompt) then
       return
     end
+    self:touch_threads()
     local ok, err = comments_mod.delete(self.pr, c)
     if not ok then
       log.error("comment not deleted: %s", post_error(err))
@@ -740,6 +943,69 @@ function Review:reply()
   return true
 end
 
+-- Live threads ----------------------------------------------------------------------------
+
+--- A change to the threads is being made here: a sync already under way may have read
+--- GitHub before it, so its threads are not drawn.
+function Review:touch_threads()
+  self.threads_rev = self.threads_rev + 1
+end
+
+--- The threads of a snapshot, fitted to the head the review shows (`review/live.lua`). The
+--- ones on newer code become `held`.
+---@param snap NvimDiff.GitHub.Snapshot
+---@return NvimDiff.GitHub.Thread[] shown
+function Review:fit_threads(snap)
+  local head = self.pr.head.oid
+  if self.anchors.head ~= head then
+    self.anchors = live.anchors(head)
+  end
+  local current = snap.head.oid == head and snap.base.ref == self.pr.base.ref
+  local shown, held = live.fit(snap.threads, self.anchors, current)
+  self.held = held
+  return shown
+end
+
+--- Draw the threads of a snapshot a sync (or the opening) read, unless they look the same
+--- as the ones drawn. A thread others resolved stays drawn, dimmed, while resolved ones are
+--- hidden, as one resolved here does. Skipped while a comment is being posted: the post
+--- redraws the threads once GitHub has it.
+---@param snap NvimDiff.GitHub.Snapshot
+function Review:show_threads(snap)
+  if not self:is_valid() or (self.compose and self.compose.posting) then
+    return
+  end
+  local list = self:fit_threads(snap)
+  local key = live.fingerprint(list)
+  if key == self.drawn then
+    return
+  end
+  local view = self.view
+  local was = {}
+  for _, t in ipairs(view.threads or {}) do
+    was[t.id] = t.resolved
+  end
+  view.thread_state = view.thread_state or require("nvim-diff.review.threadview").new_state()
+  local ts = view.thread_state
+  for _, t in ipairs(list) do
+    if t.resolved and was[t.id] == false then
+      ts.kept = ts.kept or {}
+      ts.kept[t.id] = true
+    end
+  end
+  self.drawn = key
+  view:set_threads(list)
+end
+
+--- Draw `list` after a change made here, whatever was drawn before.
+---@param list NvimDiff.GitHub.Thread[] Fitted already.
+function Review:draw_threads(list)
+  self:touch_threads()
+  self.drawn = live.fingerprint(list)
+  self.view:set_threads(list)
+  self.sync:show()
+end
+
 --- Redraw the threads after a change: refetched from GitHub, the only source of truth. When
 --- the refetch fails, `patch` applies the change to what is already showing instead, and
 --- the user is told.
@@ -751,8 +1017,11 @@ function Review:reload_threads(what, patch, expand)
     return
   end
   local view = self.view
-  local list, err = threads_mod.fetch(self.pr.target, self.number)
-  if not list then
+  local snap, err = threads_mod.snapshot(self.pr.target, self.number)
+  local list
+  if snap then
+    list = self:fit_threads(snap)
+  else
     log.warn("%s, but the threads could not be reloaded: %s", what, msg(err))
     list = view.threads or {}
     patch(list)
@@ -767,7 +1036,7 @@ function Review:reload_threads(what, patch, expand)
       end
     end
   end
-  view:set_threads(list)
+  self:draw_threads(list)
 end
 
 --- Redraw the threads after a post or an edit, with the thread holding the comment
@@ -795,6 +1064,340 @@ function Review:show_posted(posted, what)
       list[#list + 1] = comment_mod.thread_of(posted)
     end
   end, posted.id)
+end
+
+-- Applying new code -----------------------------------------------------------------------
+
+--- Where the review is, to come back to once new code is applied (`return_to`).
+---@class NvimDiff.ReviewSpot
+---@field path? string The file showing, or selected.
+---@field entry? NvimDiff.FileEntry Its entry; the new list keeps it for a file on the same paths.
+---@field layout? NvimDiff.Layout The layout it was left in.
+---@field mode? NvimDiff.DiffMode The diff mode it was left in.
+---@field forced boolean It was loaded despite `thresholds.defer_lines`.
+---@field at? NvimDiff.FileViewCursor The diff's cursor, when a diff showed.
+---@field lines? string[] `at.side`'s lines as diffed, to find `at`'s line in the new code.
+---@field folded boolean `at` is on a closed context fold.
+---@field stamp? string The entry's stamp: the same one after means the same diff.
+---@field folds? { list: NvimDiff.Fold[], rows: integer } The diff's folds, as `View:reshow` keeps them.
+---@field area boolean The cursor was in the diff, not the panel.
+---@field win integer The window the cursor was in.
+
+---@class NvimDiff.ReviewNewCode
+---@field snap NvimDiff.GitHub.Snapshot What GitHub answered.
+--- The PR moved to GitHub's head and base branch; nil when they are the ones shown.
+---@field pr? NvimDiff.GitHub.PR
+---@field head? NvimDiff.Git.Rev
+---@field left? NvimDiff.Git.Rev The merge-base of the base branch and the head.
+---@field states? table<string, NvimDiff.Viewed>
+---@field changes? NvimDiff.Git.FileChange[] The new diff's files.
+--- Files renamed from the head shown to the new one, old path to new; nil when git could
+--- not say.
+---@field renames? table<string, string>
+
+--- `pr` as GitHub has it in `snap`: its head commit, base branch, title and state. The rest —
+--- node id, fork, the repositories — does not change.
+---@param pr NvimDiff.GitHub.PR
+---@param snap NvimDiff.GitHub.Snapshot
+---@return NvimDiff.GitHub.PR
+local function moved(pr, snap)
+  return vim.tbl_extend("force", pr, {
+    title = snap.title or pr.title,
+    state = snap.state or pr.state,
+    head = vim.tbl_extend("force", pr.head, { oid = snap.head.oid }),
+    base = vim.tbl_extend("force", pr.base, { ref = snap.base.ref, oid = snap.base.oid }),
+  })
+end
+
+--- Whether a comment or the verdict is being written (showing or hidden), with a warning:
+--- it is written on the diff showing, and would be posted against the new head.
+---@return boolean
+function Review:writing()
+  local what
+  if self.compose and self.compose:is_open() then
+    what = "comment"
+  elseif require("nvim-diff.review.verdict").get(self) then
+    what = "verdict"
+  end
+  if what then
+    log.warn("PR #%d: finish or cancel the %s first; it is written on the diff showing", self.number, what)
+  end
+  return what ~= nil
+end
+
+--- Apply the new code GitHub has: new commits, or the PR retargeted to another base branch.
+--- Read in the background — GitHub's head, base branch and threads in one query, the
+--- commits, the viewed marks, the new diff's files — then shown at once (`show_new`): the
+--- head checked out into the slot, the diff, marks and threads of the new code, the same
+--- file showing again. Refused while a comment or the verdict is being written.
+---@return boolean started False when refused.
+function Review:apply()
+  if not self:is_valid() then
+    return false
+  elseif self.applying then
+    log.warn("PR #%d: already applying its new code", self.number)
+    return false
+  elseif self:writing() then
+    return false
+  end
+  -- A check now could draw threads for the head about to go, or announce it again.
+  self.sync:hold()
+  api.nvim_echo({ { ("nvim-diff: reading PR #%d's new code…"):format(self.number) } }, false, {})
+  local threads_rev = self.threads_rev
+  self.applying = job.task(function()
+    return self:read_new()
+  end, function(err, new, why)
+    -- Out of the task: there, git would yield to the editor, keys and all, half-way
+    -- through the checkout. Scheduled, it blocks until done.
+    vim.schedule(function()
+      self.applying = nil
+      if self.closed or job.is_cancelled(err) then
+        return
+      end
+      if err then
+        new, why = nil, tostring(err)
+      end
+      self:show_new(new, why, threads_rev)
+    end)
+  end)
+  return true
+end
+
+--- What applying the new code needs, read in a task. Nothing here changes what shows.
+---@return NvimDiff.ReviewNewCode? new Nil when GitHub could not be read.
+---@return string? why What failed; `new` still holds GitHub's answer when it was read.
+---@throws NvimDiff.Job.Cancelled when the task is cancelled.
+function Review:read_new()
+  local number = self.number
+  local snap, err = threads_mod.snapshot(self.pr.target, number)
+  if not snap then
+    return nil, ("cannot read PR #%d from GitHub: %s"):format(number, msg(err))
+  end
+  local new = { snap = snap }
+  if snap.head.oid == self.pr.head.oid and snap.base.ref == self.pr.base.ref then
+    return new
+  end
+  local pr = moved(self.pr, snap)
+  local refs = { ("refs/pull/%d/head"):format(number) }
+  if pr.base.ref then
+    refs[#refs + 1] = "refs/heads/" .. pr.base.ref
+  end
+  local ok
+  ok, err = fetch.commits(self.repo, self.remote, refs, { pr.head.oid, pr.base.oid })
+  if not ok then
+    return new, ("cannot fetch PR #%d's commits from %s: %s"):format(number, self.remote, msg(err))
+  end
+  local head = rev.commit(pr.head.oid, ("#%d"):format(number))
+  local left
+  left, err = revparse.merge_base(self.repo, rev.commit(pr.base.oid, pr.base.ref), head)
+  if not left then
+    return new, msg(err)
+  end
+  local states
+  states, err = viewed_mod.fetch(pr)
+  if not states then
+    return new, ("cannot read PR #%d's viewed files: %s"):format(number, msg(err))
+  end
+  local changes
+  changes, err = files.diff(self.view.repo, left, head)
+  if not changes then
+    return new, ("cannot list the new code's files: %s"):format(msg(err))
+  end
+  -- Only to follow the file showing to its new path: without them it is found by its path.
+  local renames
+  renames, err = files.renames(self.view.repo, self.view.right, head)
+  if not renames then
+    log.debug("PR #%d: cannot list the files the new code renamed: %s", number, msg(err))
+  end
+  new.pr, new.head, new.left, new.states, new.changes = pr, head, left, states, changes
+  new.renames = renames
+  return new
+end
+
+--- Show the new code `apply` read: check it out into the slot, re-list the files with their
+--- viewed marks, draw the threads as GitHub has them, and show the file that showed. The
+--- head pane lets go of its file before the checkout and gets it back afresh after
+--- (`scene/filebuf.lua` `checked_out`), so nothing prompts and LSP stays on — a fork's yes
+--- included. On any failure the review keeps showing what it did, and says why.
+---@param new? NvimDiff.ReviewNewCode
+---@param why? string
+---@param rev integer `threads_rev` when the reading started.
+function Review:show_new(new, why, threads_rev)
+  if not self:is_valid() then
+    return
+  end
+  local number = self.number
+  if not new then
+    log.error("PR #%d's new code not applied: %s", number, why)
+    self.sync:schedule()
+    return
+  end
+  local snap = new.snap
+  if why or not new.pr or self:writing() then
+    -- What GitHub answered still counts as a check.
+    self.sync:take(snap, false)
+    if why then
+      log.error("PR #%d's new code not applied: %s", number, why)
+    elseif not new.pr then
+      api.nvim_echo({ { ("nvim-diff: PR #%d has no new code to apply"):format(number) } }, false, {})
+    end
+    return
+  end
+  local pr, head = assert(new.pr), assert(new.head)
+  local view = self.view
+  local spot = self:spot()
+
+  -- The head pane lets go of the file first: the checkout changes it under the pane.
+  view:show_note({ "", ("  Applying PR #%d's new code…"):format(number) })
+  vim.cmd.redraw()
+  if self.fork and not self.lsp then
+    -- As on opening: no server left in the slot may read a fork's code without a yes. The
+    -- block (`self.block`) stays, so the files read again below start none either.
+    local stopped = lsp.stop_in(self.path, "checkout")
+    if stopped > 0 then
+      log.info("stopped %d language server(s) rooted in %s before checking a fork PR out there", stopped, self.path)
+    end
+  end
+  local ok, err = worktree.checkout(self.path, head)
+  if not ok then
+    log.error("PR #%d's new code not applied: cannot check it out into %s: %s", number, self.path, msg(err))
+    self:return_to(spot)
+    self.sync:take(snap, false)
+    return
+  end
+  local done = filebuf.checked_out(self.path)
+  log.debug("PR #%d: %d file buffer(s) wiped, %d reloaded after the checkout", number, done.wiped, done.reloaded)
+  if #done.modified > 0 then
+    log.warn("PR #%d's new code changed files with unsaved changes: %s", number, table.concat(done.modified, ", "))
+  end
+
+  self.pr = pr
+  view:retarget(new.left, head, ("#%d %s"):format(number, pr.title or ""), new.changes)
+  for _, entry in ipairs(view.list.entries) do
+    entry.viewed = new.states[entry.path] or "unviewed"
+  end
+  view:render()
+  -- Drawn before the file shows, which then opens with them. A change made here while the
+  -- new code was read is not in `snap`: a check right after brings it.
+  local behind = self.threads_rev ~= threads_rev
+  self:draw_threads(self:fit_threads(snap))
+  self:return_to(spot, new.renames)
+  self.sync:take(snap, false)
+  if behind then
+    self.sync:check(false)
+  end
+  local base = new.pr.base.ref ~= nil and (" on %s"):format(new.pr.base.ref) or ""
+  api.nvim_echo({
+    { ("nvim-diff: PR #%d shows its new code: head %s%s"):format(number, head.oid:sub(1, 7), base) },
+  }, false, {})
+end
+
+--- Where the review is now.
+---@return NvimDiff.ReviewSpot
+function Review:spot()
+  local view, win = self.view, api.nvim_get_current_win()
+  local file, entry = view.file, view.current
+  local open = file ~= nil and not file:is_closed()
+  local at = open and file:cursor() or nil
+  return {
+    path = entry and entry.path,
+    entry = entry,
+    layout = entry and view.layouts[entry],
+    mode = entry and view.modes[entry],
+    forced = entry ~= nil and entry.forced,
+    at = at,
+    lines = at and file:lines(at.side) or nil,
+    folded = at ~= nil and at.lnum ~= nil and file.scene:fold_at(at.side, at.lnum) ~= nil,
+    stamp = entry and entry.stamp,
+    folds = open and { list = file.scene.folds, rows = file.scene.diff.rows } or nil,
+    area = open and view:diff_side(win) ~= nil or win == view.note_win,
+    win = win,
+  }
+end
+
+--- The entry for git path `p`, if the list has one.
+---@param entries NvimDiff.FileEntry[]
+---@param p string
+---@return NvimDiff.FileEntry?
+local function entry_at(entries, p)
+  for _, e in ipairs(entries) do
+    if e.path == p then
+      return e
+    end
+  end
+  return nil
+end
+
+--- `at` — a cursor in the diff of the code shown before — in `file`, the same file's diff
+--- in the new code: the old `lines` of its side diffed against that side's lines now, and
+--- the line taken across (`NvimDiff.Diff:counterpart`) — an unchanged line to itself, a
+--- changed one to the line it became (paired by likeness, `diff/line.lua`), a deleted one to
+--- the line above it. A side the file no longer has (a new base without it) is followed
+--- into the other. The screen row and the column stay (the column clamped to the line).
+---@param file NvimDiff.FileView
+---@param at NvimDiff.FileViewCursor
+---@param lines string[]
+---@return NvimDiff.FileViewCursor
+local function follow(file, at, lines)
+  local side = at.side
+  if #file:lines(side) == 0 then
+    side = side == "old" and "new" or "old"
+  end
+  local now = file:lines(side)
+  local lnum
+  if at.lnum and #lines > 0 and #now > 0 then
+    local d = line_diff.diff(lines, now, { algorithm = config.get().diff.algorithm, inline = false })
+    -- 0: deleted along with every line above it.
+    lnum = math.max(1, math.min(d:counterpart("old", math.min(at.lnum, #lines)) or 1, #now))
+  end
+  return { side = side, lnum = lnum, winline = at.winline, col = at.col }
+end
+
+--- Show `spot`'s file again, after new code was applied (or failed to be): the same file —
+--- under the path the new code renamed it to, else under its own — in the layout and diff
+--- mode it was left in (and with its folds, when the new code left it alone), with the
+--- cursor on the same code (`follow`) at the same screen row, a context fold the new diff
+--- put over that line opened. When the new diff has no such file, the first one not
+--- viewed, as on opening. The cursor goes back to the diff, or to the window it was in.
+---@param spot NvimDiff.ReviewSpot
+---@param renames? table<string, string> Files the new code renamed, old path to new.
+function Review:return_to(spot, renames)
+  local view = self.view
+  local entries = view.list.entries
+  local renamed = spot.path and renames and renames[spot.path]
+  local entry = renamed and entry_at(entries, renamed) or spot.path and entry_at(entries, spot.path) or nil
+  if spot.path and not entry then
+    log.warn("%s is no longer in PR #%d", spot.path, self.number)
+  end
+  local same = entry == spot.entry
+  if entry and not same then
+    -- A new entry — the file under new paths — shows as the old one did.
+    view.layouts[entry] = view.layouts[entry] or spot.layout
+    view.modes[entry] = view.modes[entry] or spot.mode
+  end
+  view:select(entry or self:next_unviewed(nil) or view.tree.order[1], {
+    force = entry ~= nil and not same and spot.forced or nil,
+    -- The same diff — the new code left the file alone: its folds as they were.
+    folds = same and entry ~= nil and entry.stamp == spot.stamp and spot.folds or nil,
+  })
+  local file = view.file
+  local open = file ~= nil and not file:is_closed()
+  local at = spot.at
+  if open and entry and at then
+    at = follow(file, at, assert(spot.lines))
+    if at.lnum and not spot.folded and file.scene:fold_at(at.side, at.lnum) then
+      -- The line showed before: open the context fold over it, as `zv` would.
+      file.scene:expand(at.side, at.lnum)
+    end
+    file:place(at)
+  end
+  local win = spot.win
+  if spot.area then
+    win = open and view:diff_win(at and at.side or "new") or view.note_win
+  end
+  if win and api.nvim_win_is_valid(win) then
+    api.nvim_set_current_win(win)
+  end
 end
 
 -- Resolving threads -----------------------------------------------------------------------
@@ -874,12 +1477,13 @@ function Review:with_thread_id(thread)
   if not thread.local_only then
     return thread
   end
-  local list, err = threads_mod.fetch(self.pr.target, self.number)
-  if not list then
+  local snap, err = threads_mod.snapshot(self.pr.target, self.number)
+  if not snap then
     local why = "it was drawn from your comment alone, as GitHub's threads could not be read back, "
       .. "so it has no thread id yet (%s)"
     return nil, why:format(msg(err))
   end
+  local list = self:fit_threads(snap)
   local first = thread.comments[1]
   local found
   for _, t in ipairs(list) do
@@ -893,7 +1497,7 @@ function Review:with_thread_id(thread)
   if found and state and state.expanded[thread.id] ~= nil then
     state.expanded[found.id] = state.expanded[thread.id]
   end
-  self.view:set_threads(list)
+  self:draw_threads(list)
   if not found then
     return nil, "GitHub no longer lists it"
   end
@@ -934,13 +1538,14 @@ function Review:set_resolved(thread, resolved)
     log.warn("you cannot %s this thread", verb)
     return false
   end
+  self:touch_threads()
   local state, err = (resolved and threads_mod.resolve or threads_mod.unresolve)(self.pr.target.host, real)
   if not state then
     log.error("cannot %s this thread: %s", verb, post_error(err))
     return false
   end
   self:apply_resolved(real, state)
-  self.view:set_threads(self.view.threads or {})
+  self:draw_threads(self.view.threads or {})
   return true
 end
 
@@ -1024,7 +1629,8 @@ function Review:reply_and_resolve()
   end)
 end
 
---- Wipe every buffer on a file inside the worktree: the files are about to be deleted.
+--- Wipe every buffer on a file inside the slot: the next review checks another PR out
+--- over those files.
 function Review:wipe_buffers()
   local root = path.real(self.path) or self.path
   local modified = {}
@@ -1042,10 +1648,7 @@ function Review:wipe_buffers()
   end
 end
 
---- End the review: close its view and tabpage, wipe buffers on the worktree's files and
---- remove the worktree. Idempotent.
----@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
---- `:tcd` tabpage `tab` back to where the review was started, out of the worktree.
+--- `:tcd` tabpage `tab` back to where the review was started, out of the slot.
 ---@param tab integer
 function Review:leave_worktree(tab)
   if api.nvim_tabpage_is_valid(tab) then
@@ -1055,12 +1658,36 @@ function Review:leave_worktree(tab)
   end
 end
 
+--- `leave_worktree` for the tabpages jumps opened (`tabs`) whose tab-local directory is
+--- still in the slot.
+function Review:leave_tabs()
+  local root = path.real(self.path)
+  for _, tab in ipairs(self.tabs) do
+    if api.nvim_tabpage_is_valid(tab) then
+      local nr = api.nvim_tabpage_get_number(tab)
+      if vim.fn.haslocaldir(-1, nr) == 1 and path.is_under(path.real(vim.fn.getcwd(-1, nr)), root) then
+        self:leave_worktree(tab)
+      end
+    end
+  end
+end
+
+--- End the review: stop syncing, close its view and tabpage, wipe buffers on the slot's
+--- files and release the slot, keeping its folder. Idempotent.
+---@param opts? { windows?: boolean } `windows = false` leaves windows and buffers alone.
 function Review:close(opts)
   local windows = not (opts and opts.windows == false)
   if self.closed then
     return
   end
   self.closed = true
+  if self.applying then
+    self.applying:cancel()
+    self.applying = nil
+  end
+  if self.sync then
+    self.sync:close()
+  end
   if by_number[self.number] == self then
     by_number[self.number] = nil
   end
@@ -1087,16 +1714,30 @@ function Review:close(opts)
     if not self.view.closed then
       pcall(self.view.close, self.view)
     end
-    -- The last tabpage survives its view; take it back out of the worktree.
+    -- The last tabpage survives its view; take it back out of the slot, and the tabpages
+    -- jumps opened that wiping their slot file does not close.
     self:leave_worktree(tab)
+    self:leave_tabs()
     self:wipe_buffers()
+    -- No file of the slot is open any more, and the next review checks another PR out under
+    -- them. Quitting Neovim stops every server anyway.
+    local stopped = lsp.stop_in(self.path, "close")
+    if stopped > 0 then
+      log.debug("PR #%d review ended; stopped %d language server(s) rooted in %s", self.number, stopped, self.path)
+    end
   else
-    -- Leaving the cwd inside the removed worktree breaks `VimLeave` handlers that read it.
+    -- Quitting: nothing saved on the way out (a session) may keep the cwd in the slot.
     self:leave_worktree(self.view.tab)
+    self:leave_tabs()
   end
-  local ok, err = worktree.remove(self.repo, self.number)
+  -- Its files are closed by now; the slot is no review's until the next one checks out.
+  if self.block then
+    self.block:lift()
+    self.block = nil
+  end
+  local ok, err = worktree.release(self.repo, self.path)
   if not ok then
-    log.error("cannot remove PR #%d's worktree %s: %s", self.number, self.path, msg(err))
+    log.error("cannot release PR #%d's review slot %s: %s", self.number, self.path, msg(err))
   end
 end
 

@@ -7,17 +7,12 @@
 
 local M = {}
 
---- Validate and apply user options, define the plugin's highlight groups, and schedule
---- the one-time background prune of leftover PR worktrees.
+--- Validate and apply user options and define the plugin's highlight groups.
 ---@param opts NvimDiff.Config? Partial; anything omitted keeps its default.
 ---@return NvimDiff.Config config The merged configuration.
 function M.setup(opts)
   local config = require("nvim-diff.config").setup(opts)
   require("nvim-diff.ui.hl").setup()
-  -- Deferred and asynchronous: startup never waits on git.
-  vim.schedule(function()
-    require("nvim-diff.git.worktree").prune_on_startup()
-  end)
   return config
 end
 

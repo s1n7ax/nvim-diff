@@ -46,6 +46,8 @@ local M = {}
 
 ---@class NvimDiff.FileViewSpec
 ---@field diff NvimDiff.Diff The line diff of `old.lines` and `new.lines`.
+--- A side's `file` (the real file in its pane) is for side-by-side only: unified shows a
+--- scratch pane, as always.
 ---@field old NvimDiff.PairSide
 ---@field new NvimDiff.PairSide
 ---@field layout? NvimDiff.Layout Default: `config.layout`.
@@ -61,6 +63,16 @@ local M = {}
 ---@field on_scene? fun(view: NvimDiff.FileView)
 --- Context folding, as `NvimDiff.PairSpec.fold`, for both layouts.
 ---@field fold? false|{ context?: integer, step?: integer }
+--- The folds to open with instead of the computed ones: another view's of the same diff
+--- (the file shown again), as the layout toggle carries them over.
+---@field folds? NvimDiff.Fold[]
+--- Side-by-side only, as `NvimDiff.PairSpec.winbar` and `.signs`; unified keeps its header
+--- line and has no sign column.
+---@field winbar? boolean
+---@field signs? boolean
+--- A jump to another file in any pane of either layout goes here instead of replacing the
+--- pane's buffer (`NvimDiff.PairSpec.on_jump`).
+---@field on_jump? fun(jump: NvimDiff.PaneJump)
 
 ---@class NvimDiff.FileView
 ---@field layout NvimDiff.Layout
@@ -86,6 +98,8 @@ View.__index = View
 ---@field side NvimDiff.Side
 ---@field lnum? integer Nil on the header or the trailer.
 ---@field winline integer
+--- 0-based byte column of the cursor; 0 on a closed fold. `place` clamps it to the line.
+---@field col? integer
 
 ---@param spec NvimDiff.FileViewSpec
 ---@return NvimDiff.FileView
@@ -105,9 +119,9 @@ function M.open(spec)
   self.mode = mode == "structural" and self:structural_diff() and "structural" or "line"
   local wins = spec.wins or {}
   if layout == "unified" then
-    self:open_unified(wins.win)
+    self:open_unified(wins.win, spec.folds)
   else
-    self:open_pair(wins.old and wins.new and { old = wins.old, new = wins.new } or nil)
+    self:open_pair(wins.old and wins.new and { old = wins.old, new = wins.new } or nil, spec.folds)
   end
   self:notify()
   return self
@@ -202,7 +216,15 @@ end
 ---@param folds? NvimDiff.Fold[] Folds to carry over from the scene being replaced.
 function View:open_unified(win, folds)
   local s = self.spec
-  self.scene = unified.open({ diff = self:diff(), old = s.old, new = s.new, win = win, fold = s.fold, folds = folds })
+  self.scene = unified.open({
+    diff = self:diff(),
+    old = s.old,
+    new = s.new,
+    win = win,
+    fold = s.fold,
+    folds = folds,
+    on_jump = s.on_jump,
+  })
   self:after_open({ self.scene.buf })
 end
 
@@ -210,7 +232,17 @@ end
 ---@param folds? NvimDiff.Fold[] Folds to carry over from the scene being replaced.
 function View:open_pair(wins, folds)
   local s = self.spec
-  self.scene = pair.open({ diff = self:diff(), old = s.old, new = s.new, wins = wins, fold = s.fold, folds = folds })
+  self.scene = pair.open({
+    diff = self:diff(),
+    old = s.old,
+    new = s.new,
+    wins = wins,
+    fold = s.fold,
+    folds = folds,
+    winbar = s.winbar,
+    signs = s.signs,
+    on_jump = s.on_jump,
+  })
   self:after_open({ self.scene.bufs.old, self.scene.bufs.new })
 end
 
@@ -255,7 +287,7 @@ function View:cursor()
   if self.layout == "unified" then
     local u = self.scene --[[@as NvimDiff.Unified]]
     local winline = u:winline()
-    local bl = api.nvim_win_get_cursor(u.win)[1]
+    local bl, col = unpack(api.nvim_win_get_cursor(u.win))
     local f = u:fold_on_line(bl)
     if f then
       -- The band is neither side in particular: keep the remembered side if it has lines.
@@ -265,14 +297,14 @@ function View:cursor()
         side = side == "old" and "new" or "old"
         first = fold.side_lines(u.diff, f, side)
       end
-      return { side = side, lnum = first, winline = winline }
+      return { side = side, lnum = first, winline = winline, col = 0 }
     end
     local side, lnum = u:cursor_pos()
     local l = u.layout.lines[bl - 1]
     if l and l.kind == "context" then
       side, lnum = self.side, l[self.side]
     end
-    return { side = side or self.side, lnum = lnum, winline = winline }
+    return { side = side or self.side, lnum = lnum, winline = winline, col = col }
   end
   local p = self.scene --[[@as NvimDiff.Pair]]
   local side = p:side_of(cur) or "new"
@@ -281,15 +313,17 @@ function View:cursor()
   local closed = api.nvim_win_call(win, function()
     return vim.fn.foldclosed(".")
   end)
+  local col = api.nvim_win_get_cursor(win)[2]
   if closed > 0 then
     lnum = p.map:file_line(side, closed)
-  elseif not lnum and api.nvim_win_get_cursor(win)[1] > 1 then
+    col = 0
+  elseif not lnum and api.nvim_win_get_cursor(win)[1] == p.map:trailer_line(side) then
     lnum = p.diff[side .. "_count"] -- the trailer: the side's last line
   end
   local view = api.nvim_win_call(win, vim.fn.winsaveview)
   local at, top = p.map:line_view(side, view.lnum), p.map:top_view(side, view.topline, view.topfill)
   local winline = at and top and at - top + 1 or api.nvim_win_call(win, vim.fn.winline)
-  return { side = side, lnum = lnum, winline = winline }
+  return { side = side, lnum = lnum, winline = winline, col = col }
 end
 
 --- The file line buffer line `bl` of scene window `win` shows, and its side. In
@@ -328,21 +362,60 @@ end
 ---@param bl integer
 ---@param winline integer
 local function place_pair(p, side, bl, winline)
-  local win = p.wins[side]
-  local v = math.max(0, math.min((p.map:line_view(side, bl) or 0) - (winline - 1), p.map:max_top()))
-  local tl, tf = p.map:view_top(side, v)
-  api.nvim_win_call(win, function()
-    vim.fn.winrestview({ topline = tl or 1, topfill = tf or 0, lnum = bl, col = 0, curswant = 0 })
-  end)
-  p.sync:sync(win)
+  local v = math.max(0, math.min((p.map:line_view(side, bl) or 0) - (winline - 1), p.map:max_top(side)))
+  p.sync:show(v, p.wins[side], bl)
 end
 
---- Put `side`'s cursor on file line `lnum`, in whichever layout is showing, and bring the
---- other pane along (side-by-side) or just centre it (unified).
+--- Put `side`'s cursor on file line `lnum` (at byte `col`, default 0), in whichever layout
+--- is showing, and bring the other pane along (side-by-side) or just centre it (unified).
+--- A context fold over the line opens whole first, as `zv` does.
 ---@param side NvimDiff.Side
 ---@param lnum integer
-function View:jump(side, lnum)
-  self.scene:jump(side, lnum)
+---@param col? integer
+function View:jump(side, lnum, col)
+  if self.scene:fold_at(side, lnum) then
+    self.scene:expand(side, lnum)
+  end
+  self.scene:jump(side, lnum, col)
+end
+
+--- Put `win`'s cursor on byte `col` of its line, or the line's end when it is shorter.
+---@param win integer
+---@param col? integer
+local function set_col(win, col)
+  if col and col > 0 and api.nvim_win_is_valid(win) then
+    local lnum = api.nvim_win_get_cursor(win)[1]
+    local len = #(api.nvim_buf_get_lines(api.nvim_win_get_buf(win), lnum - 1, lnum, false)[1] or "")
+    api.nvim_win_set_cursor(win, { lnum, math.max(0, math.min(col, len - 1)) })
+  end
+end
+
+--- Put the cursor back where `at` says — a `cursor()` of this view or of another view of the
+--- same diff: the same file line of the same side, on the same screen row as far as the
+--- file allows (the other pane comes along), at the same column as far as the line is long.
+--- Moves no focus.
+---@param at NvimDiff.FileViewCursor
+function View:place(at)
+  if self:is_closed() then
+    return
+  end
+  if self.layout == "unified" then
+    local u = self.scene --[[@as NvimDiff.Unified]]
+    u:place(at.lnum and u:buf_line(at.side, at.lnum) or 1, at.winline)
+    if at.lnum then
+      set_col(u.win, at.col)
+    end
+    return
+  end
+  local p = self.scene --[[@as NvimDiff.Pair]]
+  local bl = 1
+  if at.lnum and p.diff[at.side .. "_count"] > 0 then
+    bl = p:buf_line(at.lnum)
+  end
+  place_pair(p, at.side, bl, at.winline)
+  if at.lnum and api.nvim_win_get_cursor(p.wins[at.side])[1] == bl then
+    set_col(p.wins[at.side], at.col)
+  end
 end
 
 --- Flip to the other layout.
@@ -365,9 +438,8 @@ function View:set_layout(layout)
     self:open_unified(win, p.folds)
     p:close({ keep = win })
     self.layout = "unified"
-    local u = self.scene --[[@as NvimDiff.Unified]]
-    api.nvim_set_current_win(u.win)
-    u:place(at.lnum and u:buf_line(at.side, at.lnum) or 1, at.winline)
+    api.nvim_set_current_win(self.scene.win)
+    self:place(at)
   else
     local u = old_scene --[[@as NvimDiff.Unified]]
     local win = u.win
@@ -375,14 +447,8 @@ function View:set_layout(layout)
     self:open_pair({ old = left, new = win }, u.folds)
     u:close({ keep = win })
     self.layout = "side_by_side"
-    local p = self.scene --[[@as NvimDiff.Pair]]
-    local pwin = p.wins[at.side]
-    api.nvim_set_current_win(pwin)
-    local bl = 1
-    if at.lnum and p.diff[at.side .. "_count"] > 0 then
-      bl = p:buf_line(at.lnum)
-    end
-    place_pair(p, at.side, bl, at.winline)
+    api.nvim_set_current_win(self.scene.wins[at.side])
+    self:place(at)
   end
   self:notify()
 end

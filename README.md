@@ -24,10 +24,13 @@ review mode on top.
 - **Every diffview workflow**: working tree, index, branch to branch (merge-base by
   default, like a PR), file / folder / repository / line history, range compare, and a
   three-way merge conflict view with a base pane.
-- **GitHub PR review**: the PR is checked out into its own git worktree so LSP and tests
-  work on its code; viewed marks sync with GitHub; comment threads show inline and expand
+- **GitHub PR review**: the PR is checked out into a kept git worktree (a review slot) so
+  LSP and tests work on its code, and packages you installed there survive to the next
+  review; viewed marks sync with GitHub; comment threads show inline and expand
   in place; comments, replies, edits, suggestions, resolve and the review verdict all post
-  straight to GitHub. github.com and GitHub Enterprise Server.
+  straight to GitHub; the open review checks GitHub every minute, says when new commits
+  land or the PR is merged, and applies new commits on a key, in place. github.com and
+  GitHub Enterprise Server.
 
 Side-by-side is the default layout; `g<C-x>` flips a file to unified.
 
@@ -140,6 +143,9 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | --- | --- |
 | `<leader><space>` | mark the file viewed on GitHub, jump to the next unviewed one |
 | `<leader><BS>` | clear the viewed mark |
+| `<C-r>` | check GitHub now for new commits, a new base branch or a merge |
+| `<leader>A` | apply the new code a check found, in the same review |
+| `<leader>L` | a PR from a fork, after no: ask `Start LSP? [y/N]` again |
 | `<leader>cc` | in the file panel: a file-level comment on the file under the cursor |
 
 **PR review** — diff panes (comment threads)
@@ -198,12 +204,16 @@ require("nvim-diff").setup({
   },
 
   buffers = {
-    lru_size = 64, -- committed-file diff buffers kept for reuse; 0 keeps none
+    lru_size = 64, -- committed-file diff buffers (and review head-pane files) kept; 0 keeps none
   },
 
   git = { bin = "git", timeout_ms = 15000 },
-  -- `host = "ghe.example.com"` overrides the host taken from the `origin` remote
-  github = { bin = "gh", timeout_ms = 20000 },
+  github = {
+    bin = "gh",
+    timeout_ms = 20000,
+    -- `host = "ghe.example.com"` overrides the host taken from the `origin` remote
+    sync_interval_ms = 60000, -- an open review checks GitHub this often (min 10000); false: key only
+  },
 
   highlights = {}, -- group -> attributes, or group -> name of a group to link to
 
@@ -239,7 +249,13 @@ require("nvim-diff").setup({
       next_conflict = "]x",
       prev_conflict = "[x",
     },
-    review = { mark_viewed = "<leader><space>", unmark_viewed = "<leader><BS>" },
+    review = {
+      mark_viewed = "<leader><space>",
+      unmark_viewed = "<leader><BS>",
+      sync = "<C-r>",
+      apply = "<leader>A",
+      start_lsp = "<leader>L", -- a fork PR: ask `Start LSP? [y/N]` again
+    },
     threads = {
       toggle = "<CR>",
       next = "]t",
@@ -288,7 +304,7 @@ highlights = {
 | Comment threads | `NvimDiffThreadBorder` `NvimDiffThreadBorderActive` `NvimDiffThreadBadgeUnresolved` `NvimDiffThreadBadgeResolved` `NvimDiffThreadAuthor` `NvimDiffThreadBody` `NvimDiffThreadMeta` `NvimDiffThreadResolved` |
 | Comment split | `NvimDiffCommentHeader` `NvimDiffCommentHint` `NvimDiffCommentError` `NvimDiffCommentPosting` |
 | Key menu | `NvimDiffHelpKey` `NvimDiffHelpBorder` `NvimDiffHelpTitle` |
-| File panel | `NvimDiffPanelTitle` `NvimDiffPanelDir` `NvimDiffPanelPath` `NvimDiffPanelOldPath` `NvimDiffPanelInsertions` `NvimDiffPanelDeletions` `NvimDiffPanelSelected` `NvimDiffPanelViewed` `NvimDiffPanelRechanged` `NvimDiffPanelDeferred` `NvimDiffPanelStatusAdded` `NvimDiffPanelStatusModified` `NvimDiffPanelStatusDeleted` `NvimDiffPanelStatusConflicted` |
+| File panel | `NvimDiffPanelTitle` `NvimDiffPanelDir` `NvimDiffPanelPath` `NvimDiffPanelOldPath` `NvimDiffPanelInsertions` `NvimDiffPanelDeletions` `NvimDiffPanelSelected` `NvimDiffPanelViewed` `NvimDiffPanelRechanged` `NvimDiffPanelDeferred` `NvimDiffPanelStatusAdded` `NvimDiffPanelStatusModified` `NvimDiffPanelStatusDeleted` `NvimDiffPanelStatusConflicted` `NvimDiffPanelStale` `NvimDiffPanelSync` |
 | Conflict result | `NvimDiffConflictMarker` `NvimDiffConflictOurs` `NvimDiffConflictBase` `NvimDiffConflictTheirs` |
 | History panel | `NvimDiffHistoryHash` `NvimDiffHistoryDate` `NvimDiffHistoryAuthor` `NvimDiffHistoryRename` `NvimDiffHistoryError` `NvimDiffHistoryMarked` `NvimDiffHistoryLineRange` |
 
@@ -298,11 +314,100 @@ colours.
 
 ## PR review in short
 
-`:NvimDiffPR 42` fetches the PR through `gh`, checks its head out into
-`<git dir>/nvim-diff/pr-42` (a separate worktree — your branch and uncommitted changes are
-never touched) and opens it in a tabpage whose `:tcd` is that worktree. The diff is
-computed locally with git. Closing the tab removes the worktree. Nothing is kept locally:
-reopening a PR refetches viewed marks and threads from GitHub.
+`:NvimDiffPR 42` fetches the PR through `gh`, checks its head out, detached, into a
+review slot — a separate worktree, so your branch and uncommitted changes are never
+touched — and opens it in a tabpage whose `:tcd` is that slot. The diff is computed
+locally with git. Reopening a PR refetches viewed marks and threads from GitHub.
+
+Review slots live outside the repository, in Neovim's data directory:
+`stdpath("data")/nvim-diff/slots/<repo>-<hash>/review-1` (for example
+`~/.local/share/nvim/nvim-diff/slots/myapp-3f9a1c0e2b7d/review-1`), one folder per
+repository. Outside the repository, a language server looking upward for its project
+root from a slot file finds the slot, not your checkout. Review slots are kept:
+
+- Closing the review releases its slot but leaves the folder on disk. The next PR is
+  checked out into the same folder, so whatever git ignores there — `node_modules/`, a
+  virtualenv, build output — is still in place. Install packages in a slot by hand once;
+  nvim-diff never runs an install or setup command, and git hooks are off for its
+  checkouts.
+- Each checkout discards changes to tracked files and removes untracked files git does
+  not ignore. Anything you want kept must be ignored (`.gitignore`, `.git/info/exclude` or
+  your global excludes file).
+- A second review open at the same time — in the same Neovim or another — gets its own
+  slot, `review-2`, and so on. A slot is taken by locking it (`git worktree lock`) with the
+  Neovim's pid; a slot locked by a Neovim that crashed is free again.
+- nvim-diff never removes a slot. `:checkhealth nvim-diff` lists them; remove one that is
+  not in use with `git worktree remove --force <path>`.
+- Deleting or moving a repository leaves its slots behind (a moved repository gets new
+  ones). `:checkhealth nvim-diff` lists those too, from any directory, for you to remove.
+
+In side-by-side, the head (right) pane is the file itself in the slot, read-only, so your
+language servers attach to it: hover, go to definition, references, and diagnostics with
+signs in the sign column. The diff colours stay in that pane — the same
+file in another window looks and maps keys as usual. Virtual lines other plugins draw there
+(code lens, diagnostics as `virtual_lines`) get matching blank rows in the base pane, so
+rows stay aligned. A real file cannot scroll past its last line, so through lines deleted at
+the end of a file the head pane stays on its last line and draws the rest of the filler over
+it; the base pane scrolls to the end. A file on disk that is not exactly the PR's (changed
+since the checkout, an encoding conversion, a BOM, an LFS filter) shows as a copy without
+LSP, and so does the unified layout.
+
+The pane keeps its own window options: an `LspAttach` handler or another plugin setting
+`foldmethod=expr`, a `statuscolumn` or a `winbar` there is undone at once, and what it set
+goes to your own windows on the file once the pane moves on (nvim-ufo's folds come back
+too). A language server rooted outside the slot gets a warning. A file that changes on
+disk while the pane shows it is not reloaded and does not prompt: the pane shows a copy
+instead, with a warning. Ending the review shuts down the language servers rooted only in
+its slot (killed if still running after 5 seconds).
+
+A jump to another file never replaces a review window's file: go to definition,
+declaration, type definition or implementation and `<C-]>` from the head pane, and from
+any window of the review — base, head (real file or copy), unified, the file panel, the
+note, the thread list — a quickfix or location list entry (references), a picker's pick,
+`:edit`, `:buffer`. A file the PR changed is selected in the review, with the cursor on
+the jump's line (in its own layout: an added file opens unified). Any other file opens on
+that line in the review's files tabpage, one per review: the first such jump opens it next
+to the review, every later one shows its file there (in the window last used, if you split
+it), and `<C-o>` there goes back to the file and line shown before. A file there is
+read-only when it is the PR's code in the slot, served by the same language servers (none
+on a fork PR after a no); as it is when it is outside the slot (a library, the standard
+library). A list entry no pane can take, which Neovim would split into the review's
+tabpage, goes the same way. Applying new code reads the slot files the files tabpage shows
+again; ending the review closes it when it shows a slot file and otherwise takes it out of
+the slot (`:tcd`).
+
+A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
+code (build scripts, macros, a linter config), so a fork's code gets none until you say
+yes; Enter shows the copy without LSP. The answer lasts until the review closes and is not
+saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
+the head pane to the real file on the same line. Before a fork PR is checked out into a
+slot, every language server still running there from an earlier review is killed at once.
+After a no, no language server starts on any file in the slot while the review is open —
+opened with `:e`, a picker, `gf` or a quickfix entry, in any tabpage — nor rooted in the
+slot; the first one kept off gets a warning naming `<leader>L`. Files outside the slot and
+your servers rooted elsewhere are left alone. Applying new code keeps the block; a yes on
+`<leader>L` lifts it for the rest of the review, and slot files already open get the
+servers `vim.lsp.enable` has for them (others once you `:e` the file). Neovim cannot refuse
+a server before its process starts, so nvim-diff wraps `vim.lsp.start` and
+`vim.lsp.buf_attach_client` and refuses there; one started past them is killed on
+`LspAttach`.
+
+While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
+query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
+in the panel; the review keeps the diff it opened with until you press `<leader>A`. New
+threads, replies, edits and resolves from others are drawn at once, in place; a new thread
+on code the review does not show yet waits, counted in the panel. A merged or closed PR
+gets a notice and syncing stops; the review stays usable. Network errors retry quietly (a
+warning after three in a row), a rate limit pauses syncing until it lifts.
+
+`<leader>A` applies the new code in the same review: the commits are fetched in the
+background, then the new head is checked out into the same slot, and the file list, viewed
+marks and threads are the new code's. The file that showed shows again (under its new path
+if the new commits renamed it), with the cursor on the same code at the same screen row and
+column: its line is followed through the new commits. The head pane lets go of its file before the checkout and loads it afresh after,
+so nothing prompts and language servers stay on (a fork's yes included). It is refused
+while a comment or the verdict is being written, since that was written on the diff
+showing.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,
@@ -313,9 +418,11 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- Nothing is refetched while a review is open; reopen the PR to see new comments.
+- Applying new code that changed the file showing folds it afresh, so the cursor's line sits
+  higher on screen than before when the folds above it leave too few rows.
+- `<C-o>` and `<C-t>` do not go back from the files tabpage into the review: `<C-o>` there
+  goes back only through the files shown there.
 - File-level comments need a GHES version that supports `subject_type=file`.
-- Opening the same PR in two Neovim instances hands the worktree to the second.
 - Structural diff ignores injected languages and has no notion of moved code; it runs
   synchronously when a file opens.
 - No hunk or file staging, and no staged/unstaged split in the working-tree view.

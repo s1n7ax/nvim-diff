@@ -50,7 +50,7 @@ M.groups = {
   -- padding opposite a comment thread, which carries no mark at all.
   NvimDiffFiller = { dark = { fg = "#3b4048" }, light = { fg = "#c4c9d2" } },
 
-  -- The mandatory header at buffer line 1 of every pane.
+  -- The header at buffer line 1 of every pane, or its winbar in a PR review's pair.
   NvimDiffHeader = {
     dark = { fg = "#8a94a6", bg = "#20242c", bold = true },
     light = { fg = "#4a5262", bg = "#e6e9ee", bold = true },
@@ -116,6 +116,10 @@ M.groups = {
     light = { link = "NvimDiffPanelDeletions" },
   },
   NvimDiffPanelStatusConflicted = { dark = { link = "WarningMsg" }, light = { link = "WarningMsg" } },
+  -- A PR review's sync state: new commits or a new base on GitHub that the review does not
+  -- show yet, and syncing stopped (merged, closed) or failing.
+  NvimDiffPanelStale = { dark = { link = "DiagnosticWarn" }, light = { link = "DiagnosticWarn" } },
+  NvimDiffPanelSync = { dark = { link = "DiagnosticInfo" }, light = { link = "DiagnosticInfo" } },
 
   -- The result buffer of a merge conflict view: the marker lines and the three sections.
   NvimDiffConflictMarker = {

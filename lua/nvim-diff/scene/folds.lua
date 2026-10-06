@@ -68,8 +68,7 @@ function M.apply(pair, side)
   for _, f in ipairs(pair.folds) do
     local a, b = fold.side_lines(diff, f, side)
     if a and b then
-      -- Buffer line = file line + 1: the header is line 1.
-      list[#list + 1] = { first = a + 1, last = b + 1 }
+      list[#list + 1] = { first = pair:buf_line(a), last = pair:buf_line(b) }
     end
   end
   M.build(pair.wins[side], list)

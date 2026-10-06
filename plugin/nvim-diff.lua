@@ -51,7 +51,7 @@ vim.api.nvim_create_user_command("NvimDiffPR", function(args)
   require("nvim-diff.views.review").command(args.args)
 end, {
   nargs = 1,
-  desc = "nvim-diff: review a GitHub PR by number, checked out into its own worktree and tabpage",
+  desc = "nvim-diff: review a GitHub PR by number, checked out into a kept review worktree, in its own tabpage",
 })
 
 vim.api.nvim_create_user_command("NvimDiffVerdict", function(args)
