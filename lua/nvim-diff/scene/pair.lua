@@ -228,7 +228,30 @@ function M.open(spec)
       catch.watch(self.wins[side], self.bufs[side], {
         on_jump = spec.on_jump,
         on_back = function(win)
+          if self.closed or not self.sync then
+            return
+          end
+          -- The sync puts the panes back in line after the jump's buffer was in one
+          -- of them, but it moves the other pane's cursor to its counterpart line at
+          -- column 0 — dropping the column a jump from this pane never touched (a jump
+          -- from the base pane to a file the diff does not list left the head pane at
+          -- column 0). The line is the counterpart of the view put back, so the column
+          -- it had still applies: kept, clamped to the line.
+          local cols = {}
+          for _, s in ipairs(SIDES) do
+            local w = self.wins[s]
+            if w ~= win and api.nvim_win_is_valid(w) then
+              cols[w] = api.nvim_win_get_cursor(w)[2]
+            end
+          end
           self.sync:sync(win)
+          for w, col in pairs(cols) do
+            if api.nvim_win_is_valid(w) then
+              local cur = api.nvim_win_get_cursor(w)
+              local line = api.nvim_buf_get_lines(api.nvim_win_get_buf(w), cur[1] - 1, cur[1], false)[1] or ""
+              pcall(api.nvim_win_set_cursor, w, { cur[1], math.min(col, math.max(0, #line - 1)) })
+            end
+          end
         end,
       })
     end
