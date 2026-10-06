@@ -108,6 +108,10 @@ end
 --- Window to split beside (to its right). Default: the current window.
 ---@field win? integer
 ---@field width? integer Columns; default 50.
+--- The buffer is hidden, not wiped, when another one takes its window for a moment (a PR
+--- review gives back what is opened there, `scene/catch.lua`); it goes when its window
+--- closes.
+---@field hold? boolean
 
 ---@class NvimDiff.SideList
 ---@field buf integer
@@ -147,6 +151,21 @@ function M.open(spec)
     api.nvim_set_option_value(opt, v, { win = win, scope = "local" })
   end
   local self = setmetatable({ buf = buf, win = win, items = spec.items }, SideList)
+  if spec.hold then
+    vim.bo[buf].bufhidden = "hide"
+    api.nvim_create_autocmd("WinClosed", {
+      pattern = tostring(win),
+      once = true,
+      callback = function()
+        -- After the event: a buffer cannot go while its window closes.
+        vim.schedule(function()
+          if api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) == 0 then
+            pcall(api.nvim_buf_delete, buf, { force = true })
+          end
+        end)
+      end,
+    })
+  end
   vim.keymap.set("n", "q", function()
     self:close()
   end, { buffer = buf, nowait = true, desc = "nvim-diff: General: Close list" })

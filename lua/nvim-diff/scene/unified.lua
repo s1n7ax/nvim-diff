@@ -16,6 +16,7 @@
 ---     })
 
 local buffer = require("nvim-diff.scene.buffer")
+local catch = require("nvim-diff.scene.catch")
 local event = require("nvim-diff.core.event")
 local fold = require("nvim-diff.render.fold")
 local folds_scene = require("nvim-diff.scene.folds")
@@ -39,6 +40,9 @@ local M = {}
 ---@field fold? false|{ context?: integer, step?: integer }
 --- The folds to open with instead of the computed ones, as `NvimDiff.PairSpec.folds`.
 ---@field folds? NvimDiff.Fold[]
+--- The pane window is not fixed to its buffer, and a jump to another file there goes to
+--- `on_jump`, as `NvimDiff.PairSpec.on_jump`.
+---@field on_jump? fun(jump: NvimDiff.PaneJump)
 
 ---@class NvimDiff.Unified
 ---@field diff NvimDiff.Diff
@@ -98,6 +102,7 @@ function M.open(spec)
     header = spec.header or M.header(spec.old.label, spec.new.label),
     name = spec.name,
     lang = spec.new.lang or spec.old.lang,
+    hold = spec.on_jump ~= nil,
   })
 
   local placeholder
@@ -109,6 +114,9 @@ function M.open(spec)
     placeholder = api.nvim_win_get_buf(self.win)
   end
   window.pane(self.win, self.buf, { statuscolumn = unified.statuscolumn(sidebyside.number_width(diff)) })
+  if spec.on_jump then
+    catch.watch(self.win, self.buf, { on_jump = spec.on_jump })
+  end
   folds_scene.setup_window(self.win)
   self:apply_folds()
   api.nvim_win_set_cursor(self.win, { 1, 0 })
@@ -390,6 +398,7 @@ function Unified:close(opts)
   self.closed = true
   local keep = opts and opts.keep
   pcall(api.nvim_del_augroup_by_id, self.augroup)
+  catch.unwatch(self.win, self.buf)
   if api.nvim_win_is_valid(self.win) then
     api.nvim_set_option_value("winfixbuf", false, { win = self.win, scope = "local" })
     if self.win == keep then

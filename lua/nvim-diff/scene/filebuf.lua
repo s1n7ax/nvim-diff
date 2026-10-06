@@ -65,6 +65,7 @@
 
 local blob = require("nvim-diff.git.blob")
 local buffer = require("nvim-diff.scene.buffer")
+local catch = require("nvim-diff.scene.catch")
 local config = require("nvim-diff.config")
 local log = require("nvim-diff.core.log")
 local lsp = require("nvim-diff.core.lsp")
@@ -409,9 +410,11 @@ end
 
 --- The buffer was entered in a window. Another window than the pane that came with the
 --- pane's options gets the user's back: measured, Neovim gives a new window on a buffer the
---- options and folds of a window already showing it, and a split copies its window's. The
---- keys follow the window that is current once the event is over (`nvim_win_set_buf` on
---- another window makes that one current only while its autocmds run).
+--- options and folds of a window already showing it, and a split copies its window's. Not
+--- a window that gives the buffer back at once (another pane of a review, `scene/catch.lua`):
+--- its own buffer's options come back with it. The keys follow the window that is current
+--- once the event is over (`nvim_win_set_buf` on another window makes that one current only
+--- while its autocmds run).
 function Claim:on_enter()
   if self.released then
     return
@@ -419,6 +422,7 @@ function Claim:on_enter()
   local win = api.nvim_get_current_win()
   if
     win ~= self.win
+    and not catch.is_watched(win)
     and self:holding()
     and api.nvim_win_get_buf(win) == self.buf
     and vim.wo[win].statuscolumn == vim.wo[self.win].statuscolumn

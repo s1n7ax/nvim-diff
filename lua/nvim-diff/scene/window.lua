@@ -5,6 +5,7 @@
 --- outlives the pane, which `reset` handles. The global-only options that affect diffs
 --- (`diffopt`, `diffexpr`, `scrollopt`, `splitkeep`) are never touched.
 
+local catch = require("nvim-diff.scene.catch")
 local hl = require("nvim-diff.ui.hl")
 local sidebyside = require("nvim-diff.render.sidebyside")
 
@@ -139,6 +140,8 @@ end
 ---@param opts NvimDiff.PaneWinOpts
 ---@return table<string, any>? user
 function M.pane(win, buf, opts)
+  -- A window taken for a new pane gives back no buffer of an earlier one.
+  catch.unwatch(win)
   api.nvim_set_option_value("winfixbuf", false, { win = win, scope = "local" })
   -- Before: ufo works the folds of a buffer it knows out on `BufWinEnter`. After: a buffer
   -- it attaches to there.

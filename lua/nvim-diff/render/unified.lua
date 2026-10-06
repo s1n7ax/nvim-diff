@@ -247,9 +247,12 @@ end
 ---@param width integer Digits per number, `sidebyside.number_width(diff)`.
 ---@return string
 function M.statuscolumn(width)
-  local folded = "v:virtnum==0&&foldclosed(v:lnum)>0"
+  local folded = "v:virtnum==0&&" .. sidebyside.at_line("foldclosed({l})>0")
   local function item(var, w)
-    return ("%%%d(%%{%s?repeat('%s',%d):v:virtnum<0?'':get(b:%s,v:lnum-1,'')}%%)"):format(w, folded, fold.FILL, w, var)
+    return ("%%%d(%%{v:virtnum<0?'':%s}%%)"):format(
+      w,
+      sidebyside.at_line(("foldclosed({l})>0?repeat('%s',%d):get(b:%s,{l}-1,'')"):format(fold.FILL, w, var))
+    )
   end
   local function gap(text)
     return ("%%{%%%s?'%s':'%s'%%}"):format(folded, fold.FILL, text)

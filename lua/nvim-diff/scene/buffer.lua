@@ -35,6 +35,10 @@ local M = {}
 --- The content never changes under this name (a blob at a commit): keep the buffer after
 --- `release`, for reuse. Only honoured for a named buffer.
 ---@field keep? boolean
+--- Hidden, not wiped, when another buffer takes its window: a PR review's pane window takes
+--- a jump to another file and then shows the pane again (`scene/catch.lua`). `release`
+--- still wipes it.
+---@field hold? boolean
 
 --- Buffer variable (`b:nvim_diff_pane`) set on every pane buffer, before any window shows
 --- it, so other plugins can leave the pane alone — e.g. nvim-ufo's `provider_selector`
@@ -180,6 +184,9 @@ function M.create(opts)
     api.nvim_set_option_value(option, value, { buf = buf })
   end
   vim.b[buf][M.VAR] = true
+  if opts.hold then
+    api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
+  end
   if name then
     api.nvim_buf_set_name(buf, name)
     if opts.keep then
