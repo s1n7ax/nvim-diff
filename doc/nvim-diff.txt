@@ -210,8 +210,9 @@ Ending the review (|:tabclose|, |:NvimDiffClose| or quitting Neovim) wipes the
 buffers on the slot's files, shuts down the language servers rooted only in
 the slot (a server that has not shut down after 5 seconds is killed; one also
 rooted elsewhere keeps running) and releases the slot. The slot's folder
-stays. A PR from a fork stops the slot's servers before its checkout too
-(|nvim-diff-review-fork|).
+stays. A PR from a fork stops the slot's servers before its checkout too,
+and after a no keeps every server off the slot's files until a yes or the
+review's end (|nvim-diff-review-fork|).
 
                                                       *nvim-diff-review-slots*
 Review slots are separate git worktrees kept between reviews, outside the
@@ -317,19 +318,43 @@ copy without LSP. A PR from the same repository never asks.
 
   - The answer lasts until the review ends. Reopening the PR asks again;
     nothing is saved.
+  - After a no, no language server runs on the PR's code while the review
+    is open: none starts on, or attaches to, any file in the review slot,
+    however it is opened (|:edit|, a picker, |gf|, a quickfix entry, a
+    tabpage a jump opened) and in any tabpage — the review tabpage's cwd is
+    the slot, where your config would start your servers — and none starts
+    rooted in the slot for a file outside it. The first one kept off gets a
+    warning naming `<leader>L`; the rest are quiet. Files outside the slot,
+    and your servers rooted elsewhere, are left alone: one of yours asked to
+    serve a slot file is refused and keeps serving your files.
+  - The block is in place from before the checkout until a yes or the end
+    of the review. Applying new code keeps it (|nvim-diff-review-apply|).
   - After a no, `<leader>L` (|nvim-diff-config.keymaps.review.start_lsp|)
-    asks again. Yes switches the head pane to the real file at once, on the
-    same file and line, and every file shown after it. A file that still
-    shows as a copy (|nvim-diff-review-head-pane|) gets a warning saying why.
+    asks again. Yes lifts the block for the rest of the review, also after
+    new code was applied, and switches the head pane to the real file at
+    once, on the same file and line, and every file shown after it. A file
+    that still shows as a copy (|nvim-diff-review-head-pane|) gets a warning
+    saying why. Slot files you already had open get the servers
+    |vim.lsp.enable()| has for them; a server started some other way (an
+    ftplugin, nvim-lspconfig's `setup{}`) comes once you |:edit| the file.
+  - Neovim has no hook that can refuse a server before its process starts,
+    so nvim-diff wraps |vim.lsp.start()| and |vim.lsp.buf_attach_client()|
+    and refuses there, before anything is spawned. A server started past
+    them (code that kept the original functions, or starts one another way)
+    is killed on |LspAttach| at once — or, when it is one of yours rooted
+    elsewhere, detached from the slot file. A config's `root_dir` function
+    still runs for a slot file; only the start it leads to is refused. A
+    server Neovim does not spawn (`cmd` a function, such as |vim.pack|'s)
+    may be rooted in the slot as long as it serves no file there.
   - Before a fork PR is checked out into a slot, every language server this
     Neovim still runs with any root in that slot (left from an earlier
     review, also one still shutting down after it) is killed at once, so it
     cannot read, or build, the fork's code. Unlike the end of a review, this
     does not wait for a graceful shutdown, and spares no server that is also
     rooted elsewhere.
-  - A no keeps the head pane off LSP, nothing more: a slot file you open
-    yourself (|:edit|, a picker; the tabpage's cwd is the slot) starts your
-    language servers as usual.
+  - The slot keeps the fork's code on disk after the review ends, until the
+    next review checks out over it; a file of it opened then is like any
+    other.
 
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
@@ -395,12 +420,18 @@ new head out into the same review slot and shows it.
     its layout and diff mode; viewed marks are GitHub's (a file the new
     commits changed is `↻`). Threads are drawn as GitHub has them on the new
     code, the ones that were waiting included.
-  - The file that showed shows again, on the same line number and screen
-    row; a file no longer in the PR gets a notice, and the first file not
-    viewed shows instead.
+  - The file that showed shows again, under its new path when the new
+    commits renamed it, in the layout it was left in, and with its folds as
+    they were when the new commits left it alone. The cursor is on the same
+    code at the same screen row: its line is followed through the new
+    commits (a line they changed goes to the line it became, one they
+    deleted to the line above it), and a context fold over it is opened. A
+    file no longer in the PR gets a notice, and the first file not viewed
+    shows instead.
   - The head pane lets go of its file before the checkout and loads it afresh
     after, so nothing prompts (no W11) and the language servers stay on — for
-    a fork PR too, after a yes. A file nvim-diff had loaded for the pane and
+    a fork PR too, after a yes; after a no, they stay off every slot file
+    (|nvim-diff-review-fork|). A file nvim-diff had loaded for the pane and
     the checkout changed is closed; one you opened yourself is read again,
     unless it has unsaved changes, which get a warning (Neovim asks about
     them the next time it checks the file).
@@ -912,9 +943,9 @@ Reports:
     verdict, viewed marks) are tested against a stub `gh`, not a live PR.
   - File-level comments need a GitHub Enterprise Server new enough to accept
     `subject_type=file`; an older one's error is shown as is.
-  - Applying new code keeps the file by its path and the cursor on the same
-    line number: a file the new commits renamed is not followed, and the line
-    is not mapped through the new commits.
+  - Applying new code that changed the file showing folds it afresh: the
+    cursor's line sits higher on screen than before when the folds above it
+    leave too few rows.
   - An LSP jump from a review's head pane to another file fails (E1513,
     'winfixbuf'); jumps within the file work.
   - Showing the head pane's decorations in its window only uses an

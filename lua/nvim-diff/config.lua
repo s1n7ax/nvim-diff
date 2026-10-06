@@ -99,8 +99,9 @@ local M = {}
 ---@field mark_viewed NvimDiff.Config.Key
 --- Clear the file's viewed mark on GitHub.
 ---@field unmark_viewed NvimDiff.Config.Key
---- A PR from a fork only, after no to `Start LSP? [y/N]`: ask again; yes shows the real
---- file, with LSP, in the head pane from then on, keeping the file and line.
+--- A PR from a fork only, after no to `Start LSP? [y/N]`: ask again; yes lets language
+--- servers onto the review slot's files and shows the real file, with LSP, in the head pane
+--- from then on, keeping the file and line.
 ---@field start_lsp NvimDiff.Config.Key
 --- Check GitHub for new commits, a new base branch or a merge now, without waiting for
 --- `github.sync_interval_ms`.

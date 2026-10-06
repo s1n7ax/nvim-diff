@@ -364,8 +364,15 @@ yes; Enter shows the copy without LSP. The answer lasts until the review closes 
 saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
 the head pane to the real file on the same line. Before a fork PR is checked out into a
 slot, every language server still running there from an earlier review is killed at once.
-A no only keeps the head pane off LSP: a slot file you open yourself starts your servers as
-usual.
+After a no, no language server starts on any file in the slot while the review is open —
+opened with `:e`, a picker, `gf` or a quickfix entry, in any tabpage — nor rooted in the
+slot; the first one kept off gets a warning naming `<leader>L`. Files outside the slot and
+your servers rooted elsewhere are left alone. Applying new code keeps the block; a yes on
+`<leader>L` lifts it for the rest of the review, and slot files already open get the
+servers `vim.lsp.enable` has for them (others once you `:e` the file). Neovim cannot refuse
+a server before its process starts, so nvim-diff wraps `vim.lsp.start` and
+`vim.lsp.buf_attach_client` and refuses there; one started past them is killed on
+`LspAttach`.
 
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
@@ -377,8 +384,9 @@ warning after three in a row), a rate limit pauses syncing until it lifts.
 
 `<leader>A` applies the new code in the same review: the commits are fetched in the
 background, then the new head is checked out into the same slot, and the file list, viewed
-marks and threads are the new code's. The file that showed shows again, on the same line
-number. The head pane lets go of its file before the checkout and loads it afresh after,
+marks and threads are the new code's. The file that showed shows again (under its new path
+if the new commits renamed it), with the cursor on the same code at the same screen row: its
+line is followed through the new commits. The head pane lets go of its file before the checkout and loads it afresh after,
 so nothing prompts and language servers stay on (a fork's yes included). It is refused
 while a comment or the verdict is being written, since that was written on the diff
 showing.
@@ -392,8 +400,8 @@ and only when you run it.
 - PR review is GitHub only (github.com and GitHub Enterprise Server).
 - Every GitHub write path — comments, replies, edits, deletes, resolve, viewed marks, the
   verdict — is tested against a stub `gh`, not a live PR.
-- Applying new code keeps the file by its path and the cursor on the same line number; a
-  renamed file is not followed and the line is not mapped through the new commits.
+- Applying new code that changed the file showing folds it afresh, so the cursor's line sits
+  higher on screen than before when the folds above it leave too few rows.
 - An LSP jump from the review's head pane to another file fails (`winfixbuf`); jumps
   within the file work.
 - File-level comments need a GHES version that supports `subject_type=file`.
