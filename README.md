@@ -95,6 +95,7 @@ keys that work there — `<CR>` on one runs it.
 | `R` | refresh |
 | `<Tab>` / `<S-Tab>` | next / previous file (also in diff panes) |
 | `gm` | branch diff: merge-base (`a...b`) ↔ tip to tip (`a..b`) (also in diff panes) |
+| `<leader>e` | focus the file panel (also from diff panes) |
 
 **Diff panes**
 
@@ -103,6 +104,7 @@ keys that work there — `<CR>` on one runs it.
 | `g<C-x>` | side-by-side ↔ unified, for this file |
 | `gs` | structural ↔ line diff, for this file |
 | `gL` | history of the line under the cursor, at this pane's revision |
+| `<leader>e` | focus the file panel |
 
 **Folds** (diff panes; mirrored across both panes)
 
@@ -238,7 +240,7 @@ require("nvim-diff").setup({
   keymaps = {
     help = "?",
     panel = { select = "<CR>", toggle_listing = "i", refresh = "R" },
-    view = { next_file = "<Tab>", prev_file = "<S-Tab>", toggle_range = "gm", line_history = "gL" },
+    view = { next_file = "<Tab>", prev_file = "<S-Tab>", toggle_range = "gm", line_history = "gL", focus_panel = "<leader>e" },
     history = { mark = "m", compare = "M" },
     conflict = {
       take_ours = "<leader>co",
