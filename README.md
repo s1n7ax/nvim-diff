@@ -364,8 +364,15 @@ yes; Enter shows the copy without LSP. The answer lasts until the review closes 
 saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
 the head pane to the real file on the same line. Before a fork PR is checked out into a
 slot, every language server still running there from an earlier review is killed at once.
-A no only keeps the head pane off LSP: a slot file you open yourself starts your servers as
-usual.
+After a no, no language server starts on any file in the slot while the review is open —
+opened with `:e`, a picker, `gf` or a quickfix entry, in any tabpage — nor rooted in the
+slot; the first one kept off gets a warning naming `<leader>L`. Files outside the slot and
+your servers rooted elsewhere are left alone. Applying new code keeps the block; a yes on
+`<leader>L` lifts it for the rest of the review, and slot files already open get the
+servers `vim.lsp.enable` has for them (others once you `:e` the file). Neovim cannot refuse
+a server before its process starts, so nvim-diff wraps `vim.lsp.start` and
+`vim.lsp.buf_attach_client` and refuses there; one started past them is killed on
+`LspAttach`.
 
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
