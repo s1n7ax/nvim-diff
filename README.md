@@ -336,9 +336,11 @@ language servers attach to it: hover, go to definition within the file, referenc
 diagnostics with signs in the sign column. The diff colours stay in that pane — the same
 file in another window looks and maps keys as usual. Virtual lines other plugins draw there
 (code lens, diagnostics as `virtual_lines`) get matching blank rows in the base pane, so
-rows stay aligned. A file on disk that is not exactly the PR's (changed since the checkout, an
-encoding conversion, a BOM, an LFS filter) shows as a copy without LSP, and so does the
-unified layout.
+rows stay aligned. A real file cannot scroll past its last line, so through lines deleted at
+the end of a file the head pane stays on its last line and draws the rest of the filler over
+it; the base pane scrolls to the end. A file on disk that is not exactly the PR's (changed
+since the checkout, an encoding conversion, a BOM, an LFS filter) shows as a copy without
+LSP, and so does the unified layout.
 
 The pane keeps its own window options: an `LspAttach` handler or another plugin setting
 `foldmethod=expr`, a `statuscolumn` or a `winbar` there is undone at once, and what it set

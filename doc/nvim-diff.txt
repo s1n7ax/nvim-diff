@@ -44,7 +44,11 @@ What a diff looks like:
     lines, `zO` all of them. See |nvim-diff-keys-folds|.
   - Side-by-side is the default layout; `g<C-x>` flips the current file to
     unified. A file that exists on one side only opens unified.
-  - Both panes carry their own revision's line numbers and scroll together.
+  - Both panes carry their own revision's line numbers and scroll together,
+    through filler and comment threads taller than the window too. Neovim
+    keeps a line of the buffer on screen, so a pane that cannot scroll that
+    far stops at the nearest line it can show and draws the rows it should
+    show over it; scroll keys and the mouse wheel there scroll the other pane.
 
 The plugin keeps no state on disk. A PR review re-reads everything from
 GitHub each time it opens.
@@ -252,8 +256,9 @@ its project root, and from a slot file it finds the slot, not your checkout
 In the side-by-side layout the file names sit in each pane's 'winbar' instead
 of on a first line, and both panes have a one-sign 'signcolumn'. Lines added
 or deleted above a file's first line show above it; `gg` and `<C-Home>` go
-back to them. A pane stops at its last line: neither pane scrolls further
-than the other can follow.
+back to them. The panes scroll as far as the longer side goes: through lines
+deleted at the end of a file, the head pane stays on its last line and draws
+the rest of the filler over it.
 
                                                   *nvim-diff-review-head-pane*
 In the side-by-side layout the head (right) pane is the file itself, in the
@@ -843,6 +848,10 @@ Reports:
   - Nothing is refetched while a review is open.
   - An LSP jump from a review's head pane to another file fails (E1513,
     'winfixbuf'); jumps within the file work.
+  - A pane stopped in filler it cannot scroll to keeps one line of its file
+    on screen, drawn over: 'cursorline' still tints that line's number
+    column, a search match on it does not show, and another plugin's virtual
+    lines over a file's first line stay at the bottom of the pane there.
   - Showing the head pane's decorations in its window only uses an
     experimental Neovim API (`nvim__ns_set`); without it they would show in
     every window on the file.
