@@ -1,6 +1,7 @@
---- The side list: comment threads that have no line in the diff to hang from — outdated
---- threads (the code they were on has changed, and GitHub returns no line), file-level
---- comments, and threads whose line is not in the file shown — each drawn in full.
+--- The side list: outdated threads (the code they were on has changed, and GitHub returns
+--- no line) and threads whose line is not in the file shown, plus file-level comments. A
+--- file-level comment also appears above its file, while this list keeps its edit, delete
+--- and copy actions available.
 ---
 --- A split window beside the diff, not a float: it is read like the file panel, it stays
 --- while the reviewer steps through files, and `q` closes it. The text is ordinary buffer
@@ -29,8 +30,8 @@ local PLACE = {
 ---@field thread NvimDiff.GitHub.Thread
 ---@field place NvimDiff.ThreadPlace
 
---- The threads of `list` that never hang under a line: outdated and file-level ones, in
---- list order.
+--- The outdated and file-level threads of `list`, in list order. File-level threads also
+--- show above their file; this copy provides their side-list actions.
 ---@param list NvimDiff.GitHub.Thread[]
 ---@return NvimDiff.SideListItem[]
 function M.items(list)
