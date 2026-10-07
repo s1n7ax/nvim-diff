@@ -160,7 +160,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | `<CR>` | expand / collapse the thread on this line (elsewhere, a normal `<CR>`) |
 | `]t` / `[t` | next / previous thread |
 | `gR` | resolved threads: dimmed ↔ hidden |
-| `gC` | side list of outdated comments and file-level comments (`q` closes it) |
+| `gC` | side list of every review comment (`<CR>` jumps to it, `gR` filters all / unresolved / resolved, `q` closes it) |
 | `<leader>cc` | comment on this line, in either pane; in visual mode, on the selected lines |
 | `<leader>cr` | reply to the thread on this line |
 | `<leader>ce` / `<leader>cd` | edit / delete your comment in the thread (also in the side list) |

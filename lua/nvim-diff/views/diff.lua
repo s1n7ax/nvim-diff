@@ -37,7 +37,7 @@
 ---
 --- A PR review hands the view its comment threads with `set_threads`: each file's diff then
 --- shows its threads (`review/threadview.lua`), and `keymaps.threads.list` opens the side
---- list of outdated and file-level ones (`review/sidelist.lua`).
+--- list of every thread (`review/sidelist.lua`).
 ---
 --- A PR review's jumps to another file (`route_jump`) — an LSP jump from the head pane
 --- showing the real file, a quickfix or location list entry, `:edit` or a picker's pick in
@@ -1336,7 +1336,7 @@ function View:set_threads(list)
     self:attach_threads(self.current)
   end
   if self.thread_list and self.thread_list:is_open() then
-    self.thread_list:set(self:thread_items())
+    self.thread_list:set(self.threads or {})
   end
 end
 
@@ -1357,23 +1357,77 @@ function View:attach_threads(entry)
     end,
   })
   if self.thread_list and self.thread_list:is_open() then
-    self.thread_list:set(self:thread_items())
+    self.thread_list:set(self.threads or {})
   end
 end
 
---- What the side list shows: every outdated and file-level thread of the PR, then the
---- showing file's threads whose line is not in its diff.
+--- Every review thread, for the side list. The list filters them itself
+--- (`review/sidelist.lua`); kept for callers that read what it shows.
 ---@return NvimDiff.SideListItem[]
 function View:thread_items()
-  local items = require("nvim-diff.review.sidelist").items(self.threads or {})
-  if self.thread_view and not self.thread_view.detached then
-    for _, loose in ipairs(self.thread_view:unanchored()) do
-      if loose.place == "off_file" then
-        items[#items + 1] = loose
-      end
+  local filter = self.thread_list and self.thread_list:is_open() and self.thread_list.filter or "all"
+  return require("nvim-diff.review.sidelist").items(self.threads or {}, filter)
+end
+
+--- Jump to `thread` from the side list: select its file and put the cursor on its line,
+--- with the thread expanded. A resolved thread hidden in the diff is kept drawn, so the
+--- jump lands on it instead of on nothing. A file-level or outdated thread has no line
+--- to land on: its file is selected. Returns false when the thread's file is not in
+--- this diff.
+---@param thread NvimDiff.GitHub.Thread
+---@return boolean jumped
+function View:goto_thread(thread)
+  if not self:is_valid() then
+    return false
+  end
+  local entry
+  for _, e in ipairs(self.list.entries) do
+    if e.path == thread.path then
+      entry = e
+      break
     end
   end
-  return items
+  if not entry then
+    log.warn("%s is not in this diff", thread.path)
+    return false
+  end
+  if entry ~= self.current or not self.file or self.file:is_closed() then
+    self:select(entry, { force = entry.deferred and not entry.forced })
+  end
+  if self.current ~= entry then
+    return false
+  end
+  local file = self.file
+  if not file or file:is_closed() then
+    -- A note shows instead of a diff (a binary file, or one that cannot be read):
+    -- the file is selected, and there is no line to put the cursor on.
+    return true
+  end
+  local state = self.thread_state or require("nvim-diff.review.threadview").new_state()
+  self.thread_state = state
+  state.expanded[thread.id] = true
+  if thread.resolved then
+    state.kept = state.kept or {}
+    state.kept[thread.id] = true
+  end
+  local tv = self.thread_view
+  if tv and not tv.detached then
+    tv:toggle(thread.id, true)
+  end
+  if thread.subject ~= "file" and thread.line and not thread.outdated then
+    local side = thread.side or "new"
+    local ok, win = pcall(self.diff_win, self, side)
+    if ok and api.nvim_win_is_valid(win) then
+      api.nvim_set_current_win(win)
+    end
+    file:jump(side, thread.line)
+  else
+    local ok, win = pcall(self.diff_win, self, "new")
+    if ok and api.nvim_win_is_valid(win) then
+      api.nvim_set_current_win(win)
+    end
+  end
+  return true
 end
 
 --- Open the side list right of the diff, or close it.
@@ -1394,9 +1448,12 @@ function View:open_thread_list()
   end
   local wins = self.file and not self.file:is_closed() and self.file:wins() or { self.note_win }
   self.thread_list = require("nvim-diff.review.sidelist").open({
-    items = self:thread_items(),
+    threads = self.threads or {},
     win = wins[#wins],
     hold = self.review,
+    on_select = function(thread)
+      self:goto_thread(thread)
+    end,
   })
   if self.review then
     self:route_from(self.thread_list.win, self.thread_list.buf)
