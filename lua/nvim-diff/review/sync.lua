@@ -8,9 +8,9 @@
 ---
 --- * New code — a new head commit, or the PR retargeted to another base branch — is
 ---   announced once per change and marked in the panel until the review shows it, with the
----   count of threads on it that wait for it (`review.held`) and the key that applies it
----   (`keymaps.review.apply`, `review:apply()`). A push to the base branch alone is not new
----   code: GitHub's `baseRefOid` is the merge-base, which it does not move.
+---   count of threads on it that wait for it (`review.held`). A manual check asks whether to
+---   reflect it locally. A push to the base branch alone is not new code: GitHub's
+---   `baseRefOid` is the merge-base, which it does not move.
 --- * Merged or closed: announced, marked in the panel, and syncing stops. The review stays
 ---   usable; the key still checks, and a PR found open again syncs again.
 ---
@@ -89,20 +89,6 @@ local function threads(n)
   return n == 1 and "1 thread" or ("%d threads"):format(n)
 end
 
---- The key that applies new code, if one is set.
----@return string?
-local function apply_key()
-  local key = config.get().keymaps.review.apply
-  return type(key) == "string" and key or nil
-end
-
---- How a notice ends that says the review shows old code: what applies the new code.
----@return string
-local function until_applied()
-  local key = apply_key()
-  return key and ("until %s applies it"):format(key) or "until it is applied"
-end
-
 --- The notice for new code on GitHub.
 ---@param review NvimDiff.Review
 ---@param stale { head?: string, base?: string }
@@ -120,7 +106,7 @@ local function stale_notice(review, stale)
     review.number,
     table.concat(what, " and "),
     held > 0 and (", without %s on the new code,"):format(threads(held)) or "",
-    until_applied()
+    "until a refresh reflects it locally"
   )
 end
 
@@ -249,10 +235,10 @@ function Sync:take(snap, manual, rev)
     end
   end
 
-  if manual and not said then
-    if stale then
-      echo(("PR #%d has new code on GitHub that this review does not show %s"):format(review.number, until_applied()))
-    elseif self.stopped then
+  if manual and stale then
+    review:prompt_apply()
+  elseif manual and not said then
+    if self.stopped then
       echo(("PR #%d is %s; not syncing"):format(review.number, self.stopped))
     else
       echo(("PR #%d is up to date with GitHub"):format(review.number))
@@ -343,10 +329,6 @@ function Sync:status()
       text = ("%s · %s waiting"):format(text, threads(held))
     end
     out[#out + 1] = { text = "● " .. text, hl = "NvimDiffPanelStale" }
-    local key = apply_key()
-    if stale and key then
-      out[#out + 1] = { text = ("  %s to apply"):format(key), hl = "NvimDiffPanelSync" }
-    end
   end
   local text
   if self.stopped == "merged" or self.stopped == "closed" then

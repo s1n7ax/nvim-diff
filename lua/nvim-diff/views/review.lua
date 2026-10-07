@@ -64,7 +64,8 @@
 --- close are announced and marked in the panel. What GitHub has now is kept as
 --- `review.latest`; what the review shows (`review.pr`) is unchanged by a check.
 ---
---- New code is shown only on `keymaps.review.apply` (`review:apply()`), in the same review:
+--- After a manual `keymaps.review.sync` check finds new code, a prompt can show it in the
+--- same review (`review:apply()`):
 --- read in the background, then checked out into the same slot — the head pane's file let go
 --- before and loaded afresh after, LSP left on — and the file list, viewed marks and threads
 --- shown for it, on the file and code that showed, followed through renames and the new
@@ -477,10 +478,7 @@ function Review:map_keys(buf)
   end, "Review: Unmark viewed")
   map(keys.sync, function()
     self:sync_now()
-  end, "Review: Check GitHub for updates")
-  map(keys.apply, function()
-    self:apply()
-  end, "Review: Apply new code")
+  end, "Review: Refresh from GitHub")
   map(keys.approve, function()
     self:approve()
   end, "Review: Approve PR")
@@ -590,7 +588,8 @@ function Review:stale()
   return nil
 end
 
---- Check GitHub for new commits, a new base branch or a merge now.
+--- Check GitHub for new commits, a new base branch or a merge now. When GitHub has new
+---code, the answer asks whether to reflect it in this review locally.
 function Review:sync_now()
   if not self:is_valid() then
     return
@@ -599,6 +598,26 @@ function Review:sync_now()
     return
   end
   self.sync:now()
+end
+
+--- Asks whether a manual refresh should make the review show code newly found on GitHub.
+---Replaceable, so specs can answer without a prompt.
+---@param prompt string
+---@return boolean reflect
+function M.confirm_apply(prompt)
+  return vim.fn.confirm(prompt, "&Reflect locally\n&Keep current diff", 2) == 1
+end
+
+--- Prompt to apply code newly found by a manual refresh.
+---@return boolean started False when no new code exists, the user declines or applying is refused.
+function Review:prompt_apply()
+  if not self:is_valid() or not self:stale() then
+    return false
+  end
+  if not M.confirm_apply(("PR #%d has new code on GitHub. Reflect the changes locally?"):format(self.number)) then
+    return false
+  end
+  return self:apply()
 end
 
 --- Mark a file viewed on GitHub, then show the next file that is not viewed.

@@ -146,8 +146,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | --- | --- |
 | `<leader><space>` | mark the file viewed on GitHub, jump to the next unviewed one |
 | `<leader><BS>` | clear the viewed mark |
-| `<C-r>` | check GitHub now for new commits, a new base branch or a merge |
-| `<leader>A` | apply the new code a check found, in the same review |
+| `<C-r>` | refresh from GitHub; when code changed, ask whether to reflect it locally |
 | `<leader>ra` | approve the PR, after asking (no summary; `:NvimDiffVerdict approve` for one with a summary) |
 | `<leader>rr` | request changes: open the verdict split with a required summary |
 | `<leader>rm` | merge the PR: pick merge / squash / rebase, then ask before sending |
@@ -259,8 +258,7 @@ require("nvim-diff").setup({
     review = {
       mark_viewed = "<leader><space>",
       unmark_viewed = "<leader><BS>",
-      sync = "<C-r>",
-      apply = "<leader>A",
+      sync = "<C-r>", -- refresh; asks to reflect newly found code locally
       approve = "<leader>ra", -- approve at once, after asking
       request_changes = "<leader>rr", -- verdict split with required summary
       merge = "<leader>rm", -- pick merge/squash/rebase, then ask
@@ -405,20 +403,20 @@ a server before its process starts, so nvim-diff wraps `vim.lsp.start` and
 
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
-in the panel; the review keeps the diff it opened with until you press `<leader>A`. New
-threads, replies, edits and resolves from others are drawn at once, in place; a new thread
-on code the review does not show yet waits, counted in the panel. A merged or closed PR
-gets a notice and syncing stops; the review stays usable. Network errors retry quietly (a
-warning after three in a row), a rate limit pauses syncing until it lifts.
+in the panel. Press `<C-r>` to refresh: when it finds new code, it asks whether to reflect
+the changes locally. Choosing **Reflect locally** fetches the commits in the background,
+checks the new head out into the same slot, and updates the file list, viewed marks and
+threads. The file that showed shows again (under its new path if the new commits renamed
+it), with the cursor on the same code at the same screen row and column: its line is
+followed through the new commits. The head pane lets go of its file before the checkout and
+loads it afresh after, so nothing prompts and language servers stay on (a fork's yes
+included). It is refused while a comment or the verdict is being written, since that was
+written on the diff showing.
 
-`<leader>A` applies the new code in the same review: the commits are fetched in the
-background, then the new head is checked out into the same slot, and the file list, viewed
-marks and threads are the new code's. The file that showed shows again (under its new path
-if the new commits renamed it), with the cursor on the same code at the same screen row and
-column: its line is followed through the new commits. The head pane lets go of its file before the checkout and loads it afresh after,
-so nothing prompts and language servers stay on (a fork's yes included). It is refused
-while a comment or the verdict is being written, since that was written on the diff
-showing.
+New threads, replies, edits and resolves from others are drawn at once, in place; a new
+thread on code the review does not show yet waits, counted in the panel. A merged or closed
+PR gets a notice and syncing stops; the review stays usable. Network errors retry quietly
+(a warning after three in a row), a rate limit pauses syncing until it lifts.
 
 Comments post immediately, one at a time, as standalone comments — there is no pending
 review batch. `:NvimDiffVerdict` submits Approve / Request changes / Comment separately,

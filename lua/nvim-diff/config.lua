@@ -299,13 +299,11 @@ local defaults = {
     -- octo.nvim's viewed key, so muscle memory carries over; backspace takes it back.
     -- `L` for LSP; capital, so a `<leader>l` prefix of the user's still works in the panes.
     -- `<C-r>` is octo.nvim's reload key too; redo means nothing in a read-only pane.
-    -- `A` for apply; capital, like `L`.
     review = {
       mark_viewed = "<leader><space>",
       unmark_viewed = "<leader><BS>",
       start_lsp = "<leader>L",
       sync = "<C-r>",
-      apply = "<leader>A",
       approve = "<leader>ra",
       request_changes = "<leader>rr",
       merge = "<leader>rm",
@@ -444,7 +442,6 @@ local schema = {
       unmark_viewed = KEY,
       start_lsp = KEY,
       sync = KEY,
-      apply = KEY,
       approve = KEY,
       request_changes = KEY,
       merge = KEY,
