@@ -419,7 +419,9 @@ copy without LSP. A PR from the same repository never asks.
 Viewed marks: the panel shows `✓` for a file marked viewed on GitHub, `↻` for
 one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
-file that is not; `<leader><BS>` clears the mark.
+file that is not; `<leader><BS>` clears the mark. A file with unresolved
+comment threads shows a `💬` (`💬×n` for more than one); a directory shows the
+total of the files under it.
 
 Comment threads show under the commented line: unresolved ones expanded, with
 every reply, resolved ones as a one-line summary (author, first line, replies,

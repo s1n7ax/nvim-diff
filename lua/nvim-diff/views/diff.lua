@@ -131,6 +131,8 @@ local by_tab = {}
 ---@field note_win? integer
 ---@field closed boolean
 ---@field threads? NvimDiff.GitHub.Thread[] Review threads, from `set_threads`.
+--- Threads on code newer than the review shows: not drawn, counted in the panel.
+---@field held_threads? NvimDiff.GitHub.Thread[]
 ---@field thread_state? NvimDiff.ThreadState Expanded threads and the resolved mode, across files.
 ---@field thread_view? NvimDiff.ThreadView The threads on the diff showing.
 ---@field thread_list? NvimDiff.SideList
@@ -379,6 +381,23 @@ function View:map_panel()
   self:map_view(buf)
 end
 
+--- Unresolved review-thread count by file path, from the drawn threads and the ones held
+--- back on newer code. Empty when there is nothing unresolved.
+---@return table<string, integer>
+function View:unresolved_counts()
+  local counts = {}
+  local function add(list)
+    for _, t in ipairs(list or {}) do
+      if not t.resolved and type(t.path) == "string" then
+        counts[t.path] = (counts[t.path] or 0) + 1
+      end
+    end
+  end
+  add(self.threads)
+  add(self.held_threads)
+  return counts
+end
+
 --- Rebuild the rows and redraw the panel.
 function View:render()
   self.tree = tree.build(self.list.entries, {
@@ -400,6 +419,7 @@ function View:render()
     current = self.current,
     notice = notice,
     status = self.status,
+    unresolved = self:unresolved_counts(),
   })
 end
 
@@ -1322,11 +1342,15 @@ end
 -- Review threads ---------------------------------------------------------------------------
 
 --- Show a PR's review threads: on each file's diff as it opens (the one showing now at
---- once), and in the side list. Replaces any threads set before; `{}` clears them. The diff
---- showing is redrawn in place, not re-diffed: only rows whose threads changed are touched.
+--- once), in the side list, and as comment icons in the file panel. Replaces any threads
+--- set before; `{}` clears them. The diff showing is redrawn in place, not re-diffed:
+--- only rows whose threads changed are touched. `held` threads on newer code are not drawn,
+--- only counted in the panel.
 ---@param list NvimDiff.GitHub.Thread[]
-function View:set_threads(list)
+---@param held? NvimDiff.GitHub.Thread[]
+function View:set_threads(list, held)
   self.threads = list
+  self.held_threads = held
   local threadview = require("nvim-diff.review.threadview")
   self.thread_state = self.thread_state or threadview.new_state()
   local tv = self.thread_view
@@ -1337,6 +1361,9 @@ function View:set_threads(list)
   end
   if self.thread_list and self.thread_list:is_open() then
     self.thread_list:set(self.threads or {})
+  end
+  if self:is_valid() then
+    self:render()
   end
 end
 
