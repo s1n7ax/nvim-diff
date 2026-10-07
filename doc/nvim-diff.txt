@@ -434,10 +434,13 @@ a split under the diff (|nvim-diff-compose|). Comments post at once, one at a
 time, as standalone comments, never batched into a pending review.
 
 `<leader>ce` and `<leader>cd` edit and delete your own comments, in a diff
-pane or the side list; delete asks first. `<leader>cx` resolves the thread on
-the line, `<leader>cR` replies and then resolves it, `<leader>cu` unresolves
-it. A thread resolved during the review stays on screen, dimmed, until `gR`
-next flips resolved threads between dimmed and hidden.
+pane or the side list; delete asks first. `<leader>cy` copies a comment's
+GitHub link to the system clipboard; where a thread has more than one comment,
+it asks which link to copy, and works in the side list too. `<leader>cx`
+resolves the thread on the line, `<leader>cR` replies and then resolves it,
+`<leader>cu` unresolves it. A thread resolved during the review stays on
+screen, dimmed, until `gR` next flips resolved threads between dimmed and
+hidden.
 
                                                        *nvim-diff-review-sync*
 While the review is open it checks GitHub every minute
@@ -890,8 +893,12 @@ keymaps.comment.reply                  (default: `"<leader>cr"`)
 keymaps.comment.edit                   (default: `"<leader>ce"`)
                                      *nvim-diff-config.keymaps.comment.delete*
 keymaps.comment.delete                 (default: `"<leader>cd"`)
+                                  *nvim-diff-config.keymaps.comment.copy_link*
+keymaps.comment.copy_link              (default: `"<leader>cy"`)
     Diff panes of a PR review; `add` also in its file panel (file-level
-    comment), and `edit`/`delete` also in the side list.
+    comment), and `edit`/`delete`/`copy_link` also in the side list.
+    `copy_link` copies the selected comment's GitHub link to the system
+    clipboard; it asks which comment when the thread has more than one.
 
                                      *nvim-diff-config.keymaps.comment.submit*
 keymaps.comment.submit                 (default: `"<C-s>"`)

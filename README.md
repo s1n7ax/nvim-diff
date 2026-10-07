@@ -165,6 +165,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | `<leader>cc` | comment on this line, in either pane; in visual mode, on the selected lines |
 | `<leader>cr` | reply to the thread on this line |
 | `<leader>ce` / `<leader>cd` | edit / delete your comment in the thread (also in the side list) |
+| `<leader>cy` | copy a comment's GitHub link (pick one when the thread has replies; also in the side list) |
 | `<leader>cx` | resolve the thread |
 | `<leader>cR` | reply, then resolve |
 | `<leader>cu` | unresolve |
@@ -282,6 +283,7 @@ require("nvim-diff").setup({
       cancel = "q",
       edit = "<leader>ce",
       delete = "<leader>cd",
+      copy_link = "<leader>cy", -- copies to the system clipboard
       suggest = "<C-g>s",
     },
     verdict = { post = "<C-s>", cancel = "q" },
