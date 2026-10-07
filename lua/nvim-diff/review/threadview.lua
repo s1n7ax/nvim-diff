@@ -14,9 +14,10 @@
 --- changed line with a thread on each side costs `max(left, right)` rows, not the sum — the
 --- composition rule the rendering research measured.
 ---
---- Threads with no line to hang from (outdated, file-level, or a line past the end of the
---- file shown) are not drawn here; `unanchored()` lists them for the side list
---- (`review/sidelist.lua`).
+--- File-level threads are drawn above the first row, labelled `file-level` and without a
+---tail, so they remain distinct from a first-line thread. Outdated threads and lines past
+---the end of the file shown are not drawn here; `unanchored()` lists them for the side list
+---(`review/sidelist.lua`).
 ---
 --- Resolved threads are dimmed by default, or hidden (`threads.resolved = "hide"`), and a
 --- key flips between the two. A thread resolved during the review (`state.kept`) stays
@@ -157,7 +158,7 @@ function ThreadView:set_threads(threads)
       self.rows[row] = self.rows[row] or {}
       table.insert(self.rows[row], t)
       self.row_of_thread[t.id] = row
-      local first = t.start_line and t.start_line >= 1 and t.start_line < t.line and t.start_line
+      local first = t.line and t.start_line and t.start_line >= 1 and t.start_line < t.line and t.start_line
       self.span[t.id] = { first and diff:row_of(t.side or "new", first) or row, row }
     else
       self.loose[#self.loose + 1] = { thread = t, place = place }
@@ -235,7 +236,13 @@ function ThreadView:block(row)
     if self:visible(t) then
       local side = t.side or "new"
       local lines = block[side] or {}
-      local o = { width = self.width, tail = true, active = self.active[t.id] }
+      local file_level = t.subject == "file"
+      local o = {
+        width = self.width,
+        tail = not file_level,
+        label = file_level and "file-level" or nil,
+        active = self.active[t.id],
+      }
       if self:is_expanded(t) then
         vim.list_extend(lines, thread_mod.expanded_lines(t, o))
       else

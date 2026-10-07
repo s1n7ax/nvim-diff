@@ -423,9 +423,12 @@ file that is not; `<leader><BS>` clears the mark.
 
 Comment threads show under the commented line: unresolved ones expanded, with
 every reply, resolved ones as a one-line summary (author, first line, replies,
-resolved state). `<CR>` expands or collapses a thread in place. Resolved threads are dimmed with a `✓`
-(|nvim-diff-config.threads.resolved|). Outdated threads, threads outside the
-shown diff and file-level comments go to a side list (`gC`).
+resolved state). A file-level thread shows above the first line, labelled
+`file-level` and without a tail, so it is distinct from a comment on line 1.
+`<CR>` expands or collapses a thread in place. Resolved threads are dimmed with
+a `✓` (|nvim-diff-config.threads.resolved|). Outdated threads and threads
+outside the shown diff go to a side list (`gC`), which also includes file-level
+comments for their edit, delete and copy actions.
 
 Writing: `<leader>cc` comments on the cursor's line, in either pane, or on a
 visual selection of lines inside one hunk. In the file panel it writes a
