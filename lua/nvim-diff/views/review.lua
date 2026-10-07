@@ -1151,7 +1151,7 @@ function Review:show_threads(snap)
     end
   end
   self.drawn = key
-  view:set_threads(list)
+  view:set_threads(list, self.held)
 end
 
 --- Draw `list` after a change made here, whatever was drawn before.
@@ -1159,7 +1159,7 @@ end
 function Review:draw_threads(list)
   self:touch_threads()
   self.drawn = live.fingerprint(list)
-  self.view:set_threads(list)
+  self.view:set_threads(list, self.held)
   self.sync:show()
 end
 

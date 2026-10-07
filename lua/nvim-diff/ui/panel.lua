@@ -74,6 +74,8 @@ end
 ---@field current? NvimDiff.FileEntry
 ---@field notice? string Shown under the counts, e.g. why the list is summarised.
 ---@field status? NvimDiff.PanelStatus[] Shown under the counts, above `notice`.
+--- Unresolved review-thread count by file path. A file with a count shows a comment icon.
+---@field unresolved? table<string, integer>
 
 --- A header line of its own, in its own highlight: a PR review's sync state.
 ---@class NvimDiff.PanelStatus
@@ -210,6 +212,32 @@ end
 -- The line builders, for other panels drawing through `Panel:draw`.
 M.line, M.put, M.put_stats, M.STATUS_HL = line, put, put_stats, STATUS_HL
 
+--- The comment icon for a file with unresolved review threads.
+M.COMMENT_ICON = "💬"
+
+---@param l NvimDiff.PanelLine
+---@param n integer Unresolved threads; `×n` when more than one.
+local function put_comment(l, n)
+  put(l, " " .. M.COMMENT_ICON, "NvimDiffPanelComment")
+  if n > 1 then
+    put(l, "×" .. M.thousands(n), "NvimDiffPanelComment")
+  end
+end
+
+---@param dir_path string Full git path of the directory.
+---@param unresolved table<string, integer> Unresolved thread count by file path.
+---@return integer
+local function dir_unresolved(dir_path, unresolved)
+  local prefix = dir_path == "" and "" or (dir_path .. "/")
+  local n = 0
+  for path, count in pairs(unresolved) do
+    if prefix == "" or path:sub(1, #prefix) == prefix then
+      n = n + count
+    end
+  end
+  return n
+end
+
 ---@param entries NvimDiff.FileEntry[]
 ---@return boolean
 local function in_review(entries)
@@ -262,8 +290,9 @@ end
 ---@param row NvimDiff.TreeRow
 ---@param review boolean
 ---@param flat boolean
+---@param unresolved? table<string, integer> Unresolved thread count by file path.
 ---@return NvimDiff.PanelLine
-local function row_line(row, review, flat)
+local function row_line(row, review, flat, unresolved)
   local l = line()
   put(l, string.rep("  ", row.depth))
   if row.kind == "dir" then
@@ -272,6 +301,10 @@ local function row_line(row, review, flat)
     if row.collapsed then
       put(l, ("  %s %s"):format(M.thousands(row.files), row.files == 1 and "file" or "files"))
       put_stats(l, row.additions, row.deletions)
+    end
+    local dir_count = unresolved and dir_unresolved(row.path, unresolved) or 0
+    if dir_count > 0 then
+      put_comment(l, dir_count)
     end
     return l
   end
@@ -302,6 +335,10 @@ local function row_line(row, review, flat)
   elseif c.additions then
     put_stats(l, c.additions, c.deletions)
   end
+  local n = unresolved and unresolved[entry.path] or 0
+  if n and n > 0 then
+    put_comment(l, n)
+  end
   if entry.deferred and not entry.forced then
     put(l, (" [deferred: %s lines]"):format(M.thousands(entry.lines or 0)), "NvimDiffPanelDeferred")
   end
@@ -319,7 +356,7 @@ function Panel:render(model)
   local first_row = #lines + 1
   local rows = {}
   for _, row in ipairs(model.tree.rows) do
-    lines[#lines + 1] = row_line(row, review, flat)
+    lines[#lines + 1] = row_line(row, review, flat, model.unresolved)
     rows[#lines] = row
   end
   self:draw(lines, rows, first_row, model.current)

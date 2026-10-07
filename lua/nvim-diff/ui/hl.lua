@@ -99,6 +99,8 @@ M.groups = {
   NvimDiffPanelDeletions = { dark = { fg = "#d97b84" }, light = { fg = "#b3261e" } },
   NvimDiffPanelViewed = { dark = { link = "Comment" }, light = { link = "Comment" } },
   NvimDiffPanelRechanged = { dark = { fg = "#d7af5f" }, light = { fg = "#8a6d1f" } },
+  -- Files with unresolved review threads (`unresolved` in the panel model).
+  NvimDiffPanelComment = { dark = { fg = "#e0a458" }, light = { fg = "#b8641b" } },
   NvimDiffPanelDeferred = { dark = { link = "Comment" }, light = { link = "Comment" } },
   -- A renamed file's old path, after the new one.
   NvimDiffPanelOldPath = { dark = { link = "Comment" }, light = { link = "Comment" } },
