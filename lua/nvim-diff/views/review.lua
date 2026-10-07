@@ -49,8 +49,9 @@
 --- pane, or on a visual selection, or — in the file panel — on the whole file under the
 --- cursor; `keymaps.comment.reply` answers the thread on the cursor's line;
 --- `keymaps.comment.edit` reopens one of the user's own comments there in the split, and
---- `keymaps.comment.delete` deletes one after asking. Edit and delete work in the side list
---- too, on the thread under its cursor. After every change the threads are refetched; a new
+--- `keymaps.comment.delete` deletes one after asking; `keymaps.comment.copy_link` copies a
+--- comment's GitHub link. Edit, delete and copy work in the side list too, on the thread
+--- under its cursor. After every change the threads are refetched; a new
 --- comment's thread shows expanded, and a file-level one opens the side list.
 ---
 --- Threads are resolved on GitHub from the cursor's line: `keymaps.threads.resolve` at once,
@@ -443,6 +444,9 @@ function Review:map_own_comment_keys(buf)
   map(keys.delete, function()
     self:delete()
   end, "Comments: Delete my comment")
+  map(keys.copy_link, function()
+    self:copy_comment_link()
+  end, "Comments: Copy comment link")
 end
 
 --- Map the file-level comment key in the file panel `buf`.
@@ -887,6 +891,74 @@ end
 ---@param any boolean
 local function none_here(any)
   log.warn(any and "none of the comments here is yours" or "no comment thread here")
+end
+
+--- Copy the selected comment's GitHub URL to the system clipboard. The cursor identifies a
+--- thread rather than an individual reply, so a thread with several comments gets a picker.
+--- This works in a diff pane and in the side list.
+---@return boolean copied False when there is no comment with a GitHub URL here.
+function Review:copy_comment_link()
+  if not self:is_valid() then
+    return false
+  end
+  local view = self.view
+  local threads
+  local list = view.thread_list
+  if list and list:is_open() and api.nvim_get_current_win() == list.win then
+    local thread = list:thread_at_cursor()
+    threads = thread and { thread } or {}
+  else
+    local tv = view.thread_view
+    local here = tv and not tv.detached and tv:at_cursor() or {}
+    local side = view.file and not view.file:is_closed() and view.file:cursor().side
+    local on_side = vim.tbl_filter(function(thread)
+      return (thread.side or "new") == side
+    end, here)
+    threads = #on_side > 0 and on_side or here
+  end
+
+  local choices = {}
+  for _, thread in ipairs(threads) do
+    for _, comment in ipairs(thread.comments) do
+      if type(comment.url) == "string" and comment.url ~= "" then
+        choices[#choices + 1] = { thread = thread, comment = comment }
+      end
+    end
+  end
+  if #choices == 0 then
+    log.warn(#threads > 0 and "no GitHub comment link here" or "no comment thread here")
+    return false
+  end
+
+  local function copy(choice)
+    if not choice or not self:is_valid() then
+      return
+    end
+    local ok, err = pcall(vim.fn.setreg, "+", choice.comment.url)
+    if not ok then
+      log.error("cannot copy comment link: %s", tostring(err))
+      return
+    end
+    -- `setreg()` does not raise when no clipboard provider is installed; confirm it made it
+    -- to the `+` register before promising the copy succeeded.
+    local read, copied = pcall(vim.fn.getreg, "+")
+    if not read or copied ~= choice.comment.url then
+      log.error("cannot copy comment link: the system clipboard is unavailable")
+      return
+    end
+    vim.notify("nvim-diff: copied review comment link", vim.log.levels.INFO)
+  end
+  if #choices == 1 then
+    copy(choices[1])
+  else
+    vim.ui.select(choices, {
+      prompt = "Copy link for which comment?",
+      format_item = function(choice)
+        return comment_mod.label(choice.thread, choice.comment)
+      end,
+    }, copy)
+  end
+  return true
 end
 
 --- Edit one of the user's own comments where the cursor is, in the comment split.

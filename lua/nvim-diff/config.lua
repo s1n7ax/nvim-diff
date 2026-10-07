@@ -161,6 +161,8 @@ local M = {}
 ---@field edit NvimDiff.Config.Key
 --- Delete your comment in the thread on the cursor's line, after asking (also in the side list).
 ---@field delete NvimDiff.Config.Key
+--- Copy a comment's GitHub link from the thread on the cursor's line (also in the side list).
+---@field copy_link NvimDiff.Config.Key
 ---@field submit NvimDiff.Config.Key Post what the split holds.
 --- Close the split, in normal mode only; asks first when it holds text.
 ---@field cancel NvimDiff.Config.Key
@@ -328,6 +330,7 @@ local defaults = {
       cancel = "q",
       edit = "<leader>ce",
       delete = "<leader>cd",
+      copy_link = "<leader>cy",
       -- `<C-g>` is insert mode's own prefix for small commands; `s` is free there.
       suggest = "<C-g>s",
     },
@@ -463,6 +466,7 @@ local schema = {
       cancel = KEY,
       edit = KEY,
       delete = KEY,
+      copy_link = KEY,
       suggest = KEY,
     },
     verdict = {
