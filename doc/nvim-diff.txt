@@ -449,10 +449,10 @@ one GraphQL query: the PR's state, head commit, base branch and threads.
 
   - New commits, or the PR retargeted to another base branch: a notice says
     so, once per change, and the panel shows `● new commits on GitHub` (or
-    `base → <branch>`) under its counts, with the key that applies them. The
-    review keeps showing the old diff until `<leader>A` applies the new code
-    (|nvim-diff-review-apply|). A push to the base branch alone changes
-    nothing, as the diff is from the merge-base.
+    `base → <branch>`) under its counts. The review keeps showing the old
+    diff until a `<C-r>` refresh finds the code and you choose to reflect it
+    locally (|nvim-diff-review-apply|). A push to the base branch alone
+    changes nothing, as the diff is from the merge-base.
   - New threads, replies, edits and resolves from others: drawn at once, in
     place, without re-diffing the file. A thread someone else resolves stays
     on screen, dimmed, like one you resolve, until `gR` next flips resolved
@@ -474,10 +474,12 @@ Checks run in the background and go on while Neovim is unfocused. The
 threads are redrawn only when something about them changed.
 
                                                       *nvim-diff-review-apply*
-`<leader>A` (|nvim-diff-config.keymaps.review.apply|) applies the new code
-in the same review: it reads GitHub's head, base branch and threads again,
-fetches the commits and the viewed marks in the background, then checks the
-new head out into the same review slot and shows it.
+When `<C-r>` (|nvim-diff-config.keymaps.review.sync|) finds new commits or a
+new base branch, it asks whether to reflect the changes locally. Choosing
+`Reflect locally` applies the new code in the same review: it reads GitHub's
+head, base branch and threads again, fetches the commits and the viewed marks
+in the background, then checks the new head out into the same review slot and
+shows it.
 
   - The file list is the new diff's. A file the new code leaves alone keeps
     its layout and diff mode; viewed marks are GitHub's (a file the new
@@ -590,9 +592,8 @@ In the file panel and the diff panes:
   `<leader><space>`  mark the file viewed on GitHub, jump to the next one not
                    viewed
   `<leader><BS>`     clear the file's viewed mark
-  `<C-r>`            check GitHub now for new commits, a new base branch or
-                   a merge (|nvim-diff-review-sync|)
-  `<leader>A`        apply the new code a check found (|nvim-diff-review-apply|)
+  `<C-r>`            refresh from GitHub; when code changed, ask whether to
+                   reflect it locally (|nvim-diff-review-sync|)
   `<leader>ra`       approve the PR, after asking (no summary; |:NvimDiffVerdict|
                    `approve` for one with a summary)
   `<leader>rr`       request changes: open the verdict split, whose summary is
@@ -854,8 +855,6 @@ keymaps.review.mark_viewed             (default: `"<leader><space>"`)
 keymaps.review.unmark_viewed           (default: `"<leader><BS>"`)
                                         *nvim-diff-config.keymaps.review.sync*
 keymaps.review.sync                    (default: `"<C-r>"`)
-                                       *nvim-diff-config.keymaps.review.apply*
-keymaps.review.apply                   (default: `"<leader>A"`)
                                  *nvim-diff-config.keymaps.review.approve*
 keymaps.review.approve                 (default: `"<leader>ra"`)
                          *nvim-diff-config.keymaps.review.request_changes*
