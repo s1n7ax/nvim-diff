@@ -405,10 +405,14 @@ end
 function ThreadView:jump(dir)
   local rows = {}
   for row, list in pairs(self.rows) do
-    for _, t in ipairs(list) do
-      if self:visible(t) then
-        rows[#rows + 1] = row
-        break
+    -- A file-level thread lives above the first line (row 0), where the cursor cannot go.
+    -- Its full thread remains available in `gC`; only line-anchored threads can be jumped to.
+    if row > 0 then
+      for _, t in ipairs(list) do
+        if self:visible(t) then
+          rows[#rows + 1] = row
+          break
+        end
       end
     end
   end
