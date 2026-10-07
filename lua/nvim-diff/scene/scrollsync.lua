@@ -35,10 +35,11 @@ local api = vim.api
 
 local M = {}
 
---- Scroll keys mapped in every pane buffer, shadowing global remaps. Smooth scrolling
---- plugins animate these with `WinScrolled` in `eventignore`, so the corrector never hears
---- of the scroll and the other panes stay behind.
-M.SCROLL_KEYS = { "<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>", "zt", "zz", "zb", "z<CR>", "z.", "z-" }
+--- Scroll keys whose normal handling must be passed through unless the pane is blocked.
+--- They are handled from `on_key`, rather than buffer-local mappings: a smooth-scrolling
+--- plugin must be allowed to see the key and animate it. The WinScrolled events emitted by
+--- that animation still drive the normal corrector.
+M.SCROLL_KEYS = { "<C-d>", "<C-u>", "<C-f>", "<C-b>", "<C-e>", "<C-y>" }
 
 --- The scroll keys a pane that cannot scroll hands on to another, and their direction.
 local FORWARD = { ["<C-d>"] = 1, ["<C-u>"] = -1, ["<C-f>"] = 1, ["<C-b>"] = -1, ["<C-e>"] = 1, ["<C-y>"] = -1 }
@@ -85,6 +86,7 @@ local WHEEL = {
 ---@field private expected table<integer, string> Last view the corrector left each pane in.
 ---@field private paused integer
 ---@field private following boolean The panes are following the current window (`place_others`).
+---@field private follow_id integer Token for the short smooth-scroll poll.
 local Sync = {}
 Sync.__index = Sync
 
@@ -602,17 +604,67 @@ local function on_wheel(wheel)
   return nil
 end
 
----@param k string
----@param typed string
----@return string?
+--- Smooth-scroll plugins commonly set `eventignore=WinScrolled` while animating.  Poll
+--- briefly after a scroll key as a fallback for those animations; ordinary scrolling is
+--- still corrected by the autocmd above.
+---@param win integer
+function Sync:watch_scroll(win)
+  self.follow_id = (self.follow_id or 0) + 1
+  local id = self.follow_id
+  local ticks = 0
+  local function poll()
+    if id ~= self.follow_id or not live[self] or not api.nvim_win_is_valid(win) then
+      return
+    end
+    self:sync(win)
+    ticks = ticks + 1
+    if ticks < 60 then
+      vim.defer_fn(poll, 16)
+    end
+  end
+  vim.defer_fn(poll, 0)
+end
+
 local function on_key(k, typed)
   local wheel = WHEEL[k] or WHEEL[typed]
-  if not wheel then
+  if wheel then
+    -- An error would take the listener away for good.
+    local ok, out = pcall(on_wheel, wheel)
+    return ok and out or nil
+  end
+
+  -- Do not install buffer-local mappings for these.  They would shadow mappings from
+  -- neoscroll (and similar plugins), whose animation deliberately suppresses WinScrolled
+  -- while it is running.  Only consume a key when the current pane cannot move itself;
+  -- otherwise returning nil lets Neovim and the smooth-scrolling mapping handle it.
+  local lhs
+  for _, candidate in ipairs(M.SCROLL_KEYS) do
+    if vim.keycode(candidate) == k or candidate == typed then
+      lhs = candidate
+      break
+    end
+  end
+  if not lhs then
     return nil
   end
-  -- An error would take the listener away for good.
-  local ok, out = pcall(on_wheel, wheel)
-  return ok and out or nil
+  local count = vim.v.count
+  for sync in pairs(live) do
+    local win = api.nvim_get_current_win()
+    if sync:index_of(win) and sync:blocked(win, FORWARD[lhs]) then
+      local ok, consumed = pcall(sync.forward, sync, win, lhs, count)
+      if ok and consumed then
+        return ""
+      end
+    end
+    -- Give a smooth-scrolling mapping time to start, then cover animations that suppress
+    -- WinScrolled.  Returning nil above is important: the mapping still owns the key.
+    vim.schedule(function()
+      if live[sync] and api.nvim_win_is_valid(win) then
+        sync:watch_scroll(win)
+      end
+    end)
+  end
+  return nil
 end
 
 --- Stop correcting; stopped panes get their 'scrolloff' back (their owner paints them as it
@@ -634,29 +686,18 @@ function Sync:detach()
   end
 end
 
---- Map the scroll keys in `buf`: `FORWARD` ones handed on when its pane cannot scroll that
---- way, the rest to themselves.
----@param buf integer
-function Sync:map_keys(buf)
-  for _, lhs in ipairs(M.SCROLL_KEYS) do
-    local rhs = lhs
-    if FORWARD[lhs] then
-      rhs = function()
-        local count = vim.v.count
-        if not self:forward(api.nvim_get_current_win(), lhs, count) then
-          api.nvim_feedkeys(vim.keycode((count > 0 and count or "") .. lhs), "ni", false)
-        end
-      end
-    end
-    vim.keymap.set({ "n", "x" }, lhs, rhs, { buffer = buf, desc = "nvim-diff (scroll sync)" })
-  end
-end
-
 --- Start correcting `panes`.
 ---@param panes NvimDiff.SyncPane[]
 ---@return NvimDiff.ScrollSync
 function M.attach(panes)
-  local self = setmetatable({ panes = panes, expected = {}, paused = 0, stopped = {}, following = false }, Sync)
+  local self = setmetatable({
+    panes = panes,
+    expected = {},
+    paused = 0,
+    stopped = {},
+    following = false,
+    follow_id = 0,
+  }, Sync)
   self.augroup = api.nvim_create_augroup("nvim-diff.scrollsync." .. panes[1].win, { clear = true })
 
   api.nvim_create_autocmd("WinScrolled", {
@@ -676,7 +717,6 @@ function M.attach(panes)
   })
   for _, p in ipairs(panes) do
     local buf = api.nvim_win_get_buf(p.win)
-    self:map_keys(buf)
     api.nvim_create_autocmd("CursorMoved", {
       group = self.augroup,
       buffer = buf,
