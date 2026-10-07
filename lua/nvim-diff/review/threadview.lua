@@ -544,7 +544,7 @@ function ThreadView:map_keys()
         log.info("resolved threads: %s", mode == "hide" and "hidden" or "shown, dimmed")
       end, "Threads: Show / hide resolved")
       if self.opts.on_list then
-        map(keys.list, self.opts.on_list, "Threads: List outdated & file comments")
+        map(keys.list, self.opts.on_list, "Threads: List all review comments")
       end
     end
   end

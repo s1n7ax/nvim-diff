@@ -426,9 +426,11 @@ every reply, resolved ones as a one-line summary (author, first line, replies,
 resolved state). A file-level thread shows above the first line, labelled
 `file-level` and without a tail, so it is distinct from a comment on line 1.
 `<CR>` expands or collapses a thread in place. Resolved threads are dimmed with
-a `✓` (|nvim-diff-config.threads.resolved|). Outdated threads and threads
-outside the shown diff go to a side list (`gC`), which also includes file-level
-comments for their edit, delete and copy actions.
+a `✓` (|nvim-diff-config.threads.resolved|). Every thread is also listed in a
+side list (`gC`), grouped by file: `<CR>` on one jumps to its file and line,
+and the same key as `gR` filters the list between all, unresolved and resolved
+threads. Outdated threads (whose code changed, so GitHub returns no line) and
+file-level comments live there too, with their edit, delete and copy actions.
 
 Writing: `<leader>cc` comments on the cursor's line, in either pane, or on a
 visual selection of lines inside one hunk. In the file panel it writes a
@@ -627,6 +629,8 @@ In the diff panes:
 
 In the side list:
 
+  `<CR>`             go to the thread under the cursor (its file and line)
+  `gR`               filter all / unresolved / resolved threads (not configurable)
   `<leader>ce`       edit your comment in the thread under the cursor
   `<leader>cd`       delete your comment in the thread under the cursor
   `q`                close the list (not configurable)
