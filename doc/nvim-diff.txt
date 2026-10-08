@@ -526,7 +526,8 @@ THE COMMENT SPLIT                                          *nvim-diff-compose*
 
 A real buffer under the diff, with a header naming the file and line or the
 thread being answered. Write markdown in it, then `<C-s>` or |:w| to post;
-the header spins while the post is on its way. `q` in normal mode cancels,
+the header spins while the post is on its way, and keys typed meanwhile are
+dropped (a second `<C-s>` does not reach the diff). `q` in normal mode cancels,
 asking first when text would be lost; no insert-mode key cancels, so `<C-c>`
 and `<Esc>` only leave insert mode. A failed post leaves the split open with
 your text and the error. Nothing is written to disk.
