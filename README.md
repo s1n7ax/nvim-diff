@@ -72,6 +72,7 @@ defined at startup and load the rest on first use.
 | `:NvimDiffLineHistory` | history of the line under the cursor (`git log -L`), as of `HEAD` |
 | `:NvimDiffConflict [path]` | resolve the conflicts in a file (default: the current one) three-way |
 | `:NvimDiffPR <n>` | review GitHub PR `n` (`42` or `#42`) |
+| `:NvimDiffPR` | review the open PR from the current branch; with several, pick one |
 | `:NvimDiffVerdict [approve\|request-changes\|comment]` | submit the review verdict with a summary |
 | `:NvimDiffMerge [merge\|squash\|rebase]` | merge the reviewed PR, after asking (no argument: pick the method) |
 

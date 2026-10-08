@@ -1898,20 +1898,84 @@ function Review:close(opts)
   end
 end
 
---- `:NvimDiffPR <number>`.
----@param arg string `42` or `#42`.
-function M.command(arg)
-  local number = tonumber((vim.trim(arg or ""):gsub("^#", "")))
-  if not number then
-    vim.notify("nvim-diff: :NvimDiffPR takes a PR number", vim.log.levels.ERROR)
-    return
-  end
+---@param number integer
+---@param repo? NvimDiff.Git.Repo
+local function open_number(number, repo)
   api.nvim_echo({ { ("nvim-diff: opening PR #%d…"):format(number) } }, false, {})
   vim.cmd.redraw()
-  local ok, err = pcall(M.open, { number = number })
+  local ok, err = pcall(M.open, { number = number, repo = repo })
   if not ok then
     vim.notify(tostring(err), vim.log.levels.ERROR)
   end
+end
+
+---@param pr NvimDiff.GitHub.PRSummary
+---@return string
+local function pr_label(pr)
+  return ("#%d %s → %s%s"):format(pr.number, pr.title, pr.base, pr.draft and " [draft]" or "")
+end
+
+--- `:NvimDiffPR` with no number: the open PR from the branch checked out, or the one picked
+--- when there are several. Closed and merged ones are only named, never opened.
+local function open_branch_pr()
+  api.nvim_echo({ { "nvim-diff: looking for this branch's PR…" } }, false, {})
+  vim.cmd.redraw()
+  local repo, err = repo_mod.discover()
+  if not repo then
+    vim.notify("nvim-diff: " .. msg(err), vim.log.levels.ERROR)
+    return
+  end
+  local found, find_err = pr_mod.for_branch(repo)
+  if not found then
+    vim.notify(("nvim-diff: cannot find this branch's PR: %s"):format(msg(find_err)), vim.log.levels.ERROR)
+    return
+  end
+  if found.number then
+    open_number(found.number, repo)
+    return
+  end
+
+  local open, others = {}, {}
+  for _, pr in ipairs(found.prs) do
+    if pr.state == "OPEN" then
+      open[#open + 1] = pr
+    else
+      others[#others + 1] = ("#%d (%s)"):format(pr.number, pr.state:lower())
+    end
+  end
+  if #open == 0 then
+    local also = #others > 0 and ("; %s — :NvimDiffPR <number> opens one"):format(table.concat(others, ", ")) or ""
+    vim.notify(("nvim-diff: no open PR from %s%s"):format(found.head, also), vim.log.levels.ERROR)
+    return
+  end
+  if #open == 1 then
+    open_number(open[1].number, repo)
+    return
+  end
+  vim.ui.select(open, {
+    prompt = ("Review which PR from %s?"):format(found.head),
+    format_item = pr_label,
+  }, function(pick)
+    if pick then
+      open_number(pick.number, repo)
+    end
+  end)
+end
+
+--- `:NvimDiffPR [number]`. Without a number, the PR from the branch checked out.
+---@param arg string `42`, `#42`, or empty.
+function M.command(arg)
+  arg = vim.trim(arg or "")
+  if arg == "" then
+    open_branch_pr()
+    return
+  end
+  local number = tonumber((arg:gsub("^#", "")))
+  if not number then
+    vim.notify("nvim-diff: :NvimDiffPR takes a PR number, or none for this branch's PR", vim.log.levels.ERROR)
+    return
+  end
+  open_number(number)
 end
 
 return M

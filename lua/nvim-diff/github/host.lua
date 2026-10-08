@@ -108,4 +108,21 @@ function M.resolve(repo, opts)
   return { host = host, owner = parsed.owner, repo = parsed.repo }
 end
 
+--- The owner and name of the GitHub repository `remote` points at.
+---@param repo NvimDiff.Git.Repo
+--- A remote's name, or a URL: `branch.<name>.remote` and `pushRemote` may hold either
+--- (`gh pr checkout` sets a fork's URL there).
+---@param remote string
+---@return string? owner Nil when `remote` is not a GitHub repository.
+---@return string? name
+---@throws NvimDiff.Job.Cancelled when the enclosing task is cancelled.
+function M.repository(repo, remote)
+  local url = git_cmd.output(repo.toplevel, { "remote", "get-url", "--", remote }) or remote
+  local parsed = parse_remote(url)
+  if not parsed then
+    return nil
+  end
+  return parsed.owner, parsed.repo
+end
+
 return M
