@@ -14,7 +14,11 @@
 --- other side is filler — clamped into what that pane shows, `scrolloff` included. Entering
 --- a pane therefore never scrolls it. Where the current pane cannot have a line on screen
 --- with room for its `scrolloff` (inside tall filler), Neovim moves it, and the other panes
---- follow it there.
+--- follow it there. Where another pane cannot (its top line over filler taller than the
+--- rest of the window), its cursor goes on the nearest line on screen and the pane is
+--- *held*: a window-local `scrolloff=0` until it is put somewhere with room or moves by
+--- itself. Neovim would otherwise scroll it to make room, and the corrector, taking that for
+--- the pane moving, would drag the current one back to it.
 ---
 --- A pane cannot always have a view row at its top: Neovim keeps `topfill` below the window
 --- height, so a top in the upper part of virtual rows taller than the window is out of
@@ -23,10 +27,12 @@
 --- it can have and, when the pane can (`park`, `scene/park.lua`), painted so it still shows
 --- the view row. The panes scroll as far as the one that reaches furthest. A stopped pane
 --- stands for the view row it was stopped at: it is followed only when it moved by itself
---- (a cursor motion, `zz`), and then read as it is. It gets a window-local `scrolloff=0`, or
---- Neovim would scroll it to keep lines around its cursor. Scroll keys and the mouse wheel
---- in a pane that cannot scroll that way (stopped, or at its own last line) scroll another
---- pane that can, and the corrector brings it along.
+--- (a cursor motion, `zz`), and then read as it is. It is held too, or Neovim would scroll
+--- it to keep lines around its cursor. Scroll keys typed and the mouse wheel in a pane that
+--- cannot scroll that way (stopped, or at its own last line) scroll another pane that can,
+--- and the corrector brings it along. A smooth-scrolling plugin's own steps (`:normal!
+--- <C-e>`, not typed) are left where it runs them: handed on, its window would never move
+--- and the animation would run on past its target.
 ---
 --- Pane-count agnostic: the side-by-side layout gives it two panes, a three-way merge
 --- layout can give it more.
@@ -77,11 +83,12 @@ local WHEEL = {
 ---@field top string `topline:topfill` it was left at.
 ---@field lnum? integer The line its cursor stays on, when parked.
 ---@field lead? boolean That line is at the bottom, below the rows (a run above line 1).
----@field so integer Its window-local 'scrolloff' before (-1: none).
 
 ---@class NvimDiff.ScrollSync
 ---@field panes NvimDiff.SyncPane[]
 ---@field stopped table<integer, NvimDiff.SyncStop> By window.
+--- Held panes, by window: their window-local 'scrolloff' before (-1: none).
+---@field private held table<integer, integer>
 ---@field private augroup integer
 ---@field private expected table<integer, string> Last view the corrector left each pane in.
 ---@field private paused integer
@@ -152,17 +159,22 @@ end
 
 --- Move `pane`'s cursor to the counterpart of view row `cursor_v`, kept inside the rows its
 --- view shows with `scrolloff` respected, so that entering the pane does not scroll it.
---- Runs inside `nvim_win_call(pane.win)`.
+--- False when no line on screen has that room (its top line over filler taller than the
+--- rest of the window): the cursor is on the nearest line on screen then. Runs inside
+--- `nvim_win_call(pane.win)`.
 ---@param pane NvimDiff.SyncPane
 ---@param view vim.fn.winsaveview.ret The pane's view, already moved.
 ---@param cursor_v integer
-local function place_cursor(pane, view, cursor_v)
+---@param so integer The pane's own 'scrolloff', held or not.
+---@return boolean
+local function place_cursor(pane, view, cursor_v, so)
   local top = pane.top_view(view.topline, view.topfill)
   local lnum = line_for(pane, cursor_v)
+  local room = true
   if top then
     -- Text rows only: `nvim_win_get_height` counts a winbar too.
     local height = vim.fn.winheight(pane.win)
-    local so = math.min(vim.fn.eval("&scrolloff"), math.floor((height - 1) / 2))
+    so = math.min(so, math.floor((height - 1) / 2))
     local lo = top > 0 and top + so or 0
     local hi = top < pane.max_top() and top + height - 1 - so or math.huge
     local v = pane.line_view(lnum)
@@ -182,10 +194,13 @@ local function place_cursor(pane, view, cursor_v)
     elseif v and v < top then
       lnum = view.topline
     end
+    v = pane.line_view(lnum)
+    room = not v or (v >= lo and v <= hi)
   end
   view.lnum = lnum
   view.col = 0
   view.curswant = 0
+  return room
 end
 
 --- The last view row a pane can show at its top: the largest any pane reaches as it is.
@@ -200,6 +215,33 @@ function Sync:limit()
   return limit
 end
 
+--- Hold `win`'s pane (a window-local 'scrolloff' of 0), or give it its own 'scrolloff' back.
+---@param win integer
+---@param on boolean
+function Sync:hold(win, on)
+  local so = self.held[win]
+  if on and so == nil then
+    self.held[win] = api.nvim_get_option_value("scrolloff", { win = win, scope = "local" })
+    api.nvim_set_option_value("scrolloff", 0, { win = win, scope = "local" })
+  elseif not on and so ~= nil then
+    self.held[win] = nil
+    if api.nvim_win_is_valid(win) then
+      api.nvim_set_option_value("scrolloff", so, { win = win, scope = "local" })
+    end
+  end
+end
+
+--- `win`'s own 'scrolloff', held or not.
+---@param win integer
+---@return integer
+function Sync:scrolloff(win)
+  local so = self.held[win]
+  if so == nil then
+    return api.nvim_get_option_value("scrolloff", { win = win })
+  end
+  return so >= 0 and so or vim.go.scrolloff
+end
+
 --- `win`'s pane is no longer stopped: its 'scrolloff' and its rows as they are come back.
 ---@param win integer
 function Sync:release(win)
@@ -208,9 +250,7 @@ function Sync:release(win)
     return
   end
   self.stopped[win] = nil
-  if api.nvim_win_is_valid(win) then
-    api.nvim_set_option_value("scrolloff", stop.so, { win = win, scope = "local" })
-  end
+  self:hold(win, false)
   local i = self:index_of(win)
   if i and self.panes[i].unpark then
     self.panes[i].unpark()
@@ -241,8 +281,8 @@ function Sync:stop(pane, v)
   end
   local stop = self.stopped[pane.win]
   if not stop then
-    stop = { so = api.nvim_get_option_value("scrolloff", { win = pane.win, scope = "local" }) }
-    api.nvim_set_option_value("scrolloff", 0, { win = pane.win, scope = "local" })
+    stop = {}
+    self:hold(pane.win, true)
     self.stopped[pane.win] = stop
   end
   stop.v, stop.lnum, stop.lead = v, lnum, lnum ~= nil and (tf or 0) > 0
@@ -267,6 +307,7 @@ function Sync:place(pane, v, cursor_v, leftcol, lnum)
   if tl then
     self:release(win)
   end
+  local so = self:scrolloff(win)
   api.nvim_win_call(win, function()
     local view = vim.fn.winsaveview()
     local hidden
@@ -281,10 +322,14 @@ function Sync:place(pane, v, cursor_v, leftcol, lnum)
       view.leftcol = leftcol
     end
     lnum = hidden or lnum
+    local room = true
     if lnum then
       view.lnum, view.col, view.curswant = lnum, 0, 0
     elseif cursor_v then
-      place_cursor(pane, view, cursor_v)
+      room = place_cursor(pane, view, cursor_v, so)
+    end
+    if not self.stopped[win] then
+      self:hold(win, not (room or current))
     end
     vim.fn.winrestview(view)
     if current then
@@ -358,7 +403,7 @@ function Sync:view_row(pane)
   return v, view, true
 end
 
---- `view_row`, a pane that moved by itself no longer stopped.
+--- `view_row`, a pane that moved by itself no longer stopped nor held.
 ---@param pane NvimDiff.SyncPane
 ---@return integer?
 ---@return vim.fn.winsaveview.ret
@@ -366,6 +411,9 @@ function Sync:top_of(pane)
   local v, view, stopped = self:view_row(pane)
   if not stopped then
     self:release(pane.win)
+    if self.expected[pane.win] ~= key(view) then
+      self:hold(pane.win, false)
+    end
   end
   return v, view
 end
@@ -420,11 +468,14 @@ function Sync:sync_cursor(src)
   if not cursor_v then
     return
   end
+  local cur = api.nvim_get_current_win()
   for i, dp in ipairs(self.panes) do
     if i ~= si and api.nvim_win_is_valid(dp.win) and not self.stopped[dp.win] then
+      local so = self:scrolloff(dp.win)
       api.nvim_win_call(dp.win, function()
         local dv = vim.fn.winsaveview()
-        place_cursor(dp, dv, cursor_v)
+        local room = place_cursor(dp, dv, cursor_v, so)
+        self:hold(dp.win, not (room or dp.win == cur))
         vim.fn.winrestview(dv)
       end)
     end
@@ -650,7 +701,10 @@ local function on_key(k, typed)
   local count = vim.v.count
   for sync in pairs(live) do
     local win = api.nvim_get_current_win()
-    if sync:index_of(win) and sync:blocked(win, FORWARD[lhs]) then
+    -- Only a key the user typed is handed on.  A smooth-scrolling animation runs its steps
+    -- with `:normal!` (not typed): handed on, its window would never move, and it would
+    -- scroll on past its target.
+    if typed ~= "" and sync:index_of(win) and sync:blocked(win, FORWARD[lhs]) then
       local ok, consumed = pcall(sync.forward, sync, win, lhs, count)
       if ok and consumed then
         return ""
@@ -667,17 +721,15 @@ local function on_key(k, typed)
   return nil
 end
 
---- Stop correcting; stopped panes get their 'scrolloff' back (their owner paints them as it
---- closes). Idempotent.
+--- Stop correcting; stopped and held panes get their 'scrolloff' back (their owner paints
+--- stopped ones as it closes). Idempotent.
 function Sync:detach()
   if self.augroup then
     pcall(api.nvim_del_augroup_by_id, self.augroup)
     self.augroup = nil
   end
-  for win, stop in pairs(self.stopped) do
-    if api.nvim_win_is_valid(win) then
-      api.nvim_set_option_value("scrolloff", stop.so, { win = win, scope = "local" })
-    end
+  for win in pairs(self.held) do
+    self:hold(win, false)
   end
   self.stopped = {}
   live[self] = nil
@@ -695,6 +747,7 @@ function M.attach(panes)
     expected = {},
     paused = 0,
     stopped = {},
+    held = {},
     following = false,
     follow_id = 0,
   }, Sync)
