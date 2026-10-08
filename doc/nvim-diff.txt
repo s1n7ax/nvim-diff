@@ -140,9 +140,17 @@ the view, or `nil` and a message.
     three-way layout. See |nvim-diff-conflict|.
 
                                                                  *:NvimDiffPR*
-:NvimDiffPR {number}
+:NvimDiffPR [{number}]
     Review GitHub pull request {number} (`42` or `#42`). See
     |nvim-diff-review|.
+
+    Without {number}, the open PR from the current branch: the branch on the
+    repository `git push` sends it to (`branch.<name>.pushRemote`, else
+    `remote.pushDefault`, else `branch.<name>.remote`, else `origin`), under
+    the name the push gives it, else its own name. When several open PRs come
+    from it (into different bases), asks which. Closed and merged PRs are
+    named in the error, never opened. A branch `gh pr checkout` made for a PR
+    it cannot push to tracks `refs/pull/<n>/head`: that is PR <n>.
 
                                                             *:NvimDiffVerdict*
 :NvimDiffVerdict [approve | request-changes | comment]
