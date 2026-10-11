@@ -443,9 +443,20 @@ function Compose:submit()
   return true
 end
 
+--- Throw away the keys waiting to be read.
+local function drop_typeahead()
+  while vim.fn.getchar(0) ~= 0 do
+  end
+end
+
 --- Run `on_submit` as a task, so the GitHub calls it makes yield rather than freeze the
 --- editor, and spin the header until it is done. Blocks until then: the post's answer
 --- decides whether the split stays.
+---
+--- Keys typed while it blocks are dropped. They were typed at the spinner — most often the
+--- submit key again, when the post seemed slow — and would otherwise run once it is done,
+--- in whatever window has focus then: a save key in the diff pane the split returns to.
+--- Keys already waiting when it starts (the rest of a macro or `:normal`) still run.
 ---@param text string
 ---@return boolean ok
 ---@return string? message
@@ -464,6 +475,7 @@ function Compose:run_submit(text)
   if finished then
     return ok, message
   end
+  local typed_ahead = vim.fn.getchar(1) ~= 0
   self.posting = 1
   self:draw_header()
   vim.cmd.redraw()
@@ -480,6 +492,9 @@ function Compose:run_submit(text)
       end
       return finished
     end, 20)
+  end
+  if not typed_ahead then
+    drop_typeahead()
   end
   self.posting = nil
   self:draw_header()
