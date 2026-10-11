@@ -8,7 +8,7 @@
 --- Opening a review:
 ---
 --- 1. fetches the PR's node id, head and base (`github/pr.lua`); for a PR from a fork, asks
----    `Start LSP? [y/N]` (`review/fork.lua`);
+---    a `Start LSP?` Yes/No menu (`review/fork.lua`);
 --- 2. fetches `refs/pull/<n>/head` and the base branch from the remote when either commit
 ---    is missing locally (`git/fetch.lua`) — nothing is written to the user's refs;
 --- 3. diffs `merge-base(base, head)` against `head`, both as commits, locally with git —
@@ -99,6 +99,7 @@ local rev = require("nvim-diff.git.rev")
 local revparse = require("nvim-diff.git.revparse")
 local sync_mod = require("nvim-diff.review.sync")
 local threads_mod = require("nvim-diff.github.threads")
+local ui_confirm = require("nvim-diff.ui.confirm")
 local viewed_mod = require("nvim-diff.github.viewed")
 local views = require("nvim-diff.views.diff")
 local worktree = require("nvim-diff.git.worktree")
@@ -117,7 +118,7 @@ local by_number = {}
 ---@field remote? string The remote the PR lives on and is fetched from. Defaults to `origin`.
 --- The side-by-side head pane shows the slot's real file, with filetype and LSP, rather
 --- than a scratch copy (`views/diff.lua` `real_file`). Default true; for a PR from a fork,
---- only when the reviewer says yes to `Start LSP? [y/N]` (`false` skips the question).
+--- only when the reviewer says yes to the `Start LSP?` menu (`false` skips the question).
 ---@field real_file? boolean
 
 ---@class NvimDiff.Review
@@ -495,7 +496,7 @@ function Review:map_keys(buf)
   end
 end
 
---- Turn LSP on for the review: for a fork PR, after asking `Start LSP? [y/N]` again. From
+--- Turn LSP on for the review: for a fork PR, after asking `Start LSP?` again. From
 --- then on language servers may start on the slot's files — the ones open now get them —
 --- and the side-by-side head pane is the real file, with LSP; the file showing is shown
 --- again at once, on the same line, with a warning when it still shows as a copy (its file
@@ -600,12 +601,12 @@ function Review:sync_now()
   self.sync:now()
 end
 
---- Asks whether a manual refresh should make the review show code newly found on GitHub.
----Replaceable, so specs can answer without a prompt.
+--- Asks whether a manual refresh should make the review show code newly found on GitHub,
+--- as a Yes/No menu defaulting to Yes. Replaceable, so specs can answer without a prompt.
 ---@param prompt string
 ---@return boolean reflect
 function M.confirm_apply(prompt)
-  return vim.fn.confirm(prompt, "&Reflect locally\n&Keep current diff", 2) == 1
+  return ui_confirm.confirm(prompt, true)
 end
 
 --- Prompt to apply code newly found by a manual refresh.
@@ -643,11 +644,12 @@ function Review:mark_viewed(entry)
   return true
 end
 
---- Asks whether to approve. Replaceable, so specs can answer without a prompt.
+--- Asks whether to approve, as a Yes/No menu defaulting to No. Replaceable, so specs can
+--- answer without a prompt.
 ---@param prompt string
 ---@return boolean approve
 function M.confirm_approve(prompt)
-  return vim.fn.confirm(prompt, "&Approve\n&Cancel", 2) == 1
+  return ui_confirm.confirm(prompt, false)
 end
 
 --- Approve the PR after a confirmation, without a summary. For an approval with a
@@ -1007,11 +1009,12 @@ function Review:edit()
   return true
 end
 
---- Asks whether to delete a comment. Replaceable, so specs can answer without a prompt.
+--- Asks whether to delete a comment, as a Yes/No menu defaulting to No. Replaceable, so
+--- specs can answer without a prompt.
 ---@param prompt string
 ---@return boolean delete
 function M.confirm_delete(prompt)
-  return vim.fn.confirm(prompt, "&Delete\n&Keep", 2) == 1
+  return ui_confirm.confirm(prompt, false)
 end
 
 --- Delete one of the user's own comments where the cursor is, after asking.

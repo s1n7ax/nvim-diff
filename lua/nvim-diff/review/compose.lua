@@ -30,6 +30,7 @@ local config = require("nvim-diff.config")
 local help = require("nvim-diff.ui.help")
 local job = require("nvim-diff.core.job")
 local log = require("nvim-diff.core.log")
+local ui_confirm = require("nvim-diff.ui.confirm")
 
 local api = vim.api
 
@@ -43,11 +44,12 @@ M.SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "�
 --- Milliseconds between spinner frames.
 M.SPIN_MS = 80
 
---- Asks whether to throw away a draft. Replaceable, so specs can answer without a prompt.
+--- Asks whether to throw away a draft, as a Yes/No menu defaulting to Yes. Replaceable, so
+--- specs can answer without a prompt.
 ---@param prompt string
 ---@return boolean discard
 function M.confirm(prompt)
-  return vim.fn.confirm(prompt, "&Discard\n&Keep", 2) == 1
+  return ui_confirm.confirm(prompt, true)
 end
 
 ---@alias NvimDiff.ComposeDone "posted"|"cancelled"|"closed"

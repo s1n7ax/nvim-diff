@@ -9,6 +9,7 @@
 
 local gh_merge = require("nvim-diff.github.merge")
 local log = require("nvim-diff.core.log")
+local ui_confirm = require("nvim-diff.ui.confirm")
 
 local M = {}
 
@@ -20,11 +21,12 @@ M.ARGS = {
   rebase = "rebase",
 }
 
---- Asks whether to merge. Replaceable, so specs can answer without a prompt.
+--- Asks whether to merge, as a Yes/No menu defaulting to No. Replaceable, so specs can
+--- answer without a prompt.
 ---@param prompt string
 ---@return boolean merge
 function M.confirm(prompt)
-  return vim.fn.confirm(prompt, "&Merge\n&Cancel", 2) == 1
+  return ui_confirm.confirm(prompt, false)
 end
 
 ---@param review NvimDiff.Review

@@ -6,7 +6,7 @@
 --- The answer lives in the review (`views/review.lua`, `Review.lsp`) and nowhere else: it
 --- lasts until the review ends, and reopening the PR asks again.
 ---
----     if fork.ask(pr) then ... end         -- `Start LSP? [y/N]`, Enter is no
+---     if fork.ask(pr) then ... end         -- `Start LSP?`, a Yes/No menu, Enter is yes
 ---     local block = fork.block(slot, pr)   -- after a no: no server on the slot's files
 ---     block:lift({ start = true })         -- a yes after all
 ---
@@ -17,11 +17,12 @@ local config = require("nvim-diff.config")
 local log = require("nvim-diff.core.log")
 local lsp = require("nvim-diff.core.lsp")
 local path = require("nvim-diff.core.path")
+local ui_confirm = require("nvim-diff.ui.confirm")
 
 local M = {}
 
---- Ask whether to start LSP on fork PR `pr`: y or yes starts it; Enter, Esc, `<C-c>` or
---- anything else is no. Replaceable, so a script can answer without a prompt.
+--- Ask whether to start LSP on fork PR `pr`, as a Yes/No menu defaulting to Yes.
+--- Replaceable, so a script can answer without a prompt.
 ---@param pr NvimDiff.GitHub.PR
 ---@return boolean yes
 function M.ask(pr)
@@ -29,17 +30,8 @@ function M.ask(pr)
   if pr.head.owner and pr.head.repo then
     from = (" (%s/%s)"):format(pr.head.owner, pr.head.repo)
   end
-  local prompt = ("nvim-diff: PR #%d is from a fork%s. Start LSP? [y/N] "):format(pr.number, from)
-  vim.fn.inputsave()
-  local ok, answer = pcall(vim.fn.input, { prompt = prompt, cancelreturn = "" })
-  vim.fn.inputrestore()
-  -- The prompt and the answer stay on the command line otherwise.
-  vim.api.nvim_echo({ { "" } }, false, {})
-  if not ok or type(answer) ~= "string" then
-    return false
-  end
-  answer = vim.trim(answer):lower()
-  return answer == "y" or answer == "yes"
+  local prompt = ("nvim-diff: PR #%d is from a fork%s. Start LSP?"):format(pr.number, from)
+  return ui_confirm.confirm(prompt, true)
 end
 
 --- After a no: keep every language server off fork PR `pr`'s review slot `slot` until a
