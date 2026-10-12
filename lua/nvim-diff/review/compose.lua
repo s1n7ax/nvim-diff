@@ -44,12 +44,12 @@ M.SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "�
 --- Milliseconds between spinner frames.
 M.SPIN_MS = 80
 
---- Asks whether to throw away a draft, as a Yes/No menu defaulting to Yes. Replaceable, so
---- specs can answer without a prompt.
+--- Ask whether to throw away a draft, as a Yes/No menu defaulting to Yes, calling
+--- `on_answer` with the answer. Replaceable, so specs can answer without a prompt.
 ---@param prompt string
----@return boolean discard
-function M.confirm(prompt)
-  return ui_confirm.confirm(prompt, true)
+---@param on_answer fun(discard: boolean)
+function M.confirm(prompt, on_answer)
+  ui_confirm.confirm(prompt, true, on_answer)
 end
 
 ---@alias NvimDiff.ComposeDone "posted"|"cancelled"|"closed"
@@ -503,17 +503,21 @@ function Compose:run_submit(text)
   return ok, message
 end
 
---- Cancel: close the split, asking first when there is anything to lose.
----@return boolean cancelled False when the user chose to keep the text.
+--- Cancel: close the split, asking first when there is anything to lose. The question is
+--- answered from the menu, so the split closes from its callback.
 function Compose:cancel()
   if not self:is_open() then
-    return true
+    return
   end
-  if self:is_changed() and not M.confirm(("Discard this %s?"):format(self:noun())) then
-    return false
+  if not self:is_changed() then
+    self:close("cancelled")
+    return
   end
-  self:close("cancelled")
-  return true
+  M.confirm(("Discard this %s?"):format(self:noun()), function(discard)
+    if discard then
+      self:close("cancelled")
+    end
+  end)
 end
 
 ---@param how NvimDiff.ComposeDone

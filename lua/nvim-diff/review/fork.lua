@@ -6,7 +6,7 @@
 --- The answer lives in the review (`views/review.lua`, `Review.lsp`) and nowhere else: it
 --- lasts until the review ends, and reopening the PR asks again.
 ---
----     if fork.ask(pr) then ... end         -- `Start LSP?`, a Yes/No menu, Enter is yes
+---     fork.ask(pr, function(yes) ... end)  -- `Start LSP?`, a Yes/No menu, Enter is yes
 ---     local block = fork.block(slot, pr)   -- after a no: no server on the slot's files
 ---     block:lift({ start = true })         -- a yes after all
 ---
@@ -21,17 +21,17 @@ local ui_confirm = require("nvim-diff.ui.confirm")
 
 local M = {}
 
---- Ask whether to start LSP on fork PR `pr`, as a Yes/No menu defaulting to Yes.
---- Replaceable, so a script can answer without a prompt.
+--- Ask whether to start LSP on fork PR `pr`, as a Yes/No menu defaulting to Yes, calling
+--- `on_answer` with the answer. Replaceable, so a script can answer without a prompt.
 ---@param pr NvimDiff.GitHub.PR
----@return boolean yes
-function M.ask(pr)
+---@param on_answer fun(yes: boolean)
+function M.ask(pr, on_answer)
   local from = ""
   if pr.head.owner and pr.head.repo then
     from = (" (%s/%s)"):format(pr.head.owner, pr.head.repo)
   end
   local prompt = ("nvim-diff: PR #%d is from a fork%s. Start LSP?"):format(pr.number, from)
-  return ui_confirm.confirm(prompt, true)
+  ui_confirm.confirm(prompt, true, on_answer)
 end
 
 --- After a no: keep every language server off fork PR `pr`'s review slot `slot` until a

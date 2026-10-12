@@ -21,12 +21,12 @@ M.ARGS = {
   rebase = "rebase",
 }
 
---- Asks whether to merge, as a Yes/No menu defaulting to No. Replaceable, so specs can
---- answer without a prompt.
+--- Ask whether to merge, as a Yes/No menu defaulting to No, calling `on_answer` with the
+--- answer. Replaceable, so specs can answer without a prompt.
 ---@param prompt string
----@return boolean merge
-function M.confirm(prompt)
-  return ui_confirm.confirm(prompt, false)
+---@param on_answer fun(merge: boolean)
+function M.confirm(prompt, on_answer)
+  ui_confirm.confirm(prompt, false, on_answer)
 end
 
 ---@param review NvimDiff.Review
@@ -35,49 +35,46 @@ local function describe(review)
   return ("PR #%d"):format(review.number)
 end
 
---- Confirm, then merge `review` with `method`. The review must still be open.
+--- Confirm, then merge `review` with `method`, from the menu's answer. The review must
+--- still be open, at the answer as at the ask.
 ---@param review NvimDiff.Review
 ---@param method NvimDiff.GitHub.MergeMethod
----@return boolean merged False when cancelled, refused, or GitHub said no.
 function M.run(review, method)
   local info = gh_merge.info(method)
   if not info then
     log.error("not a merge method: %s", vim.inspect(method))
-    return false
+    return
   end
   if not review:is_valid() then
     log.error("the review has ended")
-    return false
+    return
   end
   local prompt = ("%s %s?"):format(info.label, describe(review))
   if review.pr.head.oid then
     prompt = ("%s\nHead %s"):format(prompt, review.pr.head.oid:sub(1, 7))
   end
-  if not M.confirm(prompt) then
-    return false
-  end
-  if not review:is_valid() then
-    log.error("the review has ended")
-    return false
-  end
-  vim.notify(("nvim-diff: %s %s…"):format(info.label:lower(), describe(review)), vim.log.levels.INFO)
-  vim.cmd.redraw()
-  local result, err = gh_merge.merge(review.pr, method)
-  if not result then
-    ---@cast err NvimDiff.GitHub.Error
-    log.error("%s not merged: %s", describe(review), err.message)
-    return false
-  end
-  vim.notify(
-    ("nvim-diff: %s %s%s"):format(
-      describe(review),
-      info.label:lower():gsub("^%l", string.upper),
-      result.sha and ("d as " .. result.sha:sub(1, 7)) or "d"
-    ),
-    vim.log.levels.INFO
-  )
-  review:sync_now()
-  return true
+  M.confirm(prompt, function(merge)
+    if not merge or not review:is_valid() then
+      return
+    end
+    vim.notify(("nvim-diff: %s %s…"):format(info.label:lower(), describe(review)), vim.log.levels.INFO)
+    vim.cmd.redraw()
+    local result, err = gh_merge.merge(review.pr, method)
+    if not result then
+      ---@cast err NvimDiff.GitHub.Error
+      log.error("%s not merged: %s", describe(review), err.message)
+      return
+    end
+    vim.notify(
+      ("nvim-diff: %s %s%s"):format(
+        describe(review),
+        info.label:lower():gsub("^%l", string.upper),
+        result.sha and ("d as " .. result.sha:sub(1, 7)) or "d"
+      ),
+      vim.log.levels.INFO
+    )
+    review:sync_now()
+  end)
 end
 
 --- `:NvimDiffMerge [merge|squash|rebase]`. With no argument, a picker asks.

@@ -3,31 +3,22 @@
 --- the default. Only an explicit `Yes` is yes — `No`, dismissing the menu (`Esc`, closing
 --- the picker) and the built-in fallback's empty Enter are all a no.
 ---
---- Blocking, so a caller keeps its boolean-returning `confirm`/`ask` shape. The built-in
---- fallback calls back inside `vim.ui.select`; snacks and telescope call back after it
---- returned, which `vim.wait` waits for, so the action still waits for the answer.
+--- Asynchronous: `on_answer` runs from `vim.ui.select`'s callback, so the caller's
+--- continuation runs on the answer and nothing blocks the main loop — a picker that answers
+--- after `vim.ui.select` returns (snacks, telescope) keeps drawing and taking keys while the
+--- menu is open. The built-in fallback calls back inside `vim.ui.select`.
 
 local M = {}
 
---- Ask `prompt`, returning the answer: true only for an explicit Yes.
+--- Ask `prompt`, calling `on_answer` with the answer: true only for an explicit Yes.
 ---@param prompt string
----@param default boolean The answer a bare Enter picks.
----@return boolean yes
-function M.confirm(prompt, default)
+---@param default boolean The answer a bare Enter picks; its item is listed first.
+---@param on_answer fun(yes: boolean)
+function M.confirm(prompt, default, on_answer)
   local items = default and { "Yes", "No" } or { "No", "Yes" }
-  local answered, answer = false, nil
   vim.ui.select(items, { prompt = prompt }, function(choice)
-    answered = true
-    answer = choice
+    on_answer(choice == "Yes")
   end)
-  -- A floating picker answers after `vim.ui.select` returns; wait for it. The built-in
-  -- fallback answers inline, so there is nothing to wait for.
-  if not answered then
-    vim.wait(math.huge, function()
-      return answered
-    end)
-  end
-  return answer == "Yes"
 end
 
 return M

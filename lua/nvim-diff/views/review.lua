@@ -192,11 +192,13 @@ local function msg(err)
   return err and err.message or "unknown error"
 end
 
+local continue
+
 --- Open PR `opts.number` for review in a new tabpage. When that PR is already open, its tab
 --- is entered instead. Raises when the PR cannot be fetched or checked out; nothing is left
 --- behind on failure.
 ---@param opts NvimDiff.ReviewOpts
----@return NvimDiff.Review
+---@return NvimDiff.Review? review Nil for a fork PR: it opens from the menu's answer.
 function M.open(opts)
   local number = opts.number
   if type(number) ~= "number" or number < 1 or number % 1 ~= 0 then
@@ -225,18 +227,38 @@ function M.open(opts)
   end
 
   -- A fork's code gets a language server only when the reviewer says so. Asked first, so
-  -- the question comes before the slow part.
+  -- the question comes before the slow part. The menu answers later, so the rest runs from
+  -- its callback — nothing blocks the picker.
   local is_fork = pr.cross_repository
   local lsp_on = opts.real_file ~= false
   if is_fork and lsp_on then
-    lsp_on = fork.ask(pr)
+    fork.ask(pr, function(yes)
+      local ok, oerr = pcall(continue, opts, repo, remote, number, pr, is_fork, yes)
+      if not ok then
+        vim.notify(tostring(oerr), vim.log.levels.ERROR)
+      end
+    end)
+    return nil
   end
+  return continue(opts, repo, remote, number, pr, is_fork, lsp_on)
+end
 
+--- The rest of `M.open`: fetch the PR's commits, check it out into a review slot and open
+--- the view, once the fork question (if any) is answered.
+---@param opts NvimDiff.ReviewOpts
+---@param repo NvimDiff.Git.Repo
+---@param remote string
+---@param number integer
+---@param pr NvimDiff.GitHub.PR
+---@param is_fork boolean
+---@param lsp_on boolean
+---@return NvimDiff.Review
+function continue(opts, repo, remote, number, pr, is_fork, lsp_on)
   local refs = { ("refs/pull/%d/head"):format(number) }
   if pr.base.ref then
     refs[#refs + 1] = "refs/heads/" .. pr.base.ref
   end
-  local ok
+  local ok, err
   ok, err = fetch.commits(repo, remote, refs, { pr.head.oid, pr.base.oid })
   if not ok then
     fail(("cannot fetch PR #%d's commits from %s: %s"):format(number, remote, msg(err)))
@@ -496,22 +518,35 @@ function Review:map_keys(buf)
   end
 end
 
---- Turn LSP on for the review: for a fork PR, after asking `Start LSP?` again. From
---- then on language servers may start on the slot's files — the ones open now get them —
---- and the side-by-side head pane is the real file, with LSP; the file showing is shown
---- again at once, on the same line, with a warning when it still shows as a copy (its file
---- on disk changed, say). Lasts until the review ends.
----@return boolean on Whether LSP is on for the review now.
+--- Turn LSP on for the review: for a fork PR, after answering `Start LSP?`. From then on
+--- language servers may start on the slot's files — the ones open now get them — and the
+--- side-by-side head pane is the real file, with LSP; the file showing is shown again at
+--- once, on the same line, with a warning when it still shows as a copy (its file on disk
+--- changed, say). Lasts until the review ends. The fork question is answered from the menu,
+--- so LSP comes on from its callback.
 function Review:start_lsp()
   if not self:is_valid() then
-    return false
+    return
   end
   if self.lsp then
     log.warn("LSP is already on in this review")
-    return true
+    return
   end
-  if self.fork and not fork.ask(self.pr) then
-    return false
+  if self.fork then
+    fork.ask(self.pr, function(yes)
+      if yes and self:is_valid() then
+        self:enable_lsp()
+      end
+    end)
+    return
+  end
+  self:enable_lsp()
+end
+
+--- Turn LSP on now, the `Start LSP?` question (if any) already answered.
+function Review:enable_lsp()
+  if not self:is_valid() or self.lsp then
+    return
   end
   self.lsp = true
   if self.block then
@@ -526,7 +561,6 @@ function Review:start_lsp()
   if entry and refused then
     log.warn("LSP is on, but %s shows as a copy without it: %s", entry.path, refused)
   end
-  return true
 end
 
 --- The file a viewed key acts on: the file row under the cursor in the panel, else the file
@@ -601,24 +635,26 @@ function Review:sync_now()
   self.sync:now()
 end
 
---- Asks whether a manual refresh should make the review show code newly found on GitHub,
---- as a Yes/No menu defaulting to Yes. Replaceable, so specs can answer without a prompt.
+--- Ask whether a manual refresh should make the review show code newly found on GitHub,
+--- as a Yes/No menu defaulting to Yes, calling `on_answer` with the answer. Replaceable,
+--- so specs can answer without a prompt.
 ---@param prompt string
----@return boolean reflect
-function M.confirm_apply(prompt)
-  return ui_confirm.confirm(prompt, true)
+---@param on_answer fun(reflect: boolean)
+function M.confirm_apply(prompt, on_answer)
+  ui_confirm.confirm(prompt, true, on_answer)
 end
 
---- Prompt to apply code newly found by a manual refresh.
----@return boolean started False when no new code exists, the user declines or applying is refused.
+--- Prompt to apply code newly found by a manual refresh; `apply` runs from the menu's
+--- answer.
 function Review:prompt_apply()
   if not self:is_valid() or not self:stale() then
-    return false
+    return
   end
-  if not M.confirm_apply(("PR #%d has new code on GitHub. Reflect the changes locally?"):format(self.number)) then
-    return false
-  end
-  return self:apply()
+  M.confirm_apply(("PR #%d has new code on GitHub. Reflect the changes locally?"):format(self.number), function(reflect)
+    if reflect then
+      self:apply()
+    end
+  end)
 end
 
 --- Mark a file viewed on GitHub, then show the next file that is not viewed.
@@ -644,37 +680,34 @@ function Review:mark_viewed(entry)
   return true
 end
 
---- Asks whether to approve, as a Yes/No menu defaulting to No. Replaceable, so specs can
---- answer without a prompt.
+--- Ask whether to approve, as a Yes/No menu defaulting to No, calling `on_answer` with the
+--- answer. Replaceable, so specs can answer without a prompt.
 ---@param prompt string
----@return boolean approve
-function M.confirm_approve(prompt)
-  return ui_confirm.confirm(prompt, false)
+---@param on_answer fun(approve: boolean)
+function M.confirm_approve(prompt, on_answer)
+  ui_confirm.confirm(prompt, false, on_answer)
 end
 
---- Approve the PR after a confirmation, without a summary. For an approval with a
---- summary, `:NvimDiffVerdict approve` opens the verdict split instead.
----@return boolean approved False when cancelled, or when GitHub refused.
+--- Approve the PR after a confirmation, without a summary, from the menu's answer. For an
+--- approval with a summary, `:NvimDiffVerdict approve` opens the verdict split instead.
 function Review:approve()
   if not self:is_valid() then
-    return false
+    return
   end
-  if not M.confirm_approve(("Approve PR #%d?"):format(self.number)) then
-    return false
-  end
-  if not self:is_valid() then
-    return false
-  end
-  vim.notify(("nvim-diff: approving PR #%d…"):format(self.number), vim.log.levels.INFO)
-  vim.cmd.redraw()
-  local result, err = require("nvim-diff.github.review").submit(self.pr, "APPROVE")
-  if not result then
-    ---@cast err NvimDiff.GitHub.Error
-    log.error("PR #%d not approved: %s", self.number, err.message)
-    return false
-  end
-  vim.notify(("nvim-diff: PR #%d approved"):format(self.number), vim.log.levels.INFO)
-  return true
+  M.confirm_approve(("Approve PR #%d?"):format(self.number), function(approve)
+    if not approve or not self:is_valid() then
+      return
+    end
+    vim.notify(("nvim-diff: approving PR #%d…"):format(self.number), vim.log.levels.INFO)
+    vim.cmd.redraw()
+    local result, err = require("nvim-diff.github.review").submit(self.pr, "APPROVE")
+    if not result then
+      ---@cast err NvimDiff.GitHub.Error
+      log.error("PR #%d not approved: %s", self.number, err.message)
+      return
+    end
+    vim.notify(("nvim-diff: PR #%d approved"):format(self.number), vim.log.levels.INFO)
+  end)
 end
 
 --- Ask for changes: opens the verdict split with `REQUEST_CHANGES`, keeping any text
@@ -1009,56 +1042,57 @@ function Review:edit()
   return true
 end
 
---- Asks whether to delete a comment, as a Yes/No menu defaulting to No. Replaceable, so
---- specs can answer without a prompt.
+--- Ask whether to delete a comment, as a Yes/No menu defaulting to No, calling `on_answer`
+--- with the answer. Replaceable, so specs can answer without a prompt.
 ---@param prompt string
----@return boolean delete
-function M.confirm_delete(prompt)
-  return ui_confirm.confirm(prompt, false)
+---@param on_answer fun(delete: boolean)
+function M.confirm_delete(prompt, on_answer)
+  ui_confirm.confirm(prompt, false, on_answer)
 end
 
---- Delete one of the user's own comments where the cursor is, after asking.
----@return boolean deleted False when nothing was deleted — or not yet, when several of the
----user's comments are here and a picker asks which.
+--- Delete one of the user's own comments where the cursor is, after asking. The picker and
+--- the confirmation both answer later, so the delete runs from their callbacks.
 function Review:delete()
   if not self:is_valid() then
-    return false
+    return
   end
   local own, any = self:own_here()
   if #own == 0 then
     none_here(any)
-    return false
+    return
   end
-  local deleted = false
   choose(own, "Delete", function(pick)
     local c = pick.comment
     local prompt = ("Delete your comment on %s?\n%s"):format(comment_mod.where(pick.thread), comment_mod.excerpt(c, 60))
-    if not self:is_valid() or not M.confirm_delete(prompt) then
+    if not self:is_valid() then
       return
     end
-    self:touch_threads()
-    local ok, err = comments_mod.delete(self.pr, c)
-    if not ok then
-      log.error("comment not deleted: %s", post_error(err))
-      return
-    end
-    deleted = true
-    local redrawn, redraw_err = pcall(self.reload_threads, self, "comment deleted", function(list)
-      for i = #list, 1, -1 do
-        local t = list[i]
-        t.comments = vim.tbl_filter(function(x)
-          return x.id ~= c.id
-        end, t.comments)
-        if #t.comments == 0 then
-          table.remove(list, i)
+    M.confirm_delete(prompt, function(delete)
+      if not delete or not self:is_valid() then
+        return
+      end
+      self:touch_threads()
+      local ok, err = comments_mod.delete(self.pr, c)
+      if not ok then
+        log.error("comment not deleted: %s", post_error(err))
+        return
+      end
+      local redrawn, redraw_err = pcall(self.reload_threads, self, "comment deleted", function(list)
+        for i = #list, 1, -1 do
+          local t = list[i]
+          t.comments = vim.tbl_filter(function(x)
+            return x.id ~= c.id
+          end, t.comments)
+          if #t.comments == 0 then
+            table.remove(list, i)
+          end
         end
+      end)
+      if not redrawn then
+        log.error("comment deleted, but redrawing the threads failed: %s", tostring(redraw_err))
       end
     end)
-    if not redrawn then
-      log.error("comment deleted, but redrawing the threads failed: %s", tostring(redraw_err))
-    end
   end)
-  return deleted
 end
 
 --- Start a reply to the thread on the cursor's line. With threads on both sides of a
