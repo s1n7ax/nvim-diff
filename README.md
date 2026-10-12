@@ -406,7 +406,7 @@ a server before its process starts, so nvim-diff wraps `vim.lsp.start` and
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
 in the panel. Press `<C-r>` to refresh: when it finds new code, it asks whether to reflect
-the changes locally. Choosing **Reflect locally** fetches the commits in the background,
+the changes locally. Choosing **Yes** (the default) fetches the commits in the background,
 checks the new head out into the same slot, and updates the file list, viewed marks and
 threads. The file that showed shows again (under its new path if the new commits renamed
 it), with the cursor on the same code at the same screen row and column: its line is

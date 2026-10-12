@@ -54,7 +54,11 @@ function M.run(review, method)
     prompt = ("%s\nHead %s"):format(prompt, review.pr.head.oid:sub(1, 7))
   end
   M.confirm(prompt, function(merge)
-    if not merge or not review:is_valid() then
+    if not merge then
+      return
+    end
+    if not review:is_valid() then
+      log.error("the review has ended")
       return
     end
     vim.notify(("nvim-diff: %s %s…"):format(info.label:lower(), describe(review)), vim.log.levels.INFO)

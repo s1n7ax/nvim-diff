@@ -2,8 +2,12 @@
 --- its own tabpage, with GitHub's per-file viewed marks in the file panel.
 ---
 ---     local review = require("nvim-diff.views.review").open({ number = 42 })
----     review:mark_viewed() -- marks the current file viewed on GitHub, jumps to the next unviewed
----     review:close()       -- closes the tab and releases the review slot
+---     -- For a PR from a fork, `open` returns nil and the review opens from the `Start LSP?`
+---     -- menu's answer; `get()` finds it then.
+---     if review then
+---       review:mark_viewed() -- marks the current file viewed on GitHub, jumps to the next unviewed
+---       review:close()       -- closes the tab and releases the review slot
+---     end
 ---
 --- Opening a review:
 ---

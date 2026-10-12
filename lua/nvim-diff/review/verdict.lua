@@ -85,10 +85,10 @@ function Verdict:text()
   return self.compose:text()
 end
 
---- Cancel: close the split, asking first when there is text to lose.
----@return boolean closed False when the user chose to keep the text.
+--- Cancel: close the split, asking first when there is text to lose. The question is
+--- answered from the menu, so the split closes from its callback.
 function Verdict:cancel()
-  return self.compose:cancel()
+  self.compose:cancel()
 end
 
 --- Close the split, dropping the text. Idempotent.

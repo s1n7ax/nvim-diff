@@ -492,7 +492,7 @@ threads are redrawn only when something about them changed.
                                                       *nvim-diff-review-apply*
 When `<C-r>` (|nvim-diff-config.keymaps.review.sync|) finds new commits or a
 new base branch, it asks whether to reflect the changes locally. Choosing
-`Reflect locally` applies the new code in the same review: it reads GitHub's
+`Yes` (the default) applies the new code in the same review: it reads GitHub's
 head, base branch and threads again, fetches the commits and the viewed marks
 in the background, then checks the new head out into the same review slot and
 shows it.
