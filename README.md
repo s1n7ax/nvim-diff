@@ -151,7 +151,7 @@ Each take is one undoable change to the real file. Nothing is saved or staged fo
 | `<leader>ra` | approve the PR, after asking (no summary; `:NvimDiffVerdict approve` for one with a summary) |
 | `<leader>rr` | request changes: open the verdict split with a required summary |
 | `<leader>rm` | merge the PR: pick merge / squash / rebase, then ask before sending |
-| `<leader>L` | a PR from a fork, after no: ask `Start LSP? [y/N]` again |
+| `<leader>L` | a PR from a fork, after no: ask `Start LSP?` again |
 | `<leader>cc` | in the file panel: a file-level comment on the file under the cursor (shown above the file) |
 
 **PR review** — diff panes (comment threads)
@@ -263,7 +263,7 @@ require("nvim-diff").setup({
       approve = "<leader>ra", -- approve at once, after asking
       request_changes = "<leader>rr", -- verdict split with required summary
       merge = "<leader>rm", -- pick merge/squash/rebase, then ask
-      start_lsp = "<leader>L", -- a fork PR: ask `Start LSP? [y/N]` again
+      start_lsp = "<leader>L", -- a fork PR: ask `Start LSP?` again
     },
     threads = {
       toggle = "<CR>",
@@ -386,10 +386,11 @@ tabpage, goes the same way. Applying new code reads the slot files the files tab
 again; ending the review closes it when it shows a slot file and otherwise takes it out of
 the slot (`:tcd`).
 
-A PR from a fork asks first: `Start LSP? [y/N]`. Some language servers run the project's
-code (build scripts, macros, a linter config), so a fork's code gets none until you say
-yes; Enter shows the copy without LSP. The answer lasts until the review closes and is not
-saved: reopening the PR asks again. After a no, `<leader>L` asks again, and yes switches
+A PR from a fork asks first: `Start LSP?`, a two-item menu with Yes first, so a bare Enter
+starts LSP and choosing No keeps it off. Some language servers run the project's code (build
+scripts, macros, a linter config), so a fork's code gets none until you say yes. The answer
+lasts until the review closes and is not saved: reopening the PR asks again. After a no,
+`<leader>L` asks again, and yes switches
 the head pane to the real file on the same line. Before a fork PR is checked out into a
 slot, every language server still running there from an earlier review is killed at once.
 After a no, no language server starts on any file in the slot while the review is open —
@@ -405,7 +406,7 @@ a server before its process starts, so nvim-diff wraps `vim.lsp.start` and
 While the review is open it checks GitHub every minute (and on `<C-r>`) with one GraphQL
 query. New commits or a new base branch get a notice and a `● new commits on GitHub` line
 in the panel. Press `<C-r>` to refresh: when it finds new code, it asks whether to reflect
-the changes locally. Choosing **Reflect locally** fetches the commits in the background,
+the changes locally. Choosing **Yes** (the default) fetches the commits in the background,
 checks the new head out into the same slot, and updates the file list, viewed marks and
 threads. The file that showed shows again (under its new path if the new commits renamed
 it), with the cursor on the same code at the same screen row and column: its line is
