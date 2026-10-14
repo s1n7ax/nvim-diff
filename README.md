@@ -82,6 +82,11 @@ paths = { "lua" } })`.
 
 Every view opens in its own tabpage. History and conflict views close with `:tabclose`.
 
+A diff pane shows a copy of the file at a revision, never the file itself, so there is
+nothing to edit there. `go` opens the real file on disk for editing instead, in a tabpage
+of its own, leaving the diff where it is. However many files are opened, there is one such
+tabpage: the first `go` opens it beside the view, every later one shows its file in it.
+
 ## Keys
 
 All buffer-local, all configurable under `keymaps` / `layout_keymaps`; set one to `false`
@@ -97,6 +102,7 @@ keys that work there — `<CR>` on one runs it.
 | `R` | refresh |
 | `<Tab>` / `<S-Tab>` | next / previous file (also in diff panes) |
 | `gm` | branch diff: merge-base (`a...b`) ↔ tip to tip (`a..b`) (also in diff panes) |
+| `go` | open the file on disk for editing, in the one reused edit tab (also in diff panes) |
 | `<leader>e` | focus the file panel (also from diff panes) |
 
 **Diff panes**
@@ -106,6 +112,7 @@ keys that work there — `<CR>` on one runs it.
 | `g<C-x>` | side-by-side ↔ unified, for this file |
 | `gs` | structural ↔ line diff, for this file |
 | `gL` | history of the line under the cursor, at this pane's revision |
+| `go` | open the file on disk for editing, in the one reused edit tab |
 | `<leader>e` | focus the file panel |
 
 **Folds** (diff panes; mirrored across both panes)
@@ -245,7 +252,14 @@ require("nvim-diff").setup({
   keymaps = {
     help = "?",
     panel = { select = "<CR>", toggle_listing = "i", refresh = "R" },
-    view = { next_file = "<Tab>", prev_file = "<S-Tab>", toggle_range = "gm", line_history = "gL", focus_panel = "<leader>e" },
+    view = {
+      next_file = "<Tab>",
+      prev_file = "<S-Tab>",
+      toggle_range = "gm",
+      line_history = "gL",
+      focus_panel = "<leader>e",
+      edit_file = "go", -- open the real file for editing, in one reused tab
+    },
     history = { mark = "m", compare = "M" },
     conflict = {
       take_ours = "<leader>co",

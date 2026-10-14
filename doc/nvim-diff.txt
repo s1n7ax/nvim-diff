@@ -186,6 +186,12 @@ Selecting a conflicted (`U`) file opens the conflict view in its own tabpage.
 The layout (side-by-side or unified) and the mode (structural or line) are
 remembered per file for as long as the view is open.
 
+A diff pane shows a copy of the file at a revision, not the file itself. `go`
+(|nvim-diff-config.keymaps.view.edit_file|) opens the real file on disk for
+editing in a tabpage of its own, leaving the diff where it is. One tabpage
+serves every such jump: the first opens it beside the view, later ones show
+their file in it. Closing it by hand is fine; the next jump opens it again.
+
 FILE HISTORY                                               *nvim-diff-history*
 
 A tabpage with the commit panel along the bottom and, above it, the diff of a
@@ -568,6 +574,8 @@ FILE PANEL (diff view and PR review)                    *nvim-diff-keys-panel*
   `<Tab>` `<S-Tab>`    next / previous file
   `gm`               flip a branch diff between merge-base (`a...b`) and tip
                    to tip (`a..b`)
+  `go`               open the file on disk for editing, in the one tabpage
+                   every such jump reuses
   `<leader>e`        focus the file panel (also from diff panes)
 
 HISTORY PANEL                                         *nvim-diff-keys-history*
@@ -587,6 +595,8 @@ DIFF PANES                                               *nvim-diff-keys-diff*
   `gm`               flip merge-base / tip to tip, as in the panel
   `gL`               history of the line under the cursor, at the pane's
                    revision
+  `go`               open the file on disk for editing, in the one reused
+                   tabpage
   `<leader>e`        focus the file panel
 
 FOLDS (diff panes)                                      *nvim-diff-keys-folds*
@@ -842,9 +852,13 @@ keymaps.view.toggle_range              (default: `"gm"`)
 keymaps.view.line_history              (default: `"gL"`)
                                  *nvim-diff-config.keymaps.view.focus_panel*
 keymaps.view.focus_panel               (default: `"<leader>e"`)
+                                  *nvim-diff-config.keymaps.view.edit_file*
+keymaps.view.edit_file                 (default: `"go"`)
     Panels and diff panes (`line_history`: diff panes; `focus_panel` focuses
-    the file panel, or the history panel in a history view). `next_file` and
-    `prev_file` also step across the conflicted files in a conflict view.
+    the file panel, or the history panel in a history view; `edit_file` opens
+    the file on disk for editing, in a single tabpage every such jump reuses).
+    `next_file` and `prev_file` also step across the conflicted files in a
+    conflict view.
 
                                        *nvim-diff-config.keymaps.history.mark*
 keymaps.history.mark                   (default: `"m"`)
