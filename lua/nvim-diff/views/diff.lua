@@ -52,6 +52,7 @@ local buffer = require("nvim-diff.scene.buffer")
 local catch = require("nvim-diff.scene.catch")
 local config = require("nvim-diff.config")
 local conflict_view = require("nvim-diff.views.conflict")
+local edittab = require("nvim-diff.ui.edittab")
 local entry_mod = require("nvim-diff.scene.entry")
 local event = require("nvim-diff.core.event")
 local filebuf = require("nvim-diff.scene.filebuf")
@@ -296,6 +297,9 @@ function View:map_view(buf)
   map(keys.focus_panel, function()
     self:focus_panel()
   end, "Files: Focus file panel")
+  map(keys.edit_file, function()
+    self:edit_file()
+  end, "Files: Edit the file on disk")
   help.attach(buf)
 end
 
@@ -892,6 +896,39 @@ function View:focus_panel()
   if self:is_valid() then
     api.nvim_set_current_win(self.panel.win)
   end
+end
+
+--- Jump to the file showing, on disk, for editing, in the one tabpage `ui/edittab.lua`
+--- keeps for every such jump: one tab however many files are opened. The line under the
+--- cursor comes along, except from the panel, which holds no line. A deleted file, one
+--- that is not on disk and a directory warn instead.
+function View:edit_file()
+  if not self:is_valid() then
+    return
+  end
+  local entry = self.current
+  if not entry then
+    log.warn("select a file to edit")
+    return
+  end
+  if entry.change.status == "D" then
+    log.warn("%s is deleted; there is nothing on disk to edit", entry.path)
+    return
+  end
+  local file = path.from_git(self.repo.toplevel, entry.path)
+  if path.is_dir(file) then
+    log.warn("%s is a directory; there is nothing to edit", entry.path)
+    return
+  end
+  if not path.exists(file) then
+    log.warn("%s is not on disk", entry.path)
+    return
+  end
+  local lnum
+  if self.file and not self.file:is_closed() and api.nvim_get_current_win() ~= self.panel.win then
+    lnum = self.file:cursor().lnum
+  end
+  edittab.open({ path = file, lnum = lnum })
 end
 
 --- Switch between tree and flat listing.

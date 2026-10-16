@@ -75,6 +75,9 @@ local M = {}
 ---@field line_history NvimDiff.Config.Key
 --- Focus the file panel (history panel in a history view), from any pane.
 ---@field focus_panel NvimDiff.Config.Key
+--- Open the file showing, on disk, for editing, in a single tabpage every such jump
+--- reuses (`ui/edittab.lua`).
+---@field edit_file NvimDiff.Config.Key
 
 ---@class NvimDiff.Config.HistoryKeymaps
 --- Mark the commit under the panel's cursor for range compare. A third mark drops the
@@ -281,6 +284,8 @@ local defaults = {
       toggle_range = "gm",
       line_history = "gL",
       focus_panel = "<leader>e",
+      -- "go to file"; free in the panel and panes (folds use the `z` prefix).
+      edit_file = "go",
     },
     history = {
       mark = "m",
@@ -423,6 +428,7 @@ local schema = {
       toggle_range = KEY,
       line_history = KEY,
       focus_panel = KEY,
+      edit_file = KEY,
     },
     history = {
       mark = KEY,
