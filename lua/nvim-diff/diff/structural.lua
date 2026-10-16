@@ -58,7 +58,10 @@ end
 ---@field str string[] What the token diff compares.
 ---@field root TSNode
 ---@field parser vim.treesitter.LanguageTree Held so the tree outlives the flatten.
----@field word boolean[] The token is one word of a comment, not a whole leaf.
+--- What the token is when it is not a whole leaf: `"comment"`, one word of a comment;
+--- `"text"`, one word of the text a node holds between its children (markdown's `inline`
+--- has children only for its punctuation, the prose between them is nobody's leaf).
+---@field word (false|"comment"|"text")[]
 ---@field changed boolean[]
 ---@field prefix integer[] `prefix[i]` = changed tokens among the first `i`.
 
@@ -140,17 +143,18 @@ local function flatten(lines, lang, opts)
   -- No node is kept per token: holding 83,000 node userdata measured 65 ms of GC. The few
   -- changed tokens find theirs again with `descendant_for_range`.
   ---@param row integer
-  ---@param word? boolean
+  ---@param word? "comment"|"text"
   local function push(a, b, str, row, word)
     n = n + 1
     s.start[n], s.stop[n], s.str[n], s.row[n], s.word[n] = a, b, str, row, word or false
   end
 
-  --- A comment as words. A line's first word is dropped when it is all punctuation — the
-  --- `--`, `//`, `#` or `*` a rewrap moves around — so rewrapping reads as formatting.
+  --- Text as words. In a comment a line's first word is dropped when it is all punctuation
+  --- — the `--`, `//`, `#` or `*` a rewrap moves around — so rewrapping reads as formatting.
   ---@param a integer
   ---@param b integer
-  local function push_words(a, b)
+  ---@param kind "comment"|"text"
+  local function push_words(a, b, kind)
     local body = text:sub(a + 1, b)
     local line_start = true
     local pos = 1
@@ -163,9 +167,9 @@ local function flatten(lines, lang, opts)
         line_start = true
       end
       local word = body:sub(ws, we)
-      if not (line_start and word:find("^%p+$")) then
+      if not (kind == "comment" and line_start and word:find("^%p+$")) then
         local wa = a + ws - 1
-        push(wa, a + we, word, line_of(line_starts, wa), true)
+        push(wa, a + we, word, line_of(line_starts, wa), kind)
       end
       line_start = false
       pos = we + 1
@@ -174,27 +178,41 @@ local function flatten(lines, lang, opts)
 
   -- `iter_children` measured faster than indexing with `child(i)` (69 vs 94 ms for 83K
   -- leaves), and the parent is looked up only for the few tokens that changed.
+  -- Text between children is tokenized too: without it, an edit to markdown prose changed
+  -- no token and read as a pure reformat, folded away as "no semantic change".
   ---@param node TSNode
-  local function walk(node)
+  ---@param srow integer
+  ---@param a integer
+  ---@param b integer
+  local function walk(node, srow, a, b)
     local ty = node:type()
     local comment = is_comment(ty)
     if not comment and not is_string(ty) and node:child_count() > 0 then
+      local done = a
       for child in node:iter_children() do
-        walk(child)
+        local crow, _, ca, _, _, cb = child:range(true)
+        if ca > done then
+          push_words(done, ca, "text")
+        end
+        walk(child, crow, ca, cb)
+        done = math.max(done, cb)
+      end
+      if b > done then
+        push_words(done, b, "text")
       end
       return
     end
-    local srow, _, a, _, _, b = node:range(true)
     if b <= a then
       return -- a zero-width MISSING node, or an empty one
     end
     if comment and opts.normalize_comments then
-      push_words(a, b)
+      push_words(a, b, "comment")
     else
       push(a, b, text:sub(a + 1, b), srow + 1)
     end
   end
-  walk(root)
+  local rrow, _, ra, _, _, rb = root:range(true)
+  walk(root, rrow, ra, rb)
   return s
 end
 
@@ -281,7 +299,8 @@ local function first_token_at(starts, b)
   return lo
 end
 
---- The node token `i` came from: its leaf, or for a word the comment holding it.
+--- The node token `i` came from: its leaf, for a comment's word the comment, for a word of
+--- text the node holding it.
 ---@param s NvimDiff.Structural.Side
 ---@param i integer
 ---@return TSNode?
@@ -290,7 +309,7 @@ local function token_node(s, i)
   local erow = line_of(s.line_starts, s.stop[i] - 1)
   local node =
     s.root:descendant_for_range(srow - 1, s.start[i] - s.line_starts[srow], erow - 1, s.stop[i] - s.line_starts[erow])
-  if s.word[i] then
+  if s.word[i] == "comment" then
     while node and not is_comment(node:type()) do
       node = node:parent()
     end
