@@ -1,7 +1,8 @@
 --- The side list: every review thread, grouped by file, each expanded. `<CR>` on a
 --- thread jumps to its file and line; a filter key cycles between all, unresolved and
---- resolved threads. File-level comments also appear above their file, while this list
---- keeps every thread's edit, delete and copy actions available in one place.
+--- resolved threads. File-level and outdated comments also appear above their file's first
+--- line, while this list keeps every thread's edit, delete and copy actions available in
+--- one place.
 ---
 --- A split window beside the diff, not a float: it is read like the file panel, it stays
 --- while the reviewer steps through files, and `q` closes it. The text is ordinary buffer

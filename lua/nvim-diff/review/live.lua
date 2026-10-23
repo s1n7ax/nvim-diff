@@ -13,7 +13,8 @@
 ---    drawn as read.
 --- 3. A thread written on the shown head is drawn where it was written (`original_line`) —
 ---    a comment posted from this review while it is behind, for one.
---- 4. An outdated thread goes to the side list as outdated, as it would on the new code.
+--- 4. An outdated thread is drawn as outdated, above the first line, as it would be on the
+---    new code.
 --- 5. Any other thread is on code newer than the review shows. It is held back, and counted
 ---    as waiting, until that code is applied (the review then shows GitHub's head, and every
 ---    thread is drawn as read).
