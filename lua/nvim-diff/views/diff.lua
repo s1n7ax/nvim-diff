@@ -386,13 +386,15 @@ function View:map_panel()
 end
 
 --- Unresolved review-thread count by file path, from the drawn threads and the ones held
---- back on newer code. Empty when there is nothing unresolved.
+--- back on newer code. Outdated threads are not counted, though they are drawn above their
+--- file's first line. Empty when there is nothing unresolved.
 ---@return table<string, integer>
 function View:unresolved_counts()
+  local thread_mod = require("nvim-diff.review.thread")
   local counts = {}
   local function add(list)
     for _, t in ipairs(list or {}) do
-      if not t.resolved and type(t.path) == "string" then
+      if not t.resolved and not thread_mod.is_outdated(t) and type(t.path) == "string" then
         counts[t.path] = (counts[t.path] or 0) + 1
       end
     end
