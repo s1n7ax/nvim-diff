@@ -771,6 +771,11 @@ function View:show_diff(entry, folds)
     end,
   })
   self:attach_threads(entry)
+  -- A file opens at its top, but the rows above its first line, where file-level and
+  -- outdated threads hang, show only once scrolled to: show them.
+  if self.thread_view and self.thread_view:drawn_above() then
+    self.file:top("new")
+  end
 end
 
 --- Open the merge conflict view for a conflicted (`U`) entry, in its own tabpage. Every
@@ -1438,8 +1443,8 @@ end
 --- Jump to `thread` from the side list: select its file and put the cursor on its line,
 --- with the thread expanded. A resolved thread hidden in the diff is kept drawn, so the
 --- jump lands on it instead of on nothing. A file-level or outdated thread has no line
---- to land on: its file is selected. Returns false when the thread's file is not in
---- this diff.
+--- to land on: its file is shown from the top, where the thread hangs above the first line.
+--- Returns false when the thread's file is not in this diff.
 ---@param thread NvimDiff.GitHub.Thread
 ---@return boolean jumped
 function View:goto_thread(thread)
@@ -1480,18 +1485,15 @@ function View:goto_thread(thread)
   if tv and not tv.detached then
     tv:toggle(thread.id, true)
   end
-  if thread.subject ~= "file" and thread.line and not thread.outdated then
-    local side = thread.side or "new"
-    local ok, win = pcall(self.diff_win, self, side)
-    if ok and api.nvim_win_is_valid(win) then
-      api.nvim_set_current_win(win)
-    end
-    file:jump(side, thread.line)
+  local side = thread.side or "new"
+  local ok, win = pcall(self.diff_win, self, side)
+  if ok and api.nvim_win_is_valid(win) then
+    api.nvim_set_current_win(win)
+  end
+  if thread.subject == "file" or require("nvim-diff.review.thread").is_outdated(thread) then
+    file:top(side)
   else
-    local ok, win = pcall(self.diff_win, self, "new")
-    if ok and api.nvim_win_is_valid(win) then
-      api.nvim_set_current_win(win)
-    end
+    file:jump(side, thread.line)
   end
   return true
 end

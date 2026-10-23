@@ -488,6 +488,12 @@ function ThreadView:toggle_resolved()
   return self.state.resolved
 end
 
+--- Whether threads are drawn above the first line: file-level and outdated ones.
+---@return boolean
+function ThreadView:drawn_above()
+  return self.placed[0] ~= nil
+end
+
 --- Threads of this file that cannot hang under a line, and why.
 ---@return { thread: NvimDiff.GitHub.Thread, place: NvimDiff.ThreadPlace }[]
 function ThreadView:unanchored()

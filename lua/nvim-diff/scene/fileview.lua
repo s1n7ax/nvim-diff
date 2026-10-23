@@ -379,6 +379,20 @@ function View:jump(side, lnum, col)
   self.scene:jump(side, lnum, col)
 end
 
+--- Scroll to the top of the file, the rows above its first line in view (file-level and
+--- outdated comment threads hang there), as `gg` does: unified with the cursor on the
+--- header, side-by-side with `side`'s cursor on its first line and the other pane along.
+---@param side NvimDiff.Side
+function View:top(side)
+  if self.layout == "unified" then
+    local u = self.scene --[[@as NvimDiff.Unified]]
+    u:place(1, 1)
+    return
+  end
+  local p = self.scene --[[@as NvimDiff.Pair]]
+  p:top(p.wins[side])
+end
+
 --- Put `win`'s cursor on byte `col` of its line, or the line's end when it is shorter.
 ---@param win integer
 ---@param col? integer
