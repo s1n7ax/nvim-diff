@@ -436,18 +436,21 @@ one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
 file that is not; `<leader><BS>` clears the mark. A file with unresolved
 comment threads shows a `💬` (`💬×n` for more than one); a directory shows the
-total of the files under it.
+total of the files under it. Outdated threads are not counted.
 
 Comment threads show under the commented line: unresolved ones expanded, with
 every reply, resolved ones as a one-line summary (author, first line, replies,
 resolved state). A file-level thread shows above the first line, labelled
 `file-level` and without a tail, so it is distinct from a comment on line 1.
-`<CR>` expands or collapses a thread in place. Resolved threads are dimmed with
-a `✓` (|nvim-diff-config.threads.resolved|). Every thread is also listed in a
-side list (`gC`), grouped by file: `<CR>` on one jumps to its file and line,
-and the same key as `gR` filters the list between all, unresolved and resolved
-threads. Outdated threads (whose code changed, so GitHub returns no line) and
-file-level comments live there too, with their edit, delete and copy actions.
+An outdated thread (whose code changed, so GitHub returns no line) shows there
+too, labelled `outdated` and the line it was written on (`outdated · L67`). A
+file opens with the threads above its first line in view. `<CR>` expands or
+collapses a thread in place. Resolved threads are dimmed with a `✓`
+(|nvim-diff-config.threads.resolved|). Every thread is also listed in a side
+list (`gC`), grouped by file: `<CR>` on one jumps to its file and line (to the
+top of the file for a file-level or outdated one), and the same key as `gR`
+filters the list between all, unresolved and resolved threads. Outdated and
+file-level threads have their edit, delete and copy actions there.
 
 Writing: `<leader>cc` comments on the cursor's line, in either pane, or on a
 visual selection of lines inside one hunk. In the file panel it writes a
