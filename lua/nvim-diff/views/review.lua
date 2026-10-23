@@ -54,11 +54,12 @@
 --- cursor; `keymaps.comment.reply` answers the thread on the cursor's line;
 --- `keymaps.comment.edit` reopens one of the user's own comments there in the split, and
 --- `keymaps.comment.delete` deletes one after asking; `keymaps.comment.copy_link` copies a
---- comment's GitHub link. Edit, delete and copy work in the side list too, on the thread
---- under its cursor. After every change the threads are refetched; a new
+--- comment's GitHub link. Reply, edit, delete and copy work in the side list too, on the
+--- thread under its cursor. After every change the threads are refetched; a new
 --- comment's thread shows expanded, and a file-level one opens the side list.
 ---
---- Threads are resolved on GitHub from the cursor's line: `keymaps.threads.resolve` at once,
+--- Threads are resolved on GitHub from the cursor's line, or the side list's:
+--- `keymaps.threads.resolve` at once,
 --- `reply_resolve` after a reply written in the same split, `unresolve` to undo. The thread
 --- is redrawn from GitHub's answer and stays on screen, dimmed with a ✓ — even while
 --- resolved threads are hidden, until the resolved mode is next flipped.
@@ -369,6 +370,8 @@ function continue(opts, repo, remote, number, pr, is_fork, lsp_on)
   self:map_panel_comment_keys(view.panel.buf)
   view.on_thread_list = function(list)
     self:map_own_comment_keys(list.buf)
+    self:map_reply_key(list.buf)
+    self:map_resolve_keys(list.buf)
   end
 
   local first = self:next_unviewed(nil) or view.tree.order[1]
@@ -450,10 +453,19 @@ function Review:map_comment_keys(buf)
     api.nvim_feedkeys(api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
     self:comment({ first = first, last = last })
   end, "Comments: Comment on selection")
-  map("n", keys.reply, function()
-    self:reply()
-  end, "Comments: Reply")
+  self:map_reply_key(buf)
   self:map_own_comment_keys(buf)
+end
+
+--- Map the reply key in `buf`: a diff pane, or the side list.
+---@param buf integer
+function Review:map_reply_key(buf)
+  local lhs = config.get().keymaps.comment.reply
+  if type(lhs) == "string" then
+    vim.keymap.set("n", lhs, function()
+      self:reply()
+    end, { buffer = buf, nowait = true, desc = "nvim-diff: Comments: Reply" })
+  end
 end
 
 --- Map the keys that edit and delete the user's own comments in `buf`: a diff pane, or the
@@ -902,16 +914,26 @@ function Review:thread_suggestion(thread)
   return comment_mod.suggestion_for_thread(view.file, view.current and view.current.path, thread)
 end
 
+--- The thread under the side list's cursor, when the side list is the current window.
+---@return NvimDiff.GitHub.Thread? thread
+---@return boolean in_list Whether the side list is the current window.
+function Review:list_thread()
+  local list = self.view.thread_list
+  if list and list:is_open() and api.nvim_get_current_win() == list.win then
+    return list:thread_at_cursor(), true
+  end
+  return nil, false
+end
+
 --- The user's own comments where the cursor is: in the thread under the side list's cursor,
 --- or in the threads on the cursor's line of a diff pane (the cursor's pane first).
 ---@return { thread: NvimDiff.GitHub.Thread, comment: NvimDiff.GitHub.Comment }[] own
 ---@return boolean any Whether there is any thread there at all.
 function Review:own_here()
   local view = self.view
-  local list = view.thread_list
-  if list and list:is_open() and api.nvim_get_current_win() == list.win then
-    local t = list:thread_at_cursor()
-    return t and comment_mod.own({ t }) or {}, t ~= nil
+  local listed, in_list = self:list_thread()
+  if in_list then
+    return listed and comment_mod.own({ listed }) or {}, listed ~= nil
   end
   local tv = view.thread_view
   local here = tv and not tv.detached and tv:at_cursor() or {}
@@ -961,10 +983,9 @@ function Review:copy_comment_link()
   end
   local view = self.view
   local threads
-  local list = view.thread_list
-  if list and list:is_open() and api.nvim_get_current_win() == list.win then
-    local thread = list:thread_at_cursor()
-    threads = thread and { thread } or {}
+  local listed, in_list = self:list_thread()
+  if in_list then
+    threads = listed and { listed } or {}
   else
     local tv = view.thread_view
     local here = tv and not tv.detached and tv:at_cursor() or {}
@@ -1099,46 +1120,25 @@ function Review:delete()
   end)
 end
 
---- Start a reply to the thread on the cursor's line. With threads on both sides of a
---- side-by-side row, the one on the cursor's pane; with several still, the user picks.
+--- Start a reply to the thread on the cursor's line, or under the side list's cursor. With
+--- threads on both sides of a side-by-side row, the one on the cursor's pane; with several
+--- still, the user picks.
 ---@return boolean started False when there is no thread here, or a draft is open.
 function Review:reply()
   if not self:is_valid() or self:resume_draft() then
     return false
   end
-  local tv = self.view.thread_view
-  local here = tv and not tv.detached and tv:at_cursor() or {}
-  local side = self.view.file and self.view.file:cursor().side
-  local own = vim.tbl_filter(function(t)
-    return (t.side or "new") == side
-  end, here)
-  local list = #own > 0 and own or here
-  list = vim.tbl_filter(function(t)
+  local function keep(t)
     return t.can_reply
-  end, list)
-  if #list == 0 then
-    log.warn(#here > 0 and "you cannot reply to this thread" or "no comment thread on this line")
-    return false
   end
-  local function start(thread)
+  return self:pick_thread(keep, "Reply to which thread?", "you cannot reply to this thread", function(thread)
     if not thread or self:resume_draft() then
       return
     end
     self:open_compose(comment_mod.reply_header(thread), function(text)
       return comments_mod.reply(self.pr, thread, text)
     end, { suggestion = self:thread_suggestion(thread) })
-  end
-  if #list == 1 then
-    start(list[1])
-  else
-    vim.ui.select(list, {
-      prompt = "Reply to which thread?",
-      format_item = function(t)
-        return comment_mod.reply_header(t, 60)
-      end,
-    }, start)
-  end
-  return true
+  end)
 end
 
 -- Live threads ----------------------------------------------------------------------------
@@ -1600,7 +1600,7 @@ end
 
 -- Resolving threads -----------------------------------------------------------------------
 
---- Map the resolve keys in the diff pane buffer `buf`.
+--- Map the resolve keys in `buf`: a diff pane, or the side list.
 ---@param buf integer
 function Review:map_resolve_keys(buf)
   local keys = config.get().keymaps.threads
@@ -1620,18 +1620,27 @@ function Review:map_resolve_keys(buf)
   end, "Threads: Unresolve")
 end
 
---- Hand a thread on the cursor's line that `keep` accepts to `start`: the one on the
---- cursor's pane first, and with several still, the one the user picks.
+--- Hand a thread that `keep` accepts to `start`: the one under the side list's cursor, or one
+--- on the cursor's line of a diff pane — the cursor's pane first, and with several still,
+--- the one the user picks.
 ---@param keep fun(t: NvimDiff.GitHub.Thread): boolean
 ---@param prompt string The picker's prompt.
----@param none string The warning when the line has threads but none that `keep` accepts.
+--- The warning when there are threads but none that `keep` accepts; a `%s` in it says
+--- where (`on this line`, `here`).
+---@param none string
 ---@param start fun(t?: NvimDiff.GitHub.Thread) Nil when the picker was dismissed.
 ---@return boolean found False when there is no such thread.
 function Review:pick_thread(keep, prompt, none, start)
   local tv = self.view.thread_view
-  local here = tv and not tv.detached and tv:at_cursor() or {}
+  local listed, in_list = self:list_thread()
+  local here
+  if in_list then
+    here = listed and { listed } or {}
+  else
+    here = tv and not tv.detached and tv:at_cursor() or {}
+  end
   local file = self.view.file
-  local side = file and not file:is_closed() and file:cursor().side
+  local side = not in_list and file and not file:is_closed() and file:cursor().side
   local list = vim.tbl_filter(keep, here)
   local own = vim.tbl_filter(function(t)
     return (t.side or "new") == side
@@ -1641,7 +1650,9 @@ function Review:pick_thread(keep, prompt, none, start)
   end
   if #list == 0 then
     if #here > 0 then
-      log.warn(none)
+      log.warn(none, in_list and "here" or "on this line")
+    elseif in_list then
+      log.warn("no comment thread here")
     else
       local key = config.get().keymaps.threads.toggle_resolved
       if tv and tv.state.resolved == "hide" and type(key) == "string" then
@@ -1759,7 +1770,7 @@ function Review:resolve()
   if not self:is_valid() then
     return false
   end
-  return self:pick_thread(resolvable, "Resolve which thread?", "no thread on this line you can resolve", function(t)
+  return self:pick_thread(resolvable, "Resolve which thread?", "no thread %s you can resolve", function(t)
     if t then
       self:set_resolved(t, true)
     end
@@ -1777,7 +1788,7 @@ function Review:unresolve()
       return t.resolved and t.can_unresolve
     end,
     "Unresolve which thread?",
-    "no resolved thread on this line you can unresolve",
+    "no resolved thread %s you can unresolve",
     function(t)
       if t then
         self:set_resolved(t, false)
@@ -1797,7 +1808,7 @@ function Review:reply_and_resolve()
   local function keep(t)
     return t.can_reply and resolvable(t)
   end
-  local none = "no thread on this line you can reply to and resolve"
+  local none = "no thread %s you can reply to and resolve"
   return self:pick_thread(keep, "Reply to and resolve which thread?", none, function(t)
     if not t or self:resume_draft() then
       return

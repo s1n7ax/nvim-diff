@@ -436,18 +436,23 @@ one GitHub un-marked because new commits changed it, and an `n/m viewed`
 count. `<leader><space>` marks the file viewed on GitHub and jumps to the next
 file that is not; `<leader><BS>` clears the mark. A file with unresolved
 comment threads shows a `💬` (`💬×n` for more than one); a directory shows the
-total of the files under it.
+total of the files under it. Outdated threads are not counted.
 
 Comment threads show under the commented line: unresolved ones expanded, with
 every reply, resolved ones as a one-line summary (author, first line, replies,
 resolved state). A file-level thread shows above the first line, labelled
 `file-level` and without a tail, so it is distinct from a comment on line 1.
-`<CR>` expands or collapses a thread in place. Resolved threads are dimmed with
-a `✓` (|nvim-diff-config.threads.resolved|). Every thread is also listed in a
-side list (`gC`), grouped by file: `<CR>` on one jumps to its file and line,
-and the same key as `gR` filters the list between all, unresolved and resolved
-threads. Outdated threads (whose code changed, so GitHub returns no line) and
-file-level comments live there too, with their edit, delete and copy actions.
+An outdated thread (whose code changed, so GitHub returns no line) shows there
+too, labelled `outdated` and the line it was written on (`outdated · L67`). A
+file opens with the threads above its first line in view. `<CR>` expands or
+collapses a thread in place. Resolved threads are dimmed with a `✓`
+(|nvim-diff-config.threads.resolved|). Every thread is also listed in a side
+list (`gC`), grouped by file: `<CR>` on one jumps to its file and line (to the
+top of the file for a file-level or outdated one), and the same key as `gR`
+filters the list between all, unresolved and resolved threads. Every comment
+key below works there too, on the thread under the cursor: that is how
+outdated and file-level threads, which hang above the first line where the
+cursor cannot go, are replied to, resolved, edited, deleted and copied.
 
 Writing: `<leader>cc` comments on the cursor's line, in either pane, or on a
 visual selection of lines inside one hunk. In the file panel it writes a
@@ -653,8 +658,13 @@ In the side list:
 
   `<CR>`             go to the thread under the cursor (its file and line)
   `gR`               filter all / unresolved / resolved threads (not configurable)
+  `<leader>cr`       reply to the thread under the cursor
   `<leader>ce`       edit your comment in the thread under the cursor
   `<leader>cd`       delete your comment in the thread under the cursor
+  `<leader>cy`       copy a comment's GitHub link
+  `<leader>cx`       resolve the thread under the cursor
+  `<leader>cR`       reply, then resolve
+  `<leader>cu`       unresolve
   `q`                close the list (not configurable)
 
 When a line holds more than one thread, the one on the cursor's pane wins;
@@ -915,7 +925,8 @@ keymaps.threads.resolve                (default: `"<leader>cx"`)
 keymaps.threads.reply_resolve          (default: `"<leader>cR"`)
                                   *nvim-diff-config.keymaps.threads.unresolve*
 keymaps.threads.unresolve              (default: `"<leader>cu"`)
-    Diff panes of a PR review.
+    Diff panes of a PR review; `resolve`, `reply_resolve` and `unresolve`
+    also in the side list.
 
                                         *nvim-diff-config.keymaps.comment.add*
 keymaps.comment.add                    (default: `"<leader>cc"`)
@@ -928,7 +939,8 @@ keymaps.comment.delete                 (default: `"<leader>cd"`)
                                   *nvim-diff-config.keymaps.comment.copy_link*
 keymaps.comment.copy_link              (default: `"<leader>cy"`)
     Diff panes of a PR review; `add` also in its file panel (file-level
-    comment), and `edit`/`delete`/`copy_link` also in the side list.
+    comment), and `reply`/`edit`/`delete`/`copy_link` also in the side
+    list.
     `copy_link` copies the selected comment's GitHub link to the system
     clipboard; it asks which comment when the thread has more than one.
 

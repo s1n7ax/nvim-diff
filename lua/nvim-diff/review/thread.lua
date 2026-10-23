@@ -6,13 +6,16 @@
 --- worktree checked out at the head, a `RIGHT` line is a line of the new pane with no
 --- position arithmetic at all.
 ---
---- File-level threads hang above the first row of the diff, with a `file-level` label and
----no tail: they are visibly distinct from a first-line comment, which hangs after line 1.
----Other threads that have no line to hang from go to the side list instead:
+--- Threads with no line to hang from hang above the first row of the diff instead, labelled
+--- and without a tail, so they are visibly distinct from a first-line comment, which hangs
+--- after line 1:
 ---
---- * `outdated` — the code it was on changed since; GitHub itself returns no `line`.
---- * `off_file` — a line past the end of the file shown, i.e. the diff on screen is not of
----   the revisions the thread was made against.
+--- * `file` — a file-level comment, on no line at all: labelled `file-level`.
+--- * `outdated` — the code it was on changed since; GitHub itself returns no `line`:
+---   labelled `outdated` and the line it was written on, `outdated · L67`.
+---
+--- A thread on a line past the end of the file shown (`off_file`: the diff on screen is not
+--- of the revisions the thread was made against) goes to the side list only.
 ---
 --- Collapsed, a thread is one line, a folded bubble ending in a coloured state badge:
 --- `╶▸ alice  why 9090? …  · 2 replies ───── UNRESOLVED `. Expanded, it is a bordered
@@ -44,8 +47,16 @@ M.MIN_EXCERPT = 16
 
 ---@alias NvimDiff.ThreadPlace "line"|"file"|"outdated"|"off_file"
 
---- Where a thread goes: file-level threads are above the diff, line threads are under their
----line, and the rest are in the side list.
+--- Whether `thread` is an outdated line comment: the code it was on changed since, so it has
+--- no line. A file-level comment never is.
+---@param thread NvimDiff.GitHub.Thread
+---@return boolean
+function M.is_outdated(thread)
+  return thread.subject ~= "file" and (thread.outdated or not thread.line)
+end
+
+--- Where a thread goes: file-level and outdated threads are above the diff, line threads
+--- are under their line, and the rest are in the side list.
 ---@param thread NvimDiff.GitHub.Thread
 ---@param diff NvimDiff.Diff
 ---@return integer? row Display row the thread hangs after, when it has one.
@@ -54,8 +65,8 @@ function M.anchor(thread, diff)
   if thread.subject == "file" then
     return 0, "file"
   end
-  if thread.outdated or not thread.line then
-    return nil, "outdated"
+  if M.is_outdated(thread) then
+    return 0, "outdated"
   end
   local side = thread.side or "new"
   if thread.line < 1 or thread.line > diff[side .. "_count"] then
@@ -224,7 +235,10 @@ end
 --- Display cells to fit into: the collapsed line is truncated to it, bodies are wrapped.
 ---@field width? integer
 ---@field hint? string Shown dim at the end of the collapsed line, e.g. the expand key.
----@field label? string Leads the expanded meta and collapsed summary, e.g. `outdated` in the side list.
+--- Leads the expanded meta and collapsed summary, e.g. `outdated` in the side list. A
+--- labelled thread's collapsed summary names its line range too, as the expanded meta does:
+--- it is not drawn under its line.
+---@field label? string
 --- Draw the bubble's tail, pointing up at the line the thread hangs under.
 ---@field tail? boolean
 --- The cursor is on the thread's lines: the border is drawn in `NvimDiffThreadBorderActive`.
@@ -248,7 +262,11 @@ function M.collapsed_line(thread, opts)
   local width = M.bubble_width(opts.width or 80)
   local first = thread.comments[1]
   local author = first and first.author or "?"
-  local label = opts.label and (opts.label .. " · ") or ""
+  local label = ""
+  if opts.label then
+    local range = M.range_label(thread)
+    label = opts.label .. (range and (" · " .. range) or "") .. " · "
+  end
   local meta = ("  · %s%s"):format(label, replies(math.max(0, #thread.comments - 1)))
   if opts.hint then
     meta = meta .. "  " .. opts.hint

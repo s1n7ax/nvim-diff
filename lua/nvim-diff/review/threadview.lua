@@ -14,10 +14,10 @@
 --- changed line with a thread on each side costs `max(left, right)` rows, not the sum — the
 --- composition rule the rendering research measured.
 ---
---- File-level threads are drawn above the first row, labelled `file-level` and without a
----tail, so they remain distinct from a first-line thread. Outdated threads and lines past
----the end of the file shown are not drawn here; `unanchored()` lists them for the side list
----(`review/sidelist.lua`).
+--- File-level and outdated threads are drawn above the first row, without a tail and
+--- labelled `file-level` or `outdated · L67` (the line it was written on), so they remain
+--- distinct from a first-line thread. Threads on lines past the end of the file shown are
+--- not drawn here; `unanchored()` lists them for the side list (`review/sidelist.lua`).
 ---
 --- Resolved threads are dimmed by default, or hidden (`threads.resolved = "hide"`), and a
 --- key flips between the two. A thread resolved during the review (`state.kept`) stays
@@ -40,6 +40,14 @@ local M = {}
 
 --- Prefix of the block ids this module owns in a fileview.
 local BLOCK = "nvim-diff.threads:"
+
+--- The label of a thread drawn above the first line, by its place, so it is not taken for
+--- a comment on line 1.
+---@type table<NvimDiff.ThreadPlace, string?>
+local LABEL = {
+  file = "file-level",
+  outdated = "outdated",
+}
 
 ---@class NvimDiff.ThreadState
 --- Thread id to expanded, for threads toggled by hand. A thread not in it is expanded
@@ -66,6 +74,7 @@ local BLOCK = "nvim-diff.threads:"
 ---@field private opts NvimDiff.ThreadViewOpts
 ---@field private rows table<integer, NvimDiff.GitHub.Thread[]> Display row to its threads, in list order.
 ---@field private row_of_thread table<string, integer>
+---@field private place table<string, NvimDiff.ThreadPlace> Thread id to its place.
 ---@field private span table<string, integer[]> Thread id to the display rows `{ first, last }` of its lines.
 ---@field private active table<string, boolean> Threads on the cursor's line, drawn lit.
 ---@field private augroup integer
@@ -114,6 +123,7 @@ function M.attach(file, threads, opts)
     opts = opts,
     rows = {},
     row_of_thread = {},
+    place = {},
     span = {},
     active = {},
     loose = {},
@@ -150,7 +160,7 @@ end
 ---@param threads NvimDiff.GitHub.Thread[]
 function ThreadView:set_threads(threads)
   self.threads = threads
-  self.rows, self.row_of_thread, self.span, self.loose = {}, {}, {}, {}
+  self.rows, self.row_of_thread, self.place, self.span, self.loose = {}, {}, {}, {}, {}
   local diff = self.file:diff()
   for _, t in ipairs(threads) do
     local row, place = thread_mod.anchor(t, diff)
@@ -158,6 +168,7 @@ function ThreadView:set_threads(threads)
       self.rows[row] = self.rows[row] or {}
       table.insert(self.rows[row], t)
       self.row_of_thread[t.id] = row
+      self.place[t.id] = place
       local first = t.line and t.start_line and t.start_line >= 1 and t.start_line < t.line and t.start_line
       self.span[t.id] = { first and diff:row_of(t.side or "new", first) or row, row }
     else
@@ -236,11 +247,11 @@ function ThreadView:block(row)
     if self:visible(t) then
       local side = t.side or "new"
       local lines = block[side] or {}
-      local file_level = t.subject == "file"
+      local place = self.place[t.id]
       local o = {
         width = self.width,
-        tail = not file_level,
-        label = file_level and "file-level" or nil,
+        tail = place == "line",
+        label = LABEL[place],
         active = self.active[t.id],
       }
       if self:is_expanded(t) then
@@ -405,8 +416,9 @@ end
 function ThreadView:jump(dir)
   local rows = {}
   for row, list in pairs(self.rows) do
-    -- A file-level thread lives above the first line (row 0), where the cursor cannot go.
-    -- Its full thread remains available in `gC`; only line-anchored threads can be jumped to.
+    -- A file-level or outdated thread lives above the first line (row 0), where the cursor
+    -- cannot go. Its full thread remains available in `gC`; only line-anchored threads can be
+    -- jumped to.
     if row > 0 then
       for _, t in ipairs(list) do
         if self:visible(t) then
@@ -474,6 +486,12 @@ end
 function ThreadView:toggle_resolved()
   self:set_resolved(self.state.resolved == "hide" and "dim" or "hide")
   return self.state.resolved
+end
+
+--- Whether threads are drawn above the first line: file-level and outdated ones.
+---@return boolean
+function ThreadView:drawn_above()
+  return self.placed[0] ~= nil
 end
 
 --- Threads of this file that cannot hang under a line, and why.
